@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <title>Alphaforge Analytics</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0b0f19; }
+    ::-webkit-scrollbar-thumb { background: #1f2937; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #374151; }
+    
+    /* ANIMAÇÃO DO TICKER ESTILO BOLSA */
+    .ticker-wrap { width: 100%; overflow: hidden; background-color: #000000; border-bottom: 1px solid #1f2937; white-space: nowrap; box-sizing: border-box; }
+    .ticker { display: inline-block; animation: ticker 35s linear infinite; padding-left: 100%; }
+    .ticker:hover { animation-play-state: paused; cursor: default; } /* Pausa ao passar o mouse */
+    .ticker-item { display: inline-block; padding: 0 2.5rem; font-size: 0.75rem; font-family: monospace; color: #9ca3af; }
+    @keyframes ticker { 0% { transform: translate3d(0, 0, 0); } 100% { transform: translate3d(-100%, 0, 0); } }
+  </style>
+</head>
+<body class="bg-[#0b0f19] text-gray-100 min-h-screen flex flex-col font-sans">
+
+  <!-- Header -->
+  <header class="border-b border-gray-800 bg-[#070b14] px-6 py-4 flex justify-between items-center">
+    <div class="flex items-center space-x-3">
+      <div class="w-3 h-3 rounded-full bg-indigo-500 animate-pulse"></div>
+      <h1 class="text-xl font-bold tracking-wider uppercase text-sky-400">Alphaforge <span class="text-xs text-gray-400 font-mono">Analytics</span></h1>
+    </div>
+    <div class="text-xs font-mono text-indigo-400">MODULE: RESEARCH & PORTFOLIO</div>
+ <!-- Ticker Tape (Cotações em Tempo Real) -->
+  <div class="ticker-wrap py-2">
+    <div class="ticker" id="tickerTape">
+      <span class="ticker-item text-gray-500">Conectando ao feed da bolsa...</span>
+    </div>
+  </div> 
+</header>
+
+  <!-- Abas -->
+  <nav class="flex border-b border-gray-800 bg-[#111827] px-6 overflow-x-auto">
+    <button onclick="alternarAba('renda-fixa')" id="btn-tab-renda-fixa" class="py-3 px-5 border-b-2 border-sky-400 font-semibold text-sky-400 text-sm whitespace-nowrap">📄 Renda Fixa & Crédito</button>
+    <button onclick="alternarAba('renda-variavel')" id="btn-tab-renda-variavel" class="py-3 px-5 border-b-2 border-transparent font-semibold text-gray-400 hover:text-gray-200 text-sm whitespace-nowrap">📊 Renda Variável</button>
+    <button onclick="alternarAba('fundos')" id="btn-tab-fundos" class="py-3 px-5 border-b-2 border-transparent font-semibold text-gray-400 hover:text-gray-200 text-sm whitespace-nowrap">🏢 FIIs & ETFs</button>
+    <button onclick="alternarAba('allocation')" id="btn-tab-allocation" class="py-3 px-5 border-b-2 border-transparent font-semibold text-gray-400 hover:text-gray-200 text-sm whitespace-nowrap">🧠 Asset Allocation</button>
+  </nav>
+
+  <main class="flex-1 p-6 max-w-7xl w-full mx-auto space-y-6">
+
+   <!-- ABA 1: RENDA FIXA & CRÉDITO -->
+    <section id="tab-renda-fixa" class="space-y-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        
+        <!-- Bloco de Upload -->
+        <div class="bg-[#111827] p-6 rounded-xl border border-gray-800">
+          <h2 class="text-lg font-bold text-sky-400 mb-2">Auditoria de Crédito (PDF)</h2>
+          <p class="text-xs text-gray-400 mb-6">Motor de IA executando extração de dados e modelagem de insolvência.</p>
+          <input type="file" id="pdfFileInput" accept="application/pdf" class="block w-full text-xs text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-sky-600 file:text-white cursor-pointer"/>
+          <button onclick="auditarPDF()" id="btnAuditarPDF" class="mt-6 w-full bg-sky-600 hover:bg-sky-500 py-3 rounded-lg text-sm font-bold text-white shadow-lg transition">
+            Processar Documento
+          </button>
+        </div>
+
+        <!-- Guia Passo a Passo -->
+        <div class="bg-[#111827] p-6 rounded-xl border border-gray-800 border-l-4 border-l-indigo-500">
+          <h2 class="text-lg font-bold text-indigo-400 mb-4 flex items-center gap-2">
+            🤖 Como usar a IA de Crédito
+          </h2>
+          <div class="space-y-4 text-sm text-gray-400">
+            <p class="flex items-start gap-3">
+              <span class="bg-indigo-600 text-white font-bold px-2 py-0.5 rounded text-xs mt-0.5">1</span>
+              <span>Baixe o <b>Balanço de Resultados</b> mais recente da empresa, ou a Lâmina de Emissão (CRI/CRA/Debênture) em formato PDF.</span>
+            </p>
+            <p class="flex items-start gap-3">
+              <span class="bg-indigo-600 text-white font-bold px-2 py-0.5 rounded text-xs mt-0.5">2</span>
+              <span>Faça o upload do documento no painel ao lado clicando em <b>"Escolher arquivo"</b>.</span>
+            </p>
+            <p class="flex items-start gap-3">
+              <span class="bg-indigo-600 text-white font-bold px-2 py-0.5 rounded text-xs mt-0.5">3</span>
+              <span>Clique em <b>"Processar Documento"</b>.</span>
+            </p>
+            <p class="flex items-start gap-3">
+              <span class="bg-emerald-600 text-white font-bold px-2 py-0.5 rounded text-xs mt-0.5">✓</span>
+              <span class="text-gray-300">A Inteligência Artificial (Gemini) fará a leitura profunda do arquivo, calculando o <b>Z-Score</b>, <b>ICJ</b>, <b>Alavancagem</b> e gerando um Parecer de Risco instantaneamente.</span>
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Resultados da IA -->
+      <div id="painelResultadoCredito" class="hidden bg-[#111827] p-6 rounded-xl border border-gray-800 space-y-4 shadow-lg border-t-4 border-t-emerald-500">
+        <div class="flex justify-between items-center border-b border-gray-800 pb-3">
+          <h3 class="text-lg font-bold text-gray-100" id="emissorLaudo">Emissor</h3>
+          <span id="badgeStatusCredito" class="px-3 py-1.5 rounded text-xs font-bold bg-emerald-500/20 text-emerald-400 uppercase tracking-wider">APROVADO</span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div class="bg-[#0b0f19] p-4 rounded-lg border border-gray-800"><span class="text-xs text-gray-400 block mb-1">Alavancagem (DL/EBITDA)</span><p class="text-xl font-bold text-gray-200" id="alavancagemValor">-</p></div>
+          <div class="bg-[#0b0f19] p-4 rounded-lg border border-gray-800"><span class="text-xs text-gray-400 block mb-1">Cobertura Juros (ICJ)</span><p class="text-xl font-bold text-gray-200" id="icjValor">-</p></div>
+          <div class="bg-[#0b0f19] p-4 rounded-lg border border-gray-800"><span class="text-xs text-gray-400 block mb-1">Altman Z-Score</span><p class="text-xl font-bold text-gray-200" id="zScoreValor">-</p></div>
+          <div class="bg-[#0b0f19] p-4 rounded-lg border border-gray-800"><span class="text-xs text-gray-400 block mb-1">Classificação Z</span><p class="text-md font-semibold text-sky-400 mt-1" id="classificacaoZValor">-</p></div>
+        </div>
+        <p class="text-sm text-gray-300 italic bg-[#0b0f19] p-4 rounded border border-gray-800 mt-2" id="parecerCredito"></p>
+      </div>
+    </section>
+
+    <!-- ABA 2: RENDA VARIÁVEL -->
+    <section id="tab-renda-variavel" class="hidden space-y-6">
+      <div class="bg-[#111827] p-6 rounded-xl border border-gray-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h2 class="text-lg font-bold text-sky-400">Scanner Quantamental</h2>
+        </div>
+        <button onclick="executarScanner()" id="btnScanner" class="bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 px-6 py-2.5 rounded-lg text-sm font-bold text-white shadow-lg transition">
+          ⚡ Varrer Ações
+        </button>
+      </div>
+
+      <div id="painelScanner" class="hidden bg-[#111827] p-6 rounded-xl border border-gray-800 space-y-4">
+        <div class="flex justify-between items-center gap-2">
+          <h3 class="text-sm font-bold text-gray-300">Resultados (<span id="scannerContador" class="text-sky-400"></span>)</h3>
+          <input type="text" id="filtroScanner" onkeyup="filtrarTabelaScanner()" placeholder="Buscar..." class="bg-[#0b0f19] border border-gray-800 rounded-lg px-3 py-1.5 text-xs w-48">
+        </div>
+        <div class="overflow-x-auto max-h-[400px] overflow-y-auto">
+          <table class="w-full text-xs text-left">
+            <thead class="bg-[#0b0f19] text-gray-400 sticky top-0">
+              <tr><th class="p-2.5">Ativo</th><th class="p-2.5">Preço</th><th class="p-2.5">P/L</th><th class="p-2.5">ROE</th><th class="p-2.5 text-center">Score</th><th class="p-2.5 text-center">Veredito</th></tr>
+            </thead>
+            <tbody id="tabelaScannerCorpo" class="divide-y divide-gray-800 text-gray-200"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="bg-[#111827] p-6 rounded-xl border border-gray-800">
+        <h2 class="text-lg font-bold text-sky-400 mb-2">Consulta Detalhada & 10 Anos</h2>
+        <div class="flex gap-2 max-w-md">
+          <input type="text" id="tickerAcao" value="VALE3" class="bg-[#0b0f19] border border-gray-800 rounded-lg px-4 py-2 text-sm w-full uppercase">
+          <button onclick="consultarAcao()" id="btnConsultarAcao" class="bg-sky-600 hover:bg-sky-500 px-6 py-2 rounded-lg text-sm font-semibold">Analisar</button>
+        </div>
+      </div>
+      <div id="painelResultadoAcao" class="hidden space-y-6">
+        <div class="bg-[#111827] p-6 rounded-xl border border-gray-800 flex justify-between items-center">
+          <div>
+            <h3 class="text-xl font-bold text-gray-100" id="acaoNome">-</h3>
+            <div id="listaJustificativas" class="mt-2 text-xs text-gray-300 space-y-1"></div>
+          </div>
+          <div class="text-right">
+            <span id="badgeRecomendacao" class="px-4 py-2 rounded-lg text-sm font-extrabold bg-emerald-600 text-white">COMPRA</span>
+            <p class="text-2xl font-bold text-emerald-400 mt-2" id="acaoPreco">R$ 0,00</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ABA 3: FIIS E ETFS -->
+    <section id="tab-fundos" class="hidden space-y-6">
+      <div class="bg-[#111827] p-6 rounded-xl border border-gray-800 flex justify-between items-center">
+        <div>
+          <h2 class="text-lg font-bold text-sky-400">Screener de FIIs e ETFs</h2>
+          <p class="text-xs text-gray-400">Monitoramento com pontos de entrada baseados em Valor Patrimonial (FIIs) e Pullbacks (ETFs).</p>
+        </div>
+        <button onclick="carregarFundos()" id="btnFundos" class="bg-sky-600 hover:bg-sky-500 px-6 py-2.5 rounded-lg text-sm font-bold text-white transition">
+          🔍 Atualizar Radar
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Tijolo -->
+        <div class="bg-[#111827] p-5 rounded-xl border border-gray-800 overflow-x-auto">
+          <h3 class="text-sm font-bold text-gray-300 mb-4">🏢 FIIs de Tijolo</h3>
+          <table class="w-full text-xs text-left">
+            <thead class="bg-[#0b0f19] text-gray-400 border-b border-gray-800">
+              <tr><th class="p-2">Ativo</th><th class="p-2">Preço</th><th class="p-2">Teto/Entrada</th><th class="p-2">Yield</th><th class="p-2 text-center">Ação</th></tr>
+            </thead>
+            <tbody id="tabelaTijolo" class="divide-y divide-gray-800 text-gray-200"></tbody>
+          </table>
+        </div>
+        <!-- Papel -->
+        <div class="bg-[#111827] p-5 rounded-xl border border-gray-800 overflow-x-auto">
+          <h3 class="text-sm font-bold text-gray-300 mb-4">📄 FIIs de Papel</h3>
+          <table class="w-full text-xs text-left">
+            <thead class="bg-[#0b0f19] text-gray-400 border-b border-gray-800">
+              <tr><th class="p-2">Ativo</th><th class="p-2">Preço</th><th class="p-2">Teto/Entrada</th><th class="p-2">Yield</th><th class="p-2 text-center">Ação</th></tr>
+            </thead>
+            <tbody id="tabelaPapel" class="divide-y divide-gray-800 text-gray-200"></tbody>
+          </table>
+        </div>
+        <!-- ETFs -->
+        <div class="bg-[#111827] p-5 rounded-xl border border-gray-800 overflow-x-auto">
+          <h3 class="text-sm font-bold text-gray-300 mb-4">🌎 ETFs (Índices)</h3>
+          <table class="w-full text-xs text-left">
+            <thead class="bg-[#0b0f19] text-gray-400 border-b border-gray-800">
+              <tr><th class="p-2">Ativo</th><th class="p-2">Preço</th><th class="p-2">Entrada (SMA20)</th><th class="p-2 text-center">Ação</th></tr>
+            </thead>
+            <tbody id="tabelaETFs" class="divide-y divide-gray-800 text-gray-200"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ABA 4: ASSET ALLOCATION -->
+    <section id="tab-allocation" class="hidden space-y-6">
+      <div class="bg-[#111827] p-6 rounded-xl border border-gray-800">
+        <h2 class="text-lg font-bold text-indigo-400">Otimização Quantitativa (Markowitz)</h2>
+        <p class="text-xs text-gray-400 mb-6">Simulação de Monte Carlo para encontrar o portfólio de <b>Máximo Índice de Sharpe</b>.</p>
+        
+        <div class="flex flex-col sm:flex-row gap-4 items-center">
+          <div class="w-full sm:w-2/3">
+            <label class="block text-xs text-gray-500 mb-1">Cesta de Ativos (Separados por vírgula)</label>
+            <input type="text" id="tickersPortfolio" value="IVVB11, HASH11, WEGE3, BTLG11, KNCR11" class="bg-[#0b0f19] border border-gray-800 rounded-lg px-4 py-3 text-sm w-full font-mono uppercase focus:border-indigo-500 focus:outline-none">
+          </div>
+          <div class="w-full sm:w-1/3 mt-1 sm:mt-5">
+            <button onclick="otimizarPortfolio()" id="btnOtimizar" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-lg text-sm font-bold text-white transition">🧮 Otimizar Pesos</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="resultadoAlocacao" class="hidden grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="md:col-span-1 space-y-4">
+          <div class="bg-[#111827] p-5 rounded-xl border border-gray-800">
+            <span class="text-xs text-gray-400">Retorno Esperado (a.a)</span>
+            <p class="text-3xl font-bold text-emerald-400 mt-1" id="portRetorno">0%</p>
+          </div>
+          <div class="bg-[#111827] p-5 rounded-xl border border-gray-800">
+            <span class="text-xs text-gray-400">Risco / Volatilidade (a.a)</span>
+            <p class="text-3xl font-bold text-rose-400 mt-1" id="portVol">0%</p>
+          </div>
+          <div class="bg-[#111827] p-5 rounded-xl border border-gray-800">
+            <span class="text-xs text-gray-400">Índice de Sharpe</span>
+            <p class="text-3xl font-bold text-indigo-400 mt-1" id="portSharpe">0.0</p>
+          </div>
+        </div>
+        <div class="md:col-span-2 bg-[#111827] p-6 rounded-xl border border-gray-800">
+          <h3 class="text-md font-bold text-gray-300 mb-4">Pesos Ótimos do Portfólio</h3>
+          <div id="listaPesos" class="space-y-4"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+async function iniciarTickerTape() {
+      try {
+        const res = await fetch('/renda-variavel/ticker-tape');
+        const dados = await res.json();
+        
+        if (dados && dados.length > 0) {
+          let html = '';
+          dados.forEach(d => {
+            const cor = d.variacao >= 0 ? 'text-emerald-400' : 'text-rose-400';
+            const sinal = d.variacao >= 0 ? '▲' : '▼';
+            // Se for Dólar ou IBOV, formata diferente das ações
+            const prefixo = d.ativo === 'IBOV' ? 'Pts' : 'R$';
+            const precoFormatado = d.ativo === 'IBOV' ? d.preco.toLocaleString('pt-BR', {maximumFractionDigits: 0}) : d.preco.toFixed(2);
+            
+            html += `<div class="ticker-item">
+                       <b class="text-gray-200">${d.ativo}</b> 
+                       <span class="ml-2">${prefixo} ${precoFormatado}</span> 
+                       <span class="ml-2 font-bold ${cor}">${sinal} ${Math.abs(d.variacao).toFixed(2)}%</span>
+                     </div>`;
+          });
+          
+          // Duplica o conteúdo para o looping da animação ficar infinito e sem cortes
+          document.getElementById('tickerTape').innerHTML = html + html;
+        }
+      } catch (e) {
+        console.log("Aguardando estabilidade no feed de cotações...");
+      }
+    }
+
+    // Aciona a barra rolante assim que a página abre, e atualiza a cada 60 segundos
+    document.addEventListener('DOMContentLoaded', () => {
+      iniciarTickerTape();
+      setInterval(iniciarTickerTape, 60000); 
+    });
+    function alternarAba(aba) {
+      ['renda-fixa', 'renda-variavel', 'fundos', 'allocation'].forEach(t => {
+        document.getElementById(`tab-${t}`).classList.add('hidden');
+        document.getElementById(`btn-tab-${t}`).classList.remove('border-sky-400', 'text-sky-400', 'border-indigo-400', 'text-indigo-400');
+        document.getElementById(`btn-tab-${t}`).classList.add('border-transparent', 'text-gray-400');
+      });
+      document.getElementById(`tab-${aba}`).classList.remove('hidden');
+      
+      let colorClass = aba === 'allocation' ? 'indigo' : 'sky';
+      document.getElementById(`btn-tab-${aba}`).classList.add(`border-${colorClass}-400`, `text-${colorClass}-400`);
+      document.getElementById(`btn-tab-${aba}`).classList.remove('border-transparent', 'text-gray-400');
+    }
+
+    async function auditarPDF() {
+      const fileInput = document.getElementById('pdfFileInput');
+      const btn = document.getElementById('btnAuditarPDF');
+      if (!fileInput.files[0]) { alert("Selecione um PDF."); return; }
+      btn.innerText = "Auditando..."; btn.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', fileInput.files[0]);
+        const res = await fetch('/renda-fixa/auditar-pdf', { method: 'POST', body: fd });
+        const d = await res.json();
+        document.getElementById('painelResultadoCredito').classList.remove('hidden');
+        document.getElementById('emissorLaudo').innerText = d.emissor || "Emissor";
+        document.getElementById('alavancagemValor').innerText = (d.alavancagem_dl_ebitda || 0) + "x";
+        document.getElementById('icjValor').innerText = (d.cobertura_juros_icj || 0) + "x";
+        document.getElementById('zScoreValor').innerText = d.altman_z_score || "-";
+        document.getElementById('classificacaoZValor').innerText = d.classificacao_z || "-";
+        document.getElementById('parecerCredito').innerText = d.parecer || "";
+      } catch (e) { alert("Erro ao auditar PDF."); } finally { btn.innerText = "Processar Documento"; btn.disabled = false; }
+    }
+
+    
+
+    async function executarScanner() {
+      const btn = document.getElementById('btnScanner');
+      const corpo = document.getElementById('tabelaScannerCorpo');
+      btn.innerText = "⌛ Varrendo..."; btn.disabled = true;
+      try {
+        const res = await fetch('/renda-variavel/scanner-quantamental');
+        const data = await res.json();
+        document.getElementById('painelScanner').classList.remove('hidden');
+        document.getElementById('scannerContador').innerText = data.total;
+        corpo.innerHTML = data.oportunidades.map(i => `
+          <tr class="hover:bg-[#0b0f19] scanner-row" onclick="selecionarAtivo('${i.ticker}')" data-ticker="${i.ticker}" data-nome="${i.nome.toLowerCase()}">
+            <td class="p-2.5 font-bold text-sky-400">${i.ticker}</td><td class="p-2.5">R$ ${i.preco.toFixed(2)}</td>
+            <td class="p-2.5">${i.pl}</td><td class="p-2.5">${i.roe}%</td>
+            <td class="p-2.5 text-center font-bold">${i.score_geral}</td>
+            <td class="p-2.5 text-center font-bold ${i.veredito.includes('COMPRA') ? 'text-emerald-400' : (i.veredito.includes('VENDA') ? 'text-rose-400' : 'text-amber-400')}">${i.veredito}</td>
+          </tr>
+        `).join('');
+      } catch(e) {} finally { btn.innerText = "⚡ Varrer Ações"; btn.disabled = false; }
+    }
+
+    function filtrarTabelaScanner() {
+      const q = document.getElementById('filtroScanner').value.toLowerCase();
+      const rows = document.querySelectorAll('.scanner-row');
+      rows.forEach(r => {
+        if (r.getAttribute('data-ticker').toLowerCase().includes(q) || r.getAttribute('data-nome').includes(q)) {
+          r.style.display = '';
+        } else {
+          r.style.display = 'none';
+        }
+      });
+    }
+
+    function selecionarAtivo(ticker) {
+      document.getElementById('tickerAcao').value = ticker;
+      consultarAcao();
+    }
+
+    async function consultarAcao() {
+      const ticker = document.getElementById('tickerAcao').value;
+      const btn = document.getElementById('btnConsultarAcao');
+      btn.innerText = "Analisando..."; btn.disabled = true;
+      try {
+        const res = await fetch(`/renda-variavel/acao/${encodeURIComponent(ticker)}`);
+        const d = await res.json();
+        if (d.erro) { alert(d.erro); return; }
+        document.getElementById('painelResultadoAcao').classList.remove('hidden');
+        document.getElementById('acaoNome').innerText = `${d.nome_empresa} (${d.ticker})`;
+        document.getElementById('acaoPreco').innerText = `R$ ${d.preco_atual.toFixed(2)}`;
+        
+        const badge = document.getElementById('badgeRecomendacao');
+        badge.innerText = d.recomendacao;
+        badge.className = d.recomendacao.includes("COMPRA") ? "px-4 py-2 rounded-lg text-sm font-extrabold bg-emerald-600 text-white" : (d.recomendacao.includes("VENDA") ? "px-4 py-2 rounded-lg text-sm font-extrabold bg-rose-600 text-white" : "px-4 py-2 rounded-lg text-sm font-extrabold bg-amber-600 text-white");
+        
+        document.getElementById('listaJustificativas').innerHTML = d.analise_racional.map(j => `<div>✓ ${j}</div>`).join('');
+      } catch (e) {} finally { btn.innerText = "Analisar"; btn.disabled = false;}
+    }
+
+    async function carregarFundos() {
+      const btn = document.getElementById('btnFundos');
+      btn.innerText = "⌛ Analisando Entradas..."; btn.disabled = true;
+      try {
+        const res = await fetch('/wealth/fundos');
+        const data = await res.json();
+        
+        const getCorRec = (rec) => {
+          if (rec === "COMPRA") return "bg-emerald-600 text-white";
+          if (rec === "AGUARDAR") return "bg-rose-600 text-white";
+          return "bg-amber-600 text-white";
+        };
+
+        const renderFii = (fii) => {
+          return `
+            <tr class="hover:bg-[#0b0f19]">
+              <td class="p-2 font-bold text-sky-400">${fii.ticker} <span class="block text-[9px] text-gray-500">P/VP ${fii.pvp}</span></td>
+              <td class="p-2">R$ ${fii.preco.toFixed(2)}</td>
+              <td class="p-2 text-gray-300">R$ ${fii.ponto_entrada.toFixed(2)}</td>
+              <td class="p-2 font-mono text-emerald-400">${fii.dy}%</td>
+              <td class="p-2 text-center">
+                <span class="px-2 py-1 rounded text-[9px] font-bold ${getCorRec(fii.recomendacao)}">${fii.recomendacao}</span>
+              </td>
+            </tr>`;
+        };
+        
+        const renderEtf = (etf) => {
+           return `
+            <tr class="hover:bg-[#0b0f19]">
+              <td class="p-2 font-bold text-sky-400">${etf.ticker} <span class="block text-[9px] text-gray-500 truncate max-w-[80px]">${etf.nome}</span></td>
+              <td class="p-2">R$ ${etf.preco.toFixed(2)}</td>
+              <td class="p-2 text-gray-300">R$ ${etf.ponto_entrada.toFixed(2)}</td>
+              <td class="p-2 text-center">
+                <span class="px-2 py-1 rounded text-[9px] font-bold ${getCorRec(etf.recomendacao)}">${etf.recomendacao}</span>
+              </td>
+            </tr>`;
+        };
+
+        document.getElementById('tabelaTijolo').innerHTML = data.tijolo.map(renderFii).join('');
+        document.getElementById('tabelaPapel').innerHTML = data.papel.map(renderFii).join('');
+        document.getElementById('tabelaETFs').innerHTML = data.etfs.map(renderEtf).join('');
+      } catch (e) { alert("Erro ao buscar Fundos."); } finally { btn.innerText = "🔍 Atualizar Radar"; btn.disabled = false;}
+    }
+
+    async function otimizarPortfolio() {
+      const btn = document.getElementById('btnOtimizar');
+      const tickers = document.getElementById('tickersPortfolio').value;
+      const painel = document.getElementById('resultadoAlocacao');
+      
+      btn.disabled = true;
+      btn.innerText = "🧮 Simulando...";
+      painel.classList.add('hidden');
+
+      try {
+        const res = await fetch(`/wealth/otimizar-portfolio?tickers=${encodeURIComponent(tickers)}`);
+        const data = await res.json();
+
+        if (data.erro) { alert(data.erro); return; }
+
+        document.getElementById('portRetorno').innerText = `${data.retorno_esperado_aa}%`;
+        document.getElementById('portVol').innerText = `${data.volatilidade_aa}%`;
+        document.getElementById('portSharpe').innerText = data.sharpe_ratio;
+
+        document.getElementById('listaPesos').innerHTML = data.alocacao_otima.map(item => `
+          <div>
+            <div class="flex justify-between text-xs font-bold mb-1">
+              <span class="text-gray-300">${item.ativo}</span>
+              <span class="text-indigo-400">${item.peso_pct}%</span>
+            </div>
+            <div class="w-full bg-gray-800 rounded-full h-2">
+              <div class="bg-indigo-500 h-2 rounded-full" style="width: ${item.peso_pct}%"></div>
+            </div>
+          </div>
+        `).join('');
+
+        painel.classList.remove('hidden');
+      } catch (e) { alert("Erro na simulação do portfólio."); } finally { btn.disabled = false; btn.innerText = "🧮 Otimizar Pesos"; }
+    }
+  </script>
+</body>
+</html>

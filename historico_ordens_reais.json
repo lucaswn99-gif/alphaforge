@@ -1,0 +1,14 @@
+[
+  {
+    "order_id": 1788493254181,
+    "timestamp": "2026-09-04 00:40:54",
+    "ativo": "BTCUSDT",
+    "tipo": "COMPRA_MERCADO",
+    "preco_entrada": 80829.51,
+    "quantidade": 0.000309,
+    "valor_total_usdt": 25.0,
+    "take_profit": 83254.4,
+    "stop_loss": 79617.07,
+    "status": "ABERTO"
+  }
+]
