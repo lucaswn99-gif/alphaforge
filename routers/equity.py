@@ -245,6 +245,77 @@ def houve_destruicao_de_capital(anual):
     return float(np.mean(retornos[-3:])) < -30.0
 
 
+ROE_MAXIMO_PLAUSIVEL = 200.0
+
+
+def _derivar_patrimonio_liquido(info):
+    """Patrimônio líquido a partir do que o Yahoo expõe em `.info`.
+
+    `totalStockholderEquity` é campo de balanço e quase nunca vem no payload de
+    `.info`, então há dois derivados: VPA x ações em circulação, e valor de
+    mercado / P/VP.
+    """
+    try:
+        contabil = info.get("totalStockholderEquity")
+        if contabil and float(contabil) > 0:
+            return float(contabil)
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        vpa = float(info.get("bookValue") or 0.0)
+        acoes = float(info.get("sharesOutstanding") or 0.0)
+        if vpa > 0 and acoes > 0:
+            return vpa * acoes
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        valor_mercado = float(info.get("marketCap") or 0.0)
+        pvp = float(info.get("priceToBook") or 0.0)
+        if valor_mercado > 0 and pvp > 0:
+            return valor_mercado / pvp
+    except (TypeError, ValueError):
+        pass
+
+    return None
+
+
+def calcular_roe(info):
+    """ROE em pontos percentuais, ou None quando não há como apurar.
+
+    O Yahoo omite `returnOnEquity` de vários papéis (PETR4 entre eles). Tratar
+    a ausência como ROE=0 fazia o motor marcar a empresa como em prejuízo e
+    cravar VENDA / ALTO RISCO. Aqui a ausência vira None, que o motor pontua
+    como "não apurado" em vez de "negativo".
+
+    O teto de plausibilidade existe porque a derivação por lucro/patrimônio
+    explode quando o patrimônio não vem: um denominador de 1 produz ROE na casa
+    dos trilhões — que ainda por cima ganharia o bônus de alta rentabilidade.
+    """
+    try:
+        bruto = info.get("returnOnEquity")
+        if bruto not in (None, 0):
+            roe = float(bruto) * 100.0
+            if abs(roe) <= ROE_MAXIMO_PLAUSIVEL:
+                return roe
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        lucro = float(info.get("netIncomeToCommon") or 0.0)
+    except (TypeError, ValueError):
+        lucro = 0.0
+
+    patrimonio = _derivar_patrimonio_liquido(info)
+    if lucro and patrimonio and patrimonio > 0:
+        roe = (lucro / patrimonio) * 100.0
+        if abs(roe) <= ROE_MAXIMO_PLAUSIVEL:
+            return roe
+
+    return None
+
+
 def _info_tem_conteudo(info):
     """Payload parcial do Yahoo ainda é aproveitável.
 
@@ -266,7 +337,7 @@ def _normalizar_info(info, simbolo):
     return {
         "pl": _num("trailingPE"),
         "pvp": _num("priceToBook"),
-        "roe": _num("returnOnEquity", 100.0),
+        "roe": calcular_roe(info),
         "margem_liq": _num("profitMargins", 100.0),
         "dy": normalizar_dy(info),
         "nome": info.get("shortName") or simbolo.replace(".SA", ""),
@@ -327,16 +398,25 @@ def fatiar_precos(df, simbolo):
 def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
                                 rsi_val, destruicao_historica=False):
     """Motor de Decisão ÚNICO. Scanner e auditoria individual passam por aqui
-    com o mesmo conjunto de entradas, inclusive `destruicao_historica`."""
+    com o mesmo conjunto de entradas, inclusive `destruicao_historica`.
+
+    `roe` aceita None: significa "não apurado", que é diferente de zero. Um ROE
+    ausente na fonte não pode ser lido como prejuízo.
+    """
     score = 50
     alertas_risco = []
     pontos_positivos = []
 
-    em_prejuizo = margem_liq < 0 or roe <= 0
+    roe_apurado = roe is not None
+    roe_valor = float(roe) if roe_apurado else 0.0
+
+    em_prejuizo = margem_liq < 0 or (roe_apurado and roe_valor <= 0)
     if margem_liq < 0:
         alertas_risco.append(f"Margem Líquida negativa ({margem_liq:.2f}%).")
-    if roe <= 0:
+    if roe_apurado and roe_valor <= 0:
         alertas_risco.append("ROE zerado ou negativo.")
+    if not roe_apurado:
+        alertas_risco.append("ROE não apurado na fonte - indicador não pontuado.")
     if destruicao_historica:
         alertas_risco.append("Destruição contínua de capital recente (Value Trap).")
 
@@ -352,9 +432,9 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
         score += 10
         pontos_positivos.append(f"P/VP descontado ({pvp:.2f}x)")
 
-    if roe >= 15:
+    if roe_apurado and roe_valor >= 15:
         score += 15
-        pontos_positivos.append(f"Alta rentabilidade (ROE {roe:.1f}%)")
+        pontos_positivos.append(f"Alta rentabilidade (ROE {roe_valor:.1f}%)")
 
     if dy >= 6 and not em_prejuizo:
         score += 10
@@ -481,7 +561,7 @@ def coletar_bloco(mapa):
                 "preco": round(preco, 2),
                 "pl": round(info["pl"], 2) if info["pl"] else None,
                 "pvp": round(info["pvp"], 2) if info["pvp"] else None,
-                "roe": round(info["roe"], 2) if info["roe"] else None,
+                "roe": round(info["roe"], 2) if info["roe"] is not None else None,
                 "dy": round(info["dy"], 2),
                 "tendencia_grafica": tendencia,
                 "rsi": rsi_val,
@@ -633,7 +713,7 @@ def _auditar_simbolo(ticker_clean, simbolo):
     pl = _num("trailingPE")
     pvp = _num("priceToBook")
     ev_ebitda = _num("enterpriseToEbitda")
-    roe = _num("returnOnEquity", 100.0)
+    roe = calcular_roe(info)
     margem_liq = _num("profitMargins", 100.0)
     dy = normalizar_dy(info, preco_ref=preco)
 
@@ -673,7 +753,7 @@ def _auditar_simbolo(ticker_clean, simbolo):
             "p_vp": round(pvp, 2) if pvp else None,
             "ev_ebitda": round(ev_ebitda, 2) if ev_ebitda else None,
             "dividend_yield_pct": round(dy, 2),
-            "roe_pct": round(roe, 2) if roe else None,
+            "roe_pct": round(roe, 2) if roe is not None else None,
             "margem_liquida_pct": round(margem_liq, 2),
         },
         "historico_10_anos": dados_10_anos,

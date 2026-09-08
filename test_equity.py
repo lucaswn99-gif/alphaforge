@@ -182,6 +182,52 @@ class TestDividendYield(unittest.TestCase):
         self.assertEqual(equity.normalizar_dy({"dividendYield": None}), 0.0)
 
 
+class TestRoe(unittest.TestCase):
+    """Fallback de ROE — mérito dos commits que vieram do GitHub, com o
+    denominador ausente tratado e teto de plausibilidade."""
+
+    def test_campo_direto_quando_existe(self):
+        self.assertAlmostEqual(equity.calcular_roe({"returnOnEquity": 0.185}), 18.5, places=6)
+
+    def test_deriva_de_lucro_sobre_vpa_x_acoes(self):
+        info = {"netIncomeToCommon": 30e9, "bookValue": 40.0, "sharesOutstanding": 5e9}
+        self.assertAlmostEqual(equity.calcular_roe(info), 15.0, places=6)
+
+    def test_deriva_de_valor_de_mercado_sobre_pvp(self):
+        info = {"netIncomeToCommon": 20e9, "marketCap": 200e9, "priceToBook": 2.0}
+        self.assertAlmostEqual(equity.calcular_roe(info), 20.0, places=6)
+
+    def test_patrimonio_ausente_nao_vira_roe_astronomico(self):
+        """Com denominador 1, a derivação ingênua dava ROE na casa dos trilhões
+        e ainda ganhava o bônus de alta rentabilidade."""
+        self.assertIsNone(equity.calcular_roe({"netIncomeToCommon": 35e9}))
+
+    def test_sem_dado_nenhum_e_none(self):
+        self.assertIsNone(equity.calcular_roe({}))
+        self.assertIsNone(equity.calcular_roe({"returnOnEquity": 0}))
+
+    def test_roe_ausente_nao_e_lido_como_prejuizo(self):
+        """O caso PETR4: ROE ausente marcava a empresa como em prejuízo."""
+        base = dict(pl=8.0, pvp=1.2, dy=7.0, margem_liq=15.0,
+                    tendencia_grafica="ALTA", rsi_val=45.0)
+        _, veredito, _, alertas = equity.calcular_score_quantamental(roe=None, **base)
+        self.assertNotEqual(veredito, "VENDA / ALTO RISCO")
+        self.assertTrue(any("não apurado" in a for a in alertas))
+
+    def test_roe_zero_de_verdade_ainda_e_prejuizo(self):
+        base = dict(pl=8.0, pvp=1.2, dy=7.0, margem_liq=15.0,
+                    tendencia_grafica="ALTA", rsi_val=45.0)
+        _, veredito, _, _ = equity.calcular_score_quantamental(roe=0.0, **base)
+        self.assertEqual(veredito, "VENDA / ALTO RISCO")
+
+    def test_roe_nao_apurado_nao_ganha_bonus(self):
+        base = dict(pl=30.0, pvp=3.0, dy=1.0, margem_liq=5.0,
+                    tendencia_grafica="BAIXA", rsi_val=50.0)
+        sem_roe, _, _, _ = equity.calcular_score_quantamental(roe=None, **base)
+        com_roe, _, _, _ = equity.calcular_score_quantamental(roe=25.0, **base)
+        self.assertEqual(com_roe - sem_roe, 15)
+
+
 class TestRSI(unittest.TestCase):
     def _wilder_referencia(self, valores, periodo=14):
         """Implementação independente, direto da definição de Wilder."""
