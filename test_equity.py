@@ -177,9 +177,11 @@ class TestDividendYield(unittest.TestCase):
         info = {"dividendYield": 850.0}
         self.assertAlmostEqual(equity.normalizar_dy(info), 8.5, places=6)
 
-    def test_ausente_e_zero(self):
-        self.assertEqual(equity.normalizar_dy({}), 0.0)
-        self.assertEqual(equity.normalizar_dy({"dividendYield": None}), 0.0)
+    def test_ausente_e_none_e_nao_zero(self):
+        """Sem dado != "não paga dividendo". O motor precisa distinguir."""
+        self.assertIsNone(equity.normalizar_dy({}))
+        self.assertIsNone(equity.normalizar_dy({"dividendYield": None}))
+        self.assertEqual(equity.normalizar_dy({"dividendYield": 0}), 0.0)
 
 
 class TestRoe(unittest.TestCase):
@@ -212,7 +214,7 @@ class TestRoe(unittest.TestCase):
                     tendencia_grafica="ALTA", rsi_val=45.0)
         _, veredito, _, alertas = equity.calcular_score_quantamental(roe=None, **base)
         self.assertNotEqual(veredito, "VENDA / ALTO RISCO")
-        self.assertTrue(any("não apurado" in a for a in alertas))
+        self.assertTrue(any("Sem dado na fonte" in a and "ROE" in a for a in alertas))
 
     def test_roe_zero_de_verdade_ainda_e_prejuizo(self):
         base = dict(pl=8.0, pvp=1.2, dy=7.0, margem_liq=15.0,
@@ -463,6 +465,142 @@ class TestDuasPassadas(unittest.TestCase):
         self.assertEqual(resposta["origem_composicao"], "b3")
         self.assertEqual(resposta["papeis_no_indice"], 3)
         self.assertEqual(resposta["solicitados"], 3)
+
+
+class TestFundamentosOpcionais(unittest.TestCase):
+    """O caso que esvaziava a tabela: rate limit no .info derrubava os 95
+    papéis, mesmo com a série de preço tendo vindo inteira."""
+
+    def setUp(self):
+        self.orig_comp = equity.composicao_ibov.obter_composicao
+        self.orig_download = equity.yf.download
+        self.orig_ticker = equity.yf.Ticker
+        self.orig_tentativas = equity.SCANNER_TENTATIVAS
+        self.extras = list(equity.ACOES_FORA_DO_INDICE)
+        equity.SCANNER_TENTATIVAS = 1
+        equity.ACOES_FORA_DO_INDICE.clear()
+        equity.composicao_ibov.obter_composicao = _stub_composicao(["VALE3", "PETR4", "ITUB4"])
+        equity.yf.download = lambda simbolos, *a, **k: _df_precos(list(simbolos))
+        equity._cache_scanner["payload"] = None
+        equity._cache_scanner["carimbo"] = 0.0
+
+    def tearDown(self):
+        equity.composicao_ibov.obter_composicao = self.orig_comp
+        equity.yf.download = self.orig_download
+        equity.yf.Ticker = self.orig_ticker
+        equity.SCANNER_TENTATIVAS = self.orig_tentativas
+        equity.ACOES_FORA_DO_INDICE.extend(self.extras)
+        equity._cache_scanner["payload"] = None
+        equity._cache_scanner["carimbo"] = 0.0
+
+    def test_rate_limit_total_ainda_devolve_a_tabela(self):
+        class Bloqueado:
+            def __init__(self, *a, **k):
+                raise RuntimeError("YFRateLimitError")
+
+        equity.yf.Ticker = Bloqueado
+        resposta = equity.executar_scanner(forcar=True)
+
+        self.assertEqual(resposta["total"], 3, "a tabela não pode vir vazia com preço disponível")
+        self.assertEqual(resposta["com_fundamentos"], 0)
+        self.assertEqual(resposta["falhas"], [])
+        self.assertEqual(len(resposta["sem_fundamentos"]), 3)
+        for linha in resposta["oportunidades"]:
+            self.assertFalse(linha["fundamentos_disponiveis"])
+            self.assertIsNone(linha["roe"])
+            self.assertIsNone(linha["pl"])
+            self.assertIsNotNone(linha["preco"])
+            self.assertIn(linha["tendencia_grafica"], ("ALTA", "BAIXA"))
+
+    def test_sem_fundamentos_nao_vira_veredito_de_prejuizo(self):
+        class Bloqueado:
+            def __init__(self, *a, **k):
+                raise RuntimeError("YFRateLimitError")
+
+        equity.yf.Ticker = Bloqueado
+        resposta = equity.executar_scanner(forcar=True)
+        for linha in resposta["oportunidades"]:
+            self.assertEqual(linha["veredito"], "SEM DADOS FUNDAMENTALISTAS")
+            self.assertLessEqual(linha["score_geral"], 55)
+
+    def test_mistura_de_papeis_com_e_sem_fundamentos(self):
+        class Parcial:
+            def __init__(self, simbolo, *a, **k):
+                if simbolo == "VALE3.SA":
+                    raise RuntimeError("YFRateLimitError")
+                self.info = {"shortName": simbolo, "trailingPE": 7.0, "priceToBook": 1.1,
+                             "returnOnEquity": 0.2, "profitMargins": 0.15,
+                             "dividendRate": 3.0, "currentPrice": 50.0}
+
+        equity.yf.Ticker = Parcial
+        resposta = equity.executar_scanner(forcar=True)
+        self.assertEqual(resposta["total"], 3)
+        self.assertEqual(resposta["com_fundamentos"], 2)
+        self.assertEqual([f["ticker"] for f in resposta["sem_fundamentos"]], ["VALE3"])
+
+
+class TestMotorComIndicadoresAusentes(unittest.TestCase):
+    def test_tudo_ausente_fica_neutro_e_avisa(self):
+        score, veredito, positivos, alertas = equity.calcular_score_quantamental(
+            pl=None, pvp=None, roe=None, dy=None, margem_liq=None,
+            tendencia_grafica="ALTA", rsi_val=50.0,
+        )
+        self.assertEqual(veredito, "SEM DADOS FUNDAMENTALISTAS")
+        self.assertLessEqual(score, 55, "preço puro não pode alcançar faixa de COMPRA")
+        self.assertTrue(any("Sem dado na fonte" in a for a in alertas))
+
+    def test_ausencia_nao_pontua_nem_a_favor_nem_contra(self):
+        base = dict(pvp=None, roe=None, dy=None, margem_liq=None,
+                    tendencia_grafica="BAIXA", rsi_val=50.0)
+        sem_pl, _, _, _ = equity.calcular_score_quantamental(pl=None, **base)
+        pl_alto, _, _, _ = equity.calcular_score_quantamental(pl=40.0, **base)
+        pl_bom, _, _, _ = equity.calcular_score_quantamental(pl=8.0, **base)
+        self.assertEqual(pl_alto - sem_pl, -10)
+        self.assertEqual(pl_bom - sem_pl, 15)
+
+    def test_margem_ausente_nao_e_prejuizo(self):
+        _, veredito, _, _ = equity.calcular_score_quantamental(
+            pl=8.0, pvp=1.0, roe=None, dy=None, margem_liq=None,
+            tendencia_grafica="ALTA", rsi_val=50.0,
+        )
+        self.assertNotEqual(veredito, "VENDA / ALTO RISCO")
+
+
+class TestCarimboDeColeta(unittest.TestCase):
+    def test_campos_do_carimbo(self):
+        carimbo = equity.carimbo_de_coleta()
+        self.assertEqual(carimbo["atraso_fonte_minutos"], 15)
+        self.assertIn("Yahoo", carimbo["fonte_cotacao"])
+        self.assertRegex(carimbo["coletado_em_legivel"], r"^\d{2}/\d{2}/\d{4} \d{2}:\d{2}$")
+        from datetime import datetime
+        datetime.fromisoformat(carimbo["coletado_em"])  # não pode levantar
+
+    def test_fuso_e_de_sao_paulo(self):
+        from datetime import datetime, timezone
+        carimbo = equity.carimbo_de_coleta()
+        momento = datetime.fromisoformat(carimbo["coletado_em"])
+        self.assertIsNotNone(momento.tzinfo)
+        agora = datetime.now(timezone.utc)
+        self.assertLess(abs((momento - agora).total_seconds()), 120)
+
+    def test_cache_preserva_o_horario_da_coleta_original(self):
+        """O carimbo tem que ser o da coleta, não o do momento da resposta —
+        senão um resultado de 14 minutos atrás se apresenta como novo."""
+        import time as _t
+        payload = {"total": 1, "solicitados": 1, "falhas": [], "oportunidades": [],
+                   "coletado_em_legivel": "01/01/2026 09:30",
+                   "coletado_em": "2026-01-01T09:30:00-03:00",
+                   "fonte_cotacao": equity.FONTE_COTACAO, "atraso_fonte_minutos": 15}
+        equity._cache_scanner["payload"] = payload
+        equity._cache_scanner["carimbo"] = _t.time() - 600
+        try:
+            resp = equity.executar_scanner(forcar=False)
+            self.assertTrue(resp["cache"])
+            self.assertEqual(resp["coletado_em_legivel"], "01/01/2026 09:30")
+            self.assertGreaterEqual(resp["idade_segundos"], 599)
+        finally:
+            equity._cache_scanner["payload"] = None
+            equity._cache_scanner["carimbo"] = 0.0
 
 
 class TestCacheScanner(unittest.TestCase):

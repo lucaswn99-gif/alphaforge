@@ -1,0 +1,15 @@
+# Blueprint do Render. Sobe o serviço já com o comando e o health check certos.
+services:
+  - type: web
+    name: alphaforge
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Defina o valor no painel do Render, nunca no repositório.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.12.7

@@ -1,23 +1,27 @@
-# Versões fixadas a partir do venv de referência (Python 3.13, Windows).
-# Sem pin o projeto não é reprodutível: o yfinance troca contrato entre
-# releases menores — foi ele que mudou `auto_adjust` para True por padrão em
-# yf.download e a convenção de `dividendYield` de fração para pontos
-# percentuais. routers/equity.py assume o comportamento da linha 1.x.
+# Dependências do serviço web (api.py + routers/ + modules/).
+#
+# Só pin exato onde a versão muda comportamento; faixa no resto. Pin exato de
+# transitiva (urllib3, pydantic, certifi) vem de requests e fastapi — travar as
+# duas pontas é o que produz ResolutionImpossible no build.
+#
+# Fora daqui de propósito:
+#   MetaTrader5   Windows-only, inerte no servidor
+#   ccxt          só o router de trading usava, e ele está desativado
+#   scikit-learn  e joblib: usados por treinar_modelo.py e robo_trader.py,
+#   joblib        que não fazem parte do serviço web
 
-fastapi==0.141.1
-uvicorn==0.52.4
-pydantic==2.13.5
-jinja2==3.1.6
-python-multipart==0.0.32
-python-dotenv==1.2.3
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+python-dotenv>=1.0
+jinja2>=3.1
 
-pandas==3.0.5
-numpy==2.2.6
-scikit-learn==1.9.0
-joblib==1.6.0
+# yfinance dita a faixa de pandas/numpy que o pip consegue resolver. Se o build
+# reclamar de conflito, é este bloco que cede — nunca pine pandas acima do que
+# a sua versão de yfinance aceita.
+yfinance>=0.2.60
+pandas>=2.2
+numpy>=1.26
 
-yfinance==1.7.0
-ccxt==4.5.77
-requests==2.34.2
-urllib3==2.7.0
-pypdf==6.18.0
+requests>=2.32
+pypdf>=5.1

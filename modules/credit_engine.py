@@ -1,45 +1,163 @@
-import yfinance as yf
-import sqlite3
-def calcular_altman_z_score_emergente(ativo_circulante: float, passivo_circulante: float,
-                                      ativo_total: float, lucros_retidos: float,
-                                      ebitda: float, patrimonio_liquido: float,
-                                      passivo_total: float) -> dict:
+"""Motor de crédito: índices calculados por fórmula, nunca gerados por modelo.
+
+Divisão de trabalho do módulo, que é o ponto do redesenho:
+
+    LLM  -> só EXTRAI campos brutos do balanço (ativo, passivo, EBITDA, dívida)
+    aqui -> CALCULA alavancagem, cobertura de juros e Altman Z a partir deles
+
+Antes, `routers/fixed_income.py` pedia os próprios índices ao Gemini e usava a
+resposta para carimbar APROVADO/REPROVADO. Número de crédito gerado por modelo
+não é reproduzível nem auditável, e instrução de prompt ("não invente") não é
+garantia. Estas funções são determinísticas: mesma entrada, mesmo resultado.
+
+Regra que vale para tudo aqui: dado ausente vira None e o laudo sai
+INCONCLUSIVO. Nunca preenchemos lacuna com estimativa — a versão anterior
+chegava a assumir "ativo circulante = 40% do ativo total" quando o campo
+faltava, o que produz um Z-Score com cara de medição.
+"""
+
+TETO_ALAVANCAGEM = 3.5
+PISO_COBERTURA_JUROS = 1.5
+PISO_Z_SCORE = 1.10
+
+# Campos sem os quais não existe laudo.
+CAMPOS_OBRIGATORIOS_Z = (
+    "ativo_circulante", "passivo_circulante", "ativo_total",
+    "ebitda", "patrimonio_liquido", "passivo_total",
+)
+
+
+def _num(valor):
+    """Converte para float, ou None. String vazia e não-numérico viram None."""
+    if valor is None or valor == "":
+        return None
+    try:
+        convertido = float(valor)
+    except (TypeError, ValueError):
+        return None
+    if convertido != convertido:  # NaN
+        return None
+    return convertido
+
+
+def calcular_altman_z_score_emergente(ativo_circulante, passivo_circulante,
+                                      ativo_total, lucros_retidos,
+                                      ebitda, patrimonio_liquido,
+                                      passivo_total):
+    """Altman Z'' para mercados emergentes.
+
+        Z = 6.56·X1 + 3.26·X2 + 6.72·X3 + 1.05·X4
+
+    X1 capital de giro/ativo total, X2 lucros retidos/ativo total,
+    X3 EBITDA/ativo total, X4 patrimônio líquido/passivo total.
+
+    Devolve z_score None quando o denominador não existe — um Z calculado com
+    ativo total zerado não é conservador, é inventado.
+    """
+    ativo_circulante = _num(ativo_circulante)
+    passivo_circulante = _num(passivo_circulante)
+    ativo_total = _num(ativo_total)
+    lucros_retidos = _num(lucros_retidos)
+    ebitda = _num(ebitda)
+    patrimonio_liquido = _num(patrimonio_liquido)
+    passivo_total = _num(passivo_total)
+
+    faltando = []
+    if ativo_total is None or ativo_total <= 0:
+        faltando.append("ativo_total")
+    if passivo_total is None or passivo_total <= 0:
+        faltando.append("passivo_total")
+    for nome, valor in (("ativo_circulante", ativo_circulante),
+                        ("passivo_circulante", passivo_circulante),
+                        ("ebitda", ebitda),
+                        ("patrimonio_liquido", patrimonio_liquido)):
+        if valor is None:
+            faltando.append(nome)
+
+    if faltando:
+        return {"z_score": None, "classificacao": "Não calculável",
+                "campos_faltantes": faltando}
+
+    # Lucros retidos ausentes: o único campo que aceitamos como 0, porque a DFP
+    # brasileira frequentemente não o destaca. Fica registrado no laudo.
+    lucros_retidos_ausente = lucros_retidos is None
+    if lucros_retidos_ausente:
+        lucros_retidos = 0.0
+
     capital_giro = ativo_circulante - passivo_circulante
-    
-    x1 = capital_giro / ativo_total if ativo_total > 0 else 0
-    x2 = lucros_retidos / ativo_total if ativo_total > 0 else 0
-    x3 = ebitda / ativo_total if ativo_total > 0 else 0
-    x4 = patrimonio_liquido / passivo_total if passivo_total > 0 else 0
-    
+
+    x1 = capital_giro / ativo_total
+    x2 = lucros_retidos / ativo_total
+    x3 = ebitda / ativo_total
+    x4 = patrimonio_liquido / passivo_total
+
     z_score = round(6.56 * x1 + 3.26 * x2 + 6.72 * x3 + 1.05 * x4, 2)
-    
-    if z_score < 1.10:
+
+    if z_score < PISO_Z_SCORE:
         classificacao = "Zona de Estresse / Alto Risco de Insolvência"
-    elif 1.10 <= z_score <= 2.60:
+    elif z_score <= 2.60:
         classificacao = "Zona Cinzenta / Alerta de Alavancagem"
     else:
         classificacao = "Zona Segura / Baixo Risco de Falência"
-        
-    return {"z_score": z_score, "classificacao": classificacao}
 
-def auditar_credito_corporativo(nome_emissor: str, divida_liquida: float, 
-                                ebitda: float, despesa_financeira_anual: float, 
-                                z_metrics: dict) -> dict:
-    alavancagem = round(divida_liquida / ebitda, 2) if ebitda > 0 else 999.0
-    icj = round(ebitda / despesa_financeira_anual, 2) if despesa_financeira_anual > 0 else 0.0
-    
+    return {
+        "z_score": z_score,
+        "classificacao": classificacao,
+        "campos_faltantes": [],
+        "componentes": {"x1_capital_giro": round(x1, 4), "x2_lucros_retidos": round(x2, 4),
+                        "x3_ebitda": round(x3, 4), "x4_estrutura": round(x4, 4)},
+        "lucros_retidos_assumidos_zero": lucros_retidos_ausente,
+    }
+
+
+def auditar_credito_corporativo(nome_emissor, divida_liquida, ebitda,
+                                despesa_financeira_anual, z_metrics):
+    """Laudo de crédito corporativo. Sem dado suficiente, status INCONCLUSIVO."""
+    divida_liquida = _num(divida_liquida)
+    ebitda = _num(ebitda)
+    despesa_financeira_anual = _num(despesa_financeira_anual)
+
     z_info = calcular_altman_z_score_emergente(**z_metrics)
-    
+
+    if ebitda is not None and ebitda > 0 and divida_liquida is not None:
+        alavancagem = round(divida_liquida / ebitda, 2)
+    else:
+        alavancagem = None
+
+    # Despesa financeira vem negativa na DFP; o sinal não muda a cobertura.
+    despesa = abs(despesa_financeira_anual) if despesa_financeira_anual else None
+    if ebitda is not None and despesa and despesa > 0:
+        icj = round(ebitda / despesa, 2)
+    else:
+        icj = None
+
     vetos = []
-    if alavancagem > 3.5:
-        vetos.append(f"Dívida Líquida/EBITDA ({alavancagem}x) acima do teto de 3.5x.")
-    if icj < 1.5:
-        vetos.append(f"Cobertura de Juros insuficiente ({icj}x): geração operacional não suporta juros da dívida.")
-    if z_info["z_score"] < 1.10:
+    if alavancagem is not None and alavancagem > TETO_ALAVANCAGEM:
+        vetos.append(f"Dívida Líquida/EBITDA ({alavancagem}x) acima do teto de {TETO_ALAVANCAGEM}x.")
+    if icj is not None and icj < PISO_COBERTURA_JUROS:
+        vetos.append(f"Cobertura de Juros insuficiente ({icj}x): geração operacional não suporta os juros da dívida.")
+    if z_info["z_score"] is not None and z_info["z_score"] < PISO_Z_SCORE:
         vetos.append(f"Altman Z-Score crítico ({z_info['z_score']}): risco de insolvência elevado.")
-        
-    status = "REPROVADO / VETO" if len(vetos) > 0 else "APROVADO / ALTA CONFIANÇA"
-    
+    if ebitda is not None and ebitda <= 0:
+        vetos.append("EBITDA não positivo: sem geração operacional para servir dívida.")
+
+    indisponiveis = []
+    if alavancagem is None:
+        indisponiveis.append("alavancagem")
+    if icj is None:
+        indisponiveis.append("cobertura de juros")
+    if z_info["z_score"] is None:
+        indisponiveis.append("Altman Z-Score")
+
+    if vetos:
+        status = "REPROVADO / VETO"
+    elif indisponiveis:
+        # Sem os três índices não existe aprovação: ausência de veto não é
+        # evidência de solidez.
+        status = "INCONCLUSIVO / DADO INSUFICIENTE"
+    else:
+        status = "APROVADO / ALTA CONFIANÇA"
+
     return {
         "emissor": nome_emissor,
         "tipo_ativo": "Credito Corporativo",
@@ -48,148 +166,143 @@ def auditar_credito_corporativo(nome_emissor: str, divida_liquida: float,
         "cobertura_juros_icj": icj,
         "altman_z_score": z_info["z_score"],
         "classificacao_z": z_info["classificacao"],
-        "motivos_veto": vetos
+        "motivos_veto": vetos,
+        "indices_indisponiveis": indisponiveis,
+        "campos_faltantes": z_info.get("campos_faltantes", []),
+        "detalhe_z": z_info.get("componentes"),
+        "lucros_retidos_assumidos_zero": z_info.get("lucros_retidos_assumidos_zero", False),
     }
 
-def auditar_ativo_bancario(nome_banco: str, indice_basileia: float, 
-                           indice_imobilizacao: float, lucros_ultimos_3_anos: bool) -> dict:
+
+def auditar_ativo_bancario(nome_banco, indice_basileia, indice_imobilizacao,
+                           lucros_ultimos_3_anos):
+    """Laudo para emissor bancário (CDB/LCI/LCA)."""
+    basileia = _num(indice_basileia)
+    imobilizacao = _num(indice_imobilizacao)
+
     vetos = []
-    if indice_basileia < 11.0:
-        vetos.append(f"Índice de Basileia ({indice_basileia}%) abaixo do patamar prudencial de 11%.")
-    if indice_imobilizacao > 50.0:
-        vetos.append(f"Índice de Imobilização elevado ({indice_imobilizacao}%): risco de liquidez patrimonial.")
-    if not lucros_ultimos_3_anos:
+    indisponiveis = []
+
+    if basileia is None:
+        indisponiveis.append("índice de Basileia")
+    elif basileia < 11.0:
+        vetos.append(f"Índice de Basileia ({basileia}%) abaixo do patamar prudencial de 11%.")
+
+    if imobilizacao is None:
+        indisponiveis.append("índice de imobilização")
+    elif imobilizacao > 50.0:
+        vetos.append(f"Índice de Imobilização elevado ({imobilizacao}%): risco de liquidez patrimonial.")
+
+    if lucros_ultimos_3_anos is None:
+        indisponiveis.append("histórico de lucratividade")
+    elif not lucros_ultimos_3_anos:
         vetos.append("Instituição financeira com prejuízos recorrentes nos últimos balanços.")
-        
-    status = "REPROVADO / VETO" if len(vetos) > 0 else "APROVADO / SEGURO"
-    
+
+    if vetos:
+        status = "REPROVADO / VETO"
+    elif indisponiveis:
+        status = "INCONCLUSIVO / DADO INSUFICIENTE"
+    else:
+        status = "APROVADO / SEGURO"
+
+    if lucros_ultimos_3_anos is None:
+        historico = "Não informado"
+    else:
+        historico = "Consistente" if lucros_ultimos_3_anos else "Prejuízos Recorrentes"
+
     return {
         "instituicao": nome_banco,
         "tipo_ativo": "Ativo Bancario (CDB/LCI/LCA)",
         "status": status,
-        "indice_basileia": f"{indice_basileia}%",
-        "indice_imobilizacao": f"{indice_imobilizacao}%",
-        "historico_lucratividade": "Consistente" if lucros_ultimos_3_anos else "Prejuízos Recorrentes",
-        "motivos_veto": vetos
+        "indice_basileia": f"{basileia}%" if basileia is not None else None,
+        "indice_imobilizacao": f"{imobilizacao}%" if imobilizacao is not None else None,
+        "historico_lucratividade": historico,
+        "motivos_veto": vetos,
+        "indices_indisponiveis": indisponiveis,
     }
 
-def auditar_ticker_b3(ticker_input: str) -> dict:
+
+# Campos do balanço que o Yahoo expõe, e o nome que usamos internamente.
+_MAPA_BALANCO = {
+    "ativo_total": "Total Assets",
+    "passivo_total": "Total Liabilities Net Minority Interest",
+    "ativo_circulante": "Current Assets",
+    "passivo_circulante": "Current Liabilities",
+    "patrimonio_liquido": "Stockholders Equity",
+    "lucros_retidos": "Retained Earnings",
+}
+
+
+def auditar_ticker_b3(ticker_input):
+    """Laudo de empresa listada, a partir do balanço publicado no Yahoo.
+
+    Campo que não vier fica None e derruba o laudo para INCONCLUSIVO. A versão
+    anterior preenchia ativo circulante com 40% do ativo total e despesa
+    financeira com 15% do EBITDA quando faltavam — números inventados que
+    entravam no Z-Score como se fossem medidos.
     """
-    Busca automaticamente os dados de balanço na B3/Yahoo e gera o laudo.
-    """
+    import yfinance as yf
+
+    ticker = (ticker_input or "").upper().strip()
+    if not ticker:
+        return {"erro": "Informe um ticker."}
+    simbolo = ticker if ticker.endswith(".SA") else f"{ticker}.SA"
+
     try:
-        ticker_sa = f"{ticker_input}.SA" if not ticker_input.endswith(".SA") else ticker_input
-        t = yf.Ticker(ticker_sa)
-        info = t.info
-        
-        if not info or ('regularMarketPrice' not in info and 'previousClose' not in info):
-            return {"erro": f"Dados de balanço indisponíveis para {ticker_input}."}
+        ativo = yf.Ticker(simbolo)
+        try:
+            info = ativo.info or {}
+        except Exception:  # noqa: BLE001
+            info = {}
 
-        # Extração Rápida (Info)
-        ebitda = info.get('ebitda', 1) 
-        divida_total = info.get('totalDebt', 0)
-        caixa = info.get('totalCash', 0)
-        divida_liquida = divida_total - caixa
-        
-        # Extração Profunda (Balanço Patrimonial DFP/ITR)
-        bs = t.balance_sheet
-        fin = t.financials
-        
-        def safe_get(df, index_name, default):
-            try: return float(df.loc[index_name].dropna().iloc[0])
-            except: return float(default)
+        balanco = ativo.balance_sheet
+        financeiro = ativo.financials
 
-        ativo_total = safe_get(bs, 'Total Assets', info.get('totalAssets', 1))
-        passivo_total = safe_get(bs, 'Total Liabilities Net Minority Interest', divida_total)
-        ativo_circulante = safe_get(bs, 'Current Assets', ativo_total * 0.4)
-        passivo_circulante = safe_get(bs, 'Current Liabilities', passivo_total * 0.4)
-        patrimonio_liquido = safe_get(bs, 'Stockholders Equity', 1)
-        lucros_retidos = safe_get(bs, 'Retained Earnings', 0)
-        
-        despesa_financeira = safe_get(fin, 'Interest Expense', ebitda * 0.15)
-        despesa_financeira = abs(despesa_financeira) if despesa_financeira else 1.0
+        def do_balanco(rotulo):
+            try:
+                serie = balanco.loc[rotulo].dropna()
+                return float(serie.iloc[0]) if len(serie) else None
+            except Exception:  # noqa: BLE001
+                return None
 
-        z_metrics = {
-            "ativo_circulante": ativo_circulante,
-            "passivo_circulante": passivo_circulante,
-            "ativo_total": ativo_total,
-            "lucros_retidos": lucros_retidos,
-            "ebitda": ebitda,
-            "patrimonio_liquido": patrimonio_liquido,
-            "passivo_total": passivo_total
-        }
+        campos = {chave: do_balanco(rotulo) for chave, rotulo in _MAPA_BALANCO.items()}
 
-        nome_emissor = info.get('shortName', ticker_input)
+        ebitda = _num(info.get("ebitda"))
+        divida_total = _num(info.get("totalDebt"))
+        caixa = _num(info.get("totalCash"))
+        divida_liquida = (divida_total - caixa) if (divida_total is not None and caixa is not None) else None
+
+        try:
+            serie = financeiro.loc["Interest Expense"].dropna()
+            despesa_financeira = float(serie.iloc[0]) if len(serie) else None
+        except Exception:  # noqa: BLE001
+            despesa_financeira = None
+
+        z_metrics = dict(campos)
+        z_metrics["ebitda"] = ebitda
 
         resultado = auditar_credito_corporativo(
-            nome_emissor=nome_emissor,
+            nome_emissor=info.get("shortName") or ticker,
             divida_liquida=divida_liquida,
             ebitda=ebitda,
             despesa_financeira_anual=despesa_financeira,
-            z_metrics=z_metrics
+            z_metrics=z_metrics,
         )
-        
-        resultado["origem_dados"] = "Balanço DFP/ITR Automático (B3/Yahoo)"
-        resultado["ticker_analisado"] = ticker_sa
+        resultado["origem_dados"] = "Balanço publicado (Yahoo Finance)"
+        resultado["ticker_analisado"] = simbolo
+        resultado["campos_brutos"] = {**campos, "ebitda": ebitda,
+                                      "divida_liquida": divida_liquida,
+                                      "despesa_financeira": despesa_financeira}
         return resultado
 
-    except Exception as e:
-        return {"erro": f"Falha ao raspar balanço automático: {str(e)}"}
-def auditar_empresa_cvm(busca: str) -> dict:
-    """Busca a empresa pelo CNPJ ou Nome no banco CVM local e faz a auditoria com ajustes de Proxy."""
-    try:
-        conn = sqlite3.connect('dados_mercado.db')
-        cursor = conn.cursor()
-        
-        query = f"%{busca.upper()}%"
-        cursor.execute("""
-            SELECT CNPJ_CIA, DENOM_CIA, ativo_total, ativo_circulante, 
-                   passivo_total, passivo_circulante, patrimonio_liquido, 
-                   ebitda, despesa_financeira_anual, divida_liquida 
-            FROM cvm_balancos 
-            WHERE CNPJ_CIA LIKE ? OR DENOM_CIA LIKE ? LIMIT 1
-        """, (query, query))
-        
-        resultado = cursor.fetchone()
-        conn.close()
-        
-        if not resultado:
-            return {"erro": f"Empresa '{busca}' não encontrada no banco CVM local. Verifique o CNPJ ou Nome."}
-            
-        cnpj, nome, ativo_total, ativo_circ, passivo_total, passivo_circ, pat_liq, ebitda, desp_fin, div_liq = resultado
-        
-        # ==========================================
-        # AJUSTES DE PROXY CVM (TRATAMENTO DE DADOS)
-        # ==========================================
-        # 1. A CVM traz o EBIT. Adicionamos ~40% como proxy conservadora de Depreciação/Amortização.
-        ebitda_corrigido = float(ebitda) * 1.4 if float(ebitda) > 0 else float(ebitda)
-        
-        # 2. O Resultado Financeiro na CVM vem negativo. Usamos abs() para torná-lo positivo para a fórmula.
-        desp_fin_corrigida = abs(float(desp_fin)) if float(desp_fin) != 0 else 1.0
-        
-        z_metrics = {
-            "ativo_circulante": float(ativo_circ),
-            "passivo_circulante": float(passivo_circ),
-            "ativo_total": float(ativo_total) if float(ativo_total) > 0 else 1,
-            "lucros_retidos": 0.0, # Aproximação para DFP
-            "ebitda": ebitda_corrigido,
-            "patrimonio_liquido": float(pat_liq),
-            "passivo_total": float(passivo_total) if float(passivo_total) > 0 else 1
-        }
-        
-        auditoria = auditar_credito_corporativo(
-            nome_emissor=f"{nome} (CNPJ: {cnpj})",
-            divida_liquida=float(div_liq),
-            ebitda=ebitda_corrigido,
-            despesa_financeira_anual=desp_fin_corrigida,
-            z_metrics=z_metrics
-        )
-        
-        auditoria["origem_dados"] = "Banco de Dados CVM Local (Proxy Ajustada p/ D&A)"
-        return auditoria
-        
-    except Exception as e:
-        return {"erro": f"Falha ao consultar banco CVM local: {str(e)}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"erro": f"Falha ao ler o balanço de {ticker}: {type(exc).__name__}: {exc}"}
 
-    except Exception as e:
-        return {"erro": f"Falha ao consultar banco CVM local: {str(e)}"}
+
+# NOTA: `auditar_empresa_cvm` foi removida. Ela consultava a tabela
+# `cvm_balancos` em `dados_mercado.db` — tabela que não existe: esse arquivo só
+# tem `cotacoes_b3`, e a base da CVM (`cvm_dados.db`) guarda `demonstracoes`,
+# com valores gravados como texto formatado ("R$ 1.23 Bi") e sem patrimônio
+# líquido. Para ressuscitar esse caminho é preciso primeiro reescrever
+# `coletor_cvm.py` para gravar números crus, incluindo a conta 2.03
+# (patrimônio líquido) e o CNPJ, e mapear CNPJ -> ticker.

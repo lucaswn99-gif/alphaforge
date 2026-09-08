@@ -30,7 +30,13 @@ CABECALHOS = {
 
 TIMEOUT = 12
 CACHE_TTL = 12 * 3600
-CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache_ibov.json")
+# No Render o disco é efêmero e o cache simplesmente não sobrevive ao deploy —
+# o que só custa uma ida ao B3. ALPHAFORGE_CACHE_DIR permite apontar para um
+# volume, se um dia houver.
+CACHE_PATH = os.path.join(
+    os.environ.get("ALPHAFORGE_CACHE_DIR") or os.path.dirname(os.path.abspath(__file__)),
+    "cache_ibov.json",
+)
 
 # Carteira teórica do IBOV capturada do B3 em 2026-09-08 (76 papéis). Serve só
 # como último recurso: se este bloco for usado, a resposta do scanner marca

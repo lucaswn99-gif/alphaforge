@@ -1,168 +1,308 @@
+"""Gestão de Patrimônio: radar de FIIs/ETFs e otimização de carteira.
+
+Duas correções estruturais em relação à versão anterior:
+
+1. O dividend yield passa pelo mesmo `normalizar_dy` do módulo de renda
+   variável. A conta antiga (`dividendYield * 100`, dividindo de novo se
+   passasse de 100) transformava um DY de 0,5% em 50% — e DY é justamente o
+   critério de ordenação da tabela de FIIs.
+2. Preço e histórico vêm de uma chamada vetorizada, não de 30 `.info` em
+   paralelo. `.info` é o endpoint que o Yahoo limita; 30 threads nele é o
+   caminho mais curto para a tabela voltar vazia.
+"""
+
 import concurrent.futures
-from fastapi import APIRouter
-import yfinance as yf
-import pandas as pd
+
 import numpy as np
+import pandas as pd
+import yfinance as yf
+from fastapi import APIRouter, Query
+
+from modules import taxas
+from routers.equity import carimbo_de_coleta, fatiar_precos, normalizar_dy
 
 router = APIRouter(prefix="/wealth", tags=["Gestão de Patrimônio & Fundos"])
 
-# Cestas de Ativos Monitorados
-FIIS_TIJOLO = ["HGLG11", "BTLG11", "XPML11", "VISC11", "ALZR11", "KNRI11", "VILG11", "MALL11", "PVBI11", "BRCR11"]
-FIIS_PAPEL  = ["KNIP11", "KNCR11", "IRDM11", "CPTS11", "MXRF11", "HGCR11", "MCCI11", "RECR11", "CVBI11", "VRTA11"]
-ETFS_B3     = ["BOVA11", "IVVB11", "SMAL11", "NASD11", "HASH11", "DIVO11", "SPXI11", "GOLD11", "XINA11", "BINA11"]
+FIIS_TIJOLO = ["HGLG11", "BTLG11", "XPML11", "VISC11", "ALZR11",
+               "KNRI11", "VILG11", "MALL11", "PVBI11", "BRCR11"]
+FIIS_PAPEL = ["KNIP11", "KNCR11", "IRDM11", "CPTS11", "MXRF11",
+              "HGCR11", "MCCI11", "RECR11", "CVBI11", "VRTA11"]
+ETFS_B3 = ["BOVA11", "IVVB11", "SMAL11", "NASD11", "HASH11",
+           "DIVO11", "SPXI11", "GOLD11", "XINA11", "BINA11"]
 
-def extrair_dados_fundo(ticker, tipo="FII"):
+MAX_WORKERS_INFO = 6
+SMA_ETF = 20
+DIAS_PIOR_CASO = 90
+
+# A taxa livre de risco vem do Banco Central (ver modules/taxas.py). O
+# parâmetro `selic_aa` do endpoint sobrescreve quando você quiser testar outro
+# cenário; sem ele, vale a meta vigente.
+
+
+def _fundamentos_fii(simbolo):
+    """P/VP e DY de um FII. Só isto exige `.info`."""
     try:
-        tk = yf.Ticker(f"{ticker}.SA")
-        info = tk.info
-        preco = info.get("currentPrice") or info.get("regularMarketPrice") or 0.0
-        
-        if preco == 0.0:
-            # Fallback caso o Yahoo não retorne o preço no info
-            hist = tk.history(period="5d")
-            if not hist.empty:
-                preco = float(hist['Close'].iloc[-1])
-            else:
-                return None
-
-        if tipo == "FII":
-            pvp = info.get("priceToBook") or 0.0
-            raw_dy = (info.get("dividendYield") or 0.0) * 100
-            dy = raw_dy if raw_dy < 100 else raw_dy / 100
-            
-            # Lógica de Ponto de Entrada para FII (Baseado no VPA - Valor Patrimonial)
-            if pvp > 0:
-                vpa = preco / pvp
-                ponto_entrada = vpa
-                if pvp < 1.0:
-                    recomendacao = "COMPRA"
-                elif pvp <= 1.05:
-                    recomendacao = "NEUTRO"
-                else:
-                    recomendacao = "AGUARDAR"
-            else:
-                ponto_entrada = preco
-                recomendacao = "N/A"
-
-            return {
-                "ticker": ticker,
-                "preco": round(preco, 2),
-                "pvp": round(pvp, 2) if pvp else "-",
-                "dy": round(dy, 2) if dy else "-",
-                "ponto_entrada": round(ponto_entrada, 2),
-                "recomendacao": recomendacao,
-                "desconto": True if pvp and 0 < pvp < 1 else False
-            }
-            
-        else: # ETF
-            nome = info.get("shortName", ticker)
-            
-            # Lógica de Ponto de Entrada para ETF (Baseado em Média Móvel 20 dias - Pullback)
-            hist = tk.history(period="2mo")
-            if not hist.empty and len(hist) >= 20:
-                sma20 = float(hist['Close'].rolling(20).mean().iloc[-1])
-                ponto_entrada = sma20
-                recomendacao = "COMPRA" if preco <= sma20 else "AGUARDAR"
-            else:
-                ponto_entrada = preco
-                recomendacao = "NEUTRO"
-
-            return {
-                "ticker": ticker,
-                "nome": nome.replace(" FDO INV", "").replace(" FI DE", "").replace(" ISHARES", "").strip()[:15],
-                "preco": round(preco, 2),
-                "ponto_entrada": round(ponto_entrada, 2),
-                "recomendacao": recomendacao
-            }
-    except Exception:
+        info = yf.Ticker(simbolo).info or {}
+    except Exception:  # noqa: BLE001
         return None
+    if not info:
+        return None
+    pvp = info.get("priceToBook")
+    try:
+        pvp = float(pvp) if pvp is not None else None
+    except (TypeError, ValueError):
+        pvp = None
+    return {"pvp": pvp, "dy": normalizar_dy(info),
+            "nome": info.get("shortName") or simbolo.replace(".SA", "")}
+
+
+def _baixar_precos(tickers, periodo="4mo"):
+    simbolos = [f"{t}.SA" for t in tickers]
+    try:
+        return yf.download(simbolos, period=periodo, interval="1d",
+                           progress=False, group_by="ticker", auto_adjust=True)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def extrair_fechamentos(bruto, simbolos):
+    """Matriz de fechamentos, seja qual for o layout devolvido pelo yfinance.
+
+    O yfinance devolve (campo, ticker) sem `group_by`, (ticker, campo) com
+    `group_by="ticker"`, e um DataFrame simples para um ticker só. O resto do
+    projeto usa a segunda forma; o otimizador assumia a primeira. Em vez de
+    escolher uma e torcer para o padrão não mudar de versão, aceitamos as três.
+    """
+    if bruto is None or getattr(bruto, "empty", True):
+        return None
+
+    if isinstance(bruto, pd.Series):
+        return bruto.to_frame(name=simbolos[0])
+
+    colunas = bruto.columns
+    if isinstance(colunas, pd.MultiIndex):
+        nivel_zero = set(colunas.get_level_values(0))
+        if "Close" in nivel_zero:                 # (campo, ticker)
+            fechamentos = bruto["Close"]
+        elif nivel_zero & set(simbolos):          # (ticker, campo)
+            series = {}
+            for simbolo in simbolos:
+                if simbolo in nivel_zero and "Close" in bruto[simbolo].columns:
+                    series[simbolo] = bruto[simbolo]["Close"]
+            fechamentos = pd.DataFrame(series) if series else None
+        else:
+            return None
+    elif "Close" in colunas:                      # ticker único
+        fechamentos = bruto[["Close"]].rename(columns={"Close": simbolos[0]})
+    else:
+        fechamentos = bruto
+
+    if isinstance(fechamentos, pd.Series):
+        fechamentos = fechamentos.to_frame(name=simbolos[0])
+    return fechamentos
+
+
+def _recomendacao_fii(pvp):
+    """FII negociado abaixo do valor patrimonial é o gatilho de entrada."""
+    if pvp is None or pvp <= 0:
+        return None, None
+    if pvp < 1.0:
+        return "COMPRA", "Abaixo do valor patrimonial"
+    if pvp <= 1.05:
+        return "NEUTRO", "Próximo do valor patrimonial"
+    return "AGUARDAR", "Ágio sobre o valor patrimonial"
+
+
+def _montar_fiis(tickers, df_precos, fundamentos):
+    linhas = []
+    for ticker in tickers:
+        simbolo = f"{ticker}.SA"
+        sub = fatiar_precos(df_precos, simbolo) if df_precos is not None else None
+        if sub is None or sub.empty:
+            continue
+        preco = float(sub["Close"].iloc[-1])
+
+        dados = fundamentos.get(simbolo) or {}
+        pvp = dados.get("pvp")
+        dy = dados.get("dy")
+        recomendacao, racional = _recomendacao_fii(pvp)
+
+        linhas.append({
+            "ticker": ticker,
+            "nome": dados.get("nome") or ticker,
+            "preco": round(preco, 2),
+            "pvp": round(pvp, 2) if pvp is not None else None,
+            "dy": round(dy, 2) if dy is not None else None,
+            # Valor patrimonial por cota implícito no P/VP: é o preço em que o
+            # fundo negociaria a 1,00x.
+            "ponto_entrada": round(preco / pvp, 2) if pvp else None,
+            "recomendacao": recomendacao or "SEM DADOS",
+            "racional": racional or "P/VP indisponível na fonte",
+            "desconto": bool(pvp and 0 < pvp < 1),
+            "fundamentos_disponiveis": bool(dados),
+        })
+    # None por último: papel sem DY não pode encabeçar um ranking de DY.
+    linhas.sort(key=lambda linha: (linha["dy"] is None, -(linha["dy"] or 0.0)))
+    return linhas
+
+
+def _montar_etfs(df_precos):
+    linhas = []
+    for ticker in ETFS_B3:
+        simbolo = f"{ticker}.SA"
+        sub = fatiar_precos(df_precos, simbolo) if df_precos is not None else None
+        if sub is None or len(sub) < SMA_ETF:
+            continue
+        fechamentos = sub["Close"]
+        preco = float(fechamentos.iloc[-1])
+        sma = float(fechamentos.rolling(SMA_ETF).mean().iloc[-1])
+        if pd.isna(sma):
+            continue
+        linhas.append({
+            "ticker": ticker,
+            "preco": round(preco, 2),
+            "ponto_entrada": round(sma, 2),
+            "recomendacao": "COMPRA" if preco <= sma else "AGUARDAR",
+            "racional": f"Pullback na média de {SMA_ETF} pregões",
+        })
+    linhas.sort(key=lambda linha: linha["ticker"])
+    return linhas
+
 
 @router.get("/fundos")
 def radar_fundos():
-    """Varre FIIs e ETFs em paralelo gerando recomendações."""
-    tijolo, papel, etfs = [], [], []
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
-        f_tijolo = {executor.submit(extrair_dados_fundo, t, "FII"): t for t in FIIS_TIJOLO}
-        f_papel = {executor.submit(extrair_dados_fundo, t, "FII"): t for t in FIIS_PAPEL}
-        f_etfs = {executor.submit(extrair_dados_fundo, t, "ETF"): t for t in ETFS_B3}
-        
-        for future in concurrent.futures.as_completed(f_tijolo):
-            res = future.result()
-            if res: tijolo.append(res)
-            
-        for future in concurrent.futures.as_completed(f_papel):
-            res = future.result()
-            if res: papel.append(res)
+    """FIIs por desconto patrimonial e ETFs por pullback na média de 20."""
+    todos_fiis = FIIS_TIJOLO + FIIS_PAPEL
+    df_fiis = _baixar_precos(todos_fiis)
+    df_etfs = _baixar_precos(ETFS_B3)
 
-        for future in concurrent.futures.as_completed(f_etfs):
-            res = future.result()
-            if res: etfs.append(res)
+    fundamentos = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS_INFO) as pool:
+        futuros = {pool.submit(_fundamentos_fii, f"{t}.SA"): f"{t}.SA" for t in todos_fiis}
+        for futuro in concurrent.futures.as_completed(futuros):
+            simbolo = futuros[futuro]
+            try:
+                dados = futuro.result()
+            except Exception:  # noqa: BLE001
+                dados = None
+            if dados:
+                fundamentos[simbolo] = dados
 
-    tijolo.sort(key=lambda x: x['dy'] if isinstance(x['dy'], float) else 0, reverse=True)
-    papel.sort(key=lambda x: x['dy'] if isinstance(x['dy'], float) else 0, reverse=True)
-    etfs.sort(key=lambda x: x['ticker'])
-    
-    return {"tijolo": tijolo, "papel": papel, "etfs": etfs}
+    tijolo = _montar_fiis(FIIS_TIJOLO, df_fiis, fundamentos)
+    papel = _montar_fiis(FIIS_PAPEL, df_fiis, fundamentos)
+    etfs = _montar_etfs(df_etfs)
+
+    return {
+        **carimbo_de_coleta(),
+        "tijolo": tijolo,
+        "papel": papel,
+        "etfs": etfs,
+        "com_fundamentos": sum(1 for l in tijolo + papel if l["fundamentos_disponiveis"]),
+        "total_fiis": len(tijolo) + len(papel),
+    }
+
 
 @router.get("/otimizar-portfolio")
-def otimizar_markowitz(tickers: str):
+def otimizar_markowitz(
+    tickers: str,
+    selic_aa: float = Query(None, description="Taxa livre de risco anual em %; vazio usa a meta Selic do BCB"),
+    simulacoes: int = Query(20000, ge=1000, le=100000),
+):
+    """Fronteira eficiente por simulação de Monte Carlo, maximizando Sharpe.
+
+    A taxa livre de risco é parâmetro: o Sharpe é sensível a ela, e um valor
+    fixo no código vira número errado sem ninguém perceber.
     """
-    Otimização de Portfólio via Simulação de Monte Carlo (Markowitz).
-    """
-    lista_tickers = [t.strip().upper() for t in tickers.split(",")]
-    lista_yf = [f"{t}.SA" if not t.endswith(".SA") else t for t in lista_tickers]
-    
-    if len(lista_yf) < 2:
-        return {"erro": "Insira pelo menos 2 ativos separados por vírgula."}
+    try:
+        simulacoes = int(simulacoes)
+    except (TypeError, ValueError):
+        simulacoes = 20000
+
+    lista = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    lista = list(dict.fromkeys(lista))
+    if len(lista) < 2:
+        return {"erro": "Insira pelo menos 2 ativos distintos, separados por vírgula."}
+
+    simbolos = [t if t.endswith(".SA") else f"{t}.SA" for t in lista]
 
     try:
-        dados = yf.download(lista_yf, period="2y", interval="1d", progress=False)['Close']
-        if dados.empty:
-            return {"erro": "Falha ao baixar histórico dos ativos."}
+        bruto = yf.download(simbolos, period="2y", interval="1d",
+                            progress=False, auto_adjust=True)
+    except Exception as exc:  # noqa: BLE001
+        return {"erro": f"Falha ao baixar o histórico: {type(exc).__name__}: {exc}"}
 
-        dados = dados.ffill().dropna()
-        retornos = dados.pct_change().dropna()
-        retornos_medios = retornos.mean() * 252
-        matriz_covariancia = retornos.cov() * 252
+    if bruto is None or bruto.empty:
+        return {"erro": "O Yahoo não devolveu histórico para esses ativos."}
 
-        num_portfolios = 5000
-        taxa_livre_risco = 0.1050  # Selic base 10.50%
+    fechamentos = extrair_fechamentos(bruto, simbolos)
+    if fechamentos is None or fechamentos.empty:
+        return {"erro": "Resposta do Yahoo sem coluna de fechamento."}
 
-        resultados = np.zeros((3, num_portfolios))
-        pesos_record = []
+    ausentes = [s for s in simbolos if s not in fechamentos.columns]
+    fechamentos = fechamentos[[s for s in simbolos if s in fechamentos.columns]]
 
-        for i in range(num_portfolios):
-            pesos = np.random.random(len(lista_yf))
-            pesos /= np.sum(pesos)
-            pesos_record.append(pesos)
+    # ffill().dropna() antes tolerava qualquer buraco; um ativo listado há
+    # poucos meses zerava a interseção e a conta saía sobre quase nada.
+    fechamentos = fechamentos.ffill().dropna()
+    if len(fechamentos) < DIAS_PIOR_CASO:
+        return {"erro": f"Histórico comum insuficiente: {len(fechamentos)} pregões "
+                        f"em comum, mínimo de {DIAS_PIOR_CASO}.",
+                "ativos_sem_dados": ausentes}
+    if fechamentos.shape[1] < 2:
+        return {"erro": "Menos de 2 ativos com histórico utilizável.",
+                "ativos_sem_dados": ausentes}
 
-            retorno_port = np.sum(retornos_medios * pesos)
-            std_dev_port = np.sqrt(np.dot(pesos.T, np.dot(matriz_covariancia, pesos)))
-            sharpe_ratio = (retorno_port - taxa_livre_risco) / std_dev_port
+    retornos = fechamentos.pct_change().dropna()
+    retornos_medios = retornos.mean() * 252
+    covariancia = retornos.cov() * 252
 
-            resultados[0,i] = retorno_port
-            resultados[1,i] = std_dev_port
-            resultados[2,i] = sharpe_ratio
+    # Coerção em vez de `is None`: chamada direta (teste, script) recebe o
+    # objeto Query como default, que não é None e passaria batido.
+    try:
+        selic_informada = float(selic_aa)
+    except (TypeError, ValueError):
+        selic_informada = None
 
-        indice_max_sharpe = np.argmax(resultados[2])
-        pesos_otimos = pesos_record[indice_max_sharpe]
-        
-        alocacao = []
-        for i in range(len(lista_yf)):
-            ticker_limpo = lista_yf[i].replace(".SA", "")
-            alocacao.append({
-                "ativo": ticker_limpo,
-                "peso_pct": round(pesos_otimos[i] * 100, 2)
-            })
+    if selic_informada is None:
+        selic = taxas.obter_selic_meta()
+        selic_aa, origem_selic, data_selic = selic["valor"], selic["origem"], selic["data"]
+    else:
+        selic_aa, origem_selic, data_selic = selic_informada, "parametro", None
+    taxa_livre = float(selic_aa) / 100.0
+    n = fechamentos.shape[1]
 
-        alocacao.sort(key=lambda x: x["peso_pct"], reverse=True)
+    gerador = np.random.default_rng()
+    pesos = gerador.random((simulacoes, n))
+    pesos /= pesos.sum(axis=1, keepdims=True)
 
-        return {
-            "retorno_esperado_aa": round(resultados[0, indice_max_sharpe] * 100, 2),
-            "volatilidade_aa": round(resultados[1, indice_max_sharpe] * 100, 2),
-            "sharpe_ratio": round(resultados[2, indice_max_sharpe], 2),
-            "alocacao_otima": alocacao
-        }
-    except Exception as e:
-        return {"erro": f"Erro matemático: {str(e)}"}
+    # Vetorizado: o laço em Python com 5.000 iterações era o gargalo, e agora
+    # cabem 20.000 simulações no mesmo tempo.
+    retorno_carteira = pesos @ retornos_medios.to_numpy()
+    variancia = np.einsum("ij,jk,ik->i", pesos, covariancia.to_numpy(), pesos)
+    volatilidade = np.sqrt(np.maximum(variancia, 0.0))
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sharpe = np.where(volatilidade > 0,
+                          (retorno_carteira - taxa_livre) / volatilidade,
+                          -np.inf)
+
+    melhor = int(np.argmax(sharpe))
+    otimos = pesos[melhor]
+
+    alocacao = [{"ativo": col.replace(".SA", ""), "peso_pct": round(float(p) * 100, 2)}
+                for col, p in zip(fechamentos.columns, otimos)]
+    alocacao.sort(key=lambda item: item["peso_pct"], reverse=True)
+
+    return {
+        **carimbo_de_coleta(),
+        "retorno_esperado_aa": round(float(retorno_carteira[melhor]) * 100, 2),
+        "volatilidade_aa": round(float(volatilidade[melhor]) * 100, 2),
+        "sharpe_ratio": round(float(sharpe[melhor]), 2),
+        "taxa_livre_risco_aa": round(float(selic_aa), 2),
+        "origem_taxa_livre_risco": origem_selic,
+        "vigencia_taxa_livre_risco": data_selic,
+        "simulacoes": int(simulacoes),
+        "pregoes_utilizados": int(len(fechamentos)),
+        "ativos_sem_dados": ausentes,
+        "alocacao_otima": alocacao,
+    }

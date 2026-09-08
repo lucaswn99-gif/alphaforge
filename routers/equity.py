@@ -14,6 +14,7 @@ import concurrent.futures
 import random
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -69,6 +70,40 @@ CAMPOS_UTEIS_INFO = (
     "trailingPE", "priceToBook", "returnOnEquity", "profitMargins",
     "currentPrice", "regularMarketPrice", "previousClose", "shortName",
 )
+
+# O Yahoo publica a B3 com atraso declarado de 15 minutos (fonte: ICE Data
+# Services). Somado ao cache do scanner, o preço na tela pode ter ~30 min.
+# Nada disso é cotação firme: não serve como referência de execução.
+FONTE_COTACAO = "Yahoo Finance (ICE Data Services)"
+ATRASO_FONTE_MINUTOS = 15
+
+try:  # tzdata está no venv; o offset fixo é só rede de segurança
+    from zoneinfo import ZoneInfo
+    FUSO_BR = ZoneInfo("America/Sao_Paulo")
+except Exception:  # noqa: BLE001
+    FUSO_BR = timezone(timedelta(hours=-3))
+
+
+def flag(valor):
+    """Coage um parâmetro de query para bool real.
+
+    `bool(Query(False))` é True: chamada direta da função (teste, script, outro
+    endpoint) recebe o objeto default do FastAPI, não o valor. Sem isto,
+    `forcar` ficaria sempre ligado fora do contexto de requisição.
+    """
+    return valor is True or valor == "true" or valor == 1
+
+
+def carimbo_de_coleta():
+    """Marca o instante da coleta. Viaja dentro do payload cacheado, para que
+    um resultado servido do cache mostre quando foi coletado — e não agora."""
+    agora = datetime.now(FUSO_BR)
+    return {
+        "coletado_em": agora.isoformat(timespec="seconds"),
+        "coletado_em_legivel": agora.strftime("%d/%m/%Y %H:%M"),
+        "fonte_cotacao": FONTE_COTACAO,
+        "atraso_fonte_minutos": ATRASO_FONTE_MINUTOS,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -162,10 +197,12 @@ def normalizar_dy(info, preco_ref=0.0):
     # Último recurso: dividendYield puro. Com yfinance >= 0.2.51 (e toda a
     # linha 1.x, que é a pinada no requirements.txt) o campo já vem em pontos
     # percentuais; só dividimos se vier absurdo.
+    if info.get("dividendYield") is None:
+        return None  # ausente != "não paga dividendo"
     try:
-        bruto = float(info.get("dividendYield") or 0.0)
+        bruto = float(info.get("dividendYield"))
     except (TypeError, ValueError):
-        return 0.0
+        return None
     if bruto <= 0:
         return 0.0
     return bruto / 100.0 if bruto > 100.0 else bruto
@@ -328,11 +365,17 @@ def _info_tem_conteudo(info):
 
 
 def _normalizar_info(info, simbolo):
+    """Múltiplos do Yahoo. Campo ausente vira None, nunca 0.0 — o motor
+    distingue "não apurado" de "zero", e zerar por omissão era o que fazia
+    empresa lucrativa aparecer com ROE 0 e veredito de prejuízo."""
     def _num(chave, escala=1.0):
+        bruto = info.get(chave)
+        if bruto is None or bruto == "":
+            return None
         try:
-            return float(info.get(chave) or 0.0) * escala
+            return float(bruto) * escala
         except (TypeError, ValueError):
-            return 0.0
+            return None
 
     return {
         "pl": _num("trailingPE"),
@@ -343,6 +386,10 @@ def _normalizar_info(info, simbolo):
         "nome": info.get("shortName") or simbolo.replace(".SA", ""),
         "setor": info.get("sector") or "N/A",
     }
+
+
+INFO_VAZIA = {"pl": None, "pvp": None, "roe": None, "margem_liq": None, "dy": None,
+              "nome": None, "setor": "N/A"}
 
 
 def extrair_fundamentos(simbolo, tentativas=SCANNER_TENTATIVAS):
@@ -400,45 +447,69 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
     """Motor de Decisão ÚNICO. Scanner e auditoria individual passam por aqui
     com o mesmo conjunto de entradas, inclusive `destruicao_historica`.
 
-    `roe` aceita None: significa "não apurado", que é diferente de zero. Um ROE
-    ausente na fonte não pode ser lido como prejuízo.
+    TODO indicador fundamentalista aceita None, que significa "não apurado" —
+    diferente de zero. Isso é o que permite pontuar um papel só com dado de
+    preço quando o Yahoo recusa os múltiplos: o indicador ausente não pontua,
+    nem a favor nem contra, e aparece na lista de ressalvas.
     """
     score = 50
     alertas_risco = []
     pontos_positivos = []
+    nao_apurados = []
 
-    roe_apurado = roe is not None
-    roe_valor = float(roe) if roe_apurado else 0.0
+    def _v(valor):
+        try:
+            return float(valor) if valor is not None else None
+        except (TypeError, ValueError):
+            return None
 
-    em_prejuizo = margem_liq < 0 or (roe_apurado and roe_valor <= 0)
-    if margem_liq < 0:
+    pl, pvp, roe, dy, margem_liq = _v(pl), _v(pvp), _v(roe), _v(dy), _v(margem_liq)
+
+    em_prejuizo = (margem_liq is not None and margem_liq < 0) or (roe is not None and roe <= 0)
+
+    if margem_liq is None:
+        nao_apurados.append("margem líquida")
+    elif margem_liq < 0:
         alertas_risco.append(f"Margem Líquida negativa ({margem_liq:.2f}%).")
-    if roe_apurado and roe_valor <= 0:
+
+    if roe is None:
+        nao_apurados.append("ROE")
+    elif roe <= 0:
         alertas_risco.append("ROE zerado ou negativo.")
-    if not roe_apurado:
-        alertas_risco.append("ROE não apurado na fonte - indicador não pontuado.")
+
     if destruicao_historica:
         alertas_risco.append("Destruição contínua de capital recente (Value Trap).")
 
     # Múltiplos
-    if 0 < pl < 12 and not em_prejuizo:
+    if pl is None:
+        nao_apurados.append("P/L")
+    elif 0 < pl < 12 and not em_prejuizo:
         score += 15
         pontos_positivos.append(f"P/L atrativo ({pl:.1f}x)")
     elif pl > 25:
         score -= 10
         alertas_risco.append(f"P/L elevado ({pl:.1f}x)")
 
-    if 0 < pvp < 1.8 and not em_prejuizo:
+    if pvp is None:
+        nao_apurados.append("P/VP")
+    elif 0 < pvp < 1.8 and not em_prejuizo:
         score += 10
         pontos_positivos.append(f"P/VP descontado ({pvp:.2f}x)")
 
-    if roe_apurado and roe_valor >= 15:
+    if roe is not None and roe >= 15:
         score += 15
-        pontos_positivos.append(f"Alta rentabilidade (ROE {roe_valor:.1f}%)")
+        pontos_positivos.append(f"Alta rentabilidade (ROE {roe:.1f}%)")
 
-    if dy >= 6 and not em_prejuizo:
+    if dy is None:
+        nao_apurados.append("dividend yield")
+    elif dy >= 6 and not em_prejuizo:
         score += 10
         pontos_positivos.append(f"Bons dividendos ({dy:.1f}%)")
+
+    if nao_apurados:
+        alertas_risco.append(
+            "Sem dado na fonte para " + ", ".join(nao_apurados) + " - não pontuado."
+        )
 
     # Técnico / Gráfico
     if tendencia_grafica == "ALTA":
@@ -470,8 +541,19 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
     else:
         veredito = "NEUTRO"
 
+    fundamentos_avaliados = sum(
+        1 for indicador in (pl, pvp, roe, dy, margem_liq) if indicador is not None
+    )
+
     if em_prejuizo or destruicao_historica:
+        # Value trap é sinal de preço: vale mesmo sem fundamento nenhum.
         veredito = "VENDA / ALTO RISCO"
+    elif fundamentos_avaliados == 0:
+        # Só preço e técnico na mão. Base 50 + tendência de alta dava 60, que
+        # a classificação lia como COMPRA — recomendação fundamentalista sobre
+        # zero fundamento. O teto força o papel a ficar como pendência.
+        score = min(score, 55)
+        veredito = "SEM DADOS FUNDAMENTALISTAS"
 
     return score, veredito, pontos_positivos, alertas_risco
 
@@ -483,11 +565,12 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
 def coletar_bloco(mapa):
     """Varre um bloco {símbolo_yahoo: código_b3}.
 
-    Devolve (resultados, falhas), cada falha como {"ticker", "simbolo", "motivo"}.
-    Uma única chamada vetorizada de preços + coleta de múltiplos em paralelo.
+    Devolve (resultados, falhas, sem_fundamentos). `falhas` é papel que ficou
+    de fora por não ter preço; `sem_fundamentos` é papel que entrou no
+    resultado só com preço, porque o .info não veio.
     """
     if not mapa:
-        return [], []
+        return [], [], []
 
     simbolos = list(mapa.keys())
 
@@ -502,13 +585,13 @@ def coletar_bloco(mapa):
         )
     except Exception as exc:  # noqa: BLE001
         motivo = f"download: {type(exc).__name__}"
-        return [], [{"ticker": c, "simbolo": s, "motivo": motivo} for s, c in mapa.items()]
+        return [], [{"ticker": c, "simbolo": s, "motivo": motivo} for s, c in mapa.items()], []
 
     if df_precos is None or df_precos.empty:
         return [], [{"ticker": c, "simbolo": s, "motivo": "sem série de preço"}
-                    for s, c in mapa.items()]
+                    for s, c in mapa.items()], []
 
-    fundamentos, falhas = {}, []
+    fundamentos, falhas, sem_fundamentos = {}, [], []
     with concurrent.futures.ThreadPoolExecutor(max_workers=SCANNER_MAX_WORKERS) as pool:
         futuros = {pool.submit(extrair_fundamentos, s): s for s in simbolos}
         for futuro in concurrent.futures.as_completed(futuros):
@@ -520,19 +603,26 @@ def coletar_bloco(mapa):
             if dados:
                 fundamentos[simbolo] = dados
             else:
-                falhas.append({"ticker": mapa[simbolo], "simbolo": simbolo, "motivo": motivo})
+                # Não é falha do papel: ele entra no resultado só com preço.
+                sem_fundamentos.append({"ticker": mapa[simbolo], "simbolo": simbolo,
+                                        "motivo": motivo})
 
     resultados = []
     for simbolo, codigo in mapa.items():
-        info = fundamentos.get(simbolo)
-        if info is None:
-            continue
-
+        # O preço manda. Os múltiplos vêm do .info, que é o endpoint que o
+        # Yahoo limita — descartar o papel quando ele falha esvaziava a tabela
+        # inteira num rate limit. Agora o papel entra só com preço e técnico,
+        # marcado como fundamentos indisponíveis.
         sub = fatiar_precos(df_precos, simbolo)
         if sub is None or len(sub) < SMA_PERIODO:
             falhas.append({"ticker": codigo, "simbolo": simbolo,
                            "motivo": "histórico insuficiente para SMA50"})
             continue
+
+        info = fundamentos.get(simbolo)
+        tem_fundamentos = info is not None
+        if info is None:
+            info = dict(INFO_VAZIA)
 
         try:
             close = sub["Close"]
@@ -553,16 +643,20 @@ def coletar_bloco(mapa):
                 rsi_val=rsi_val, destruicao_historica=destruicao,
             )
 
+            def _arred(valor, casas=2):
+                return round(valor, casas) if valor is not None else None
+
             resultados.append({
                 "ticker": codigo,
                 "simbolo_yahoo": simbolo,
-                "nome": info["nome"],
+                "nome": info["nome"] or codigo,
                 "setor": info["setor"],
+                "fundamentos_disponiveis": tem_fundamentos,
                 "preco": round(preco, 2),
-                "pl": round(info["pl"], 2) if info["pl"] else None,
-                "pvp": round(info["pvp"], 2) if info["pvp"] else None,
-                "roe": round(info["roe"], 2) if info["roe"] is not None else None,
-                "dy": round(info["dy"], 2),
+                "pl": _arred(info["pl"]),
+                "pvp": _arred(info["pvp"]),
+                "roe": _arred(info["roe"]),
+                "dy": _arred(info["dy"]),
                 "tendencia_grafica": tendencia,
                 "rsi": rsi_val,
                 "destruicao_capital": destruicao,
@@ -574,7 +668,7 @@ def coletar_bloco(mapa):
             falhas.append({"ticker": codigo, "simbolo": simbolo,
                            "motivo": f"cálculo: {type(exc).__name__}"})
 
-    return resultados, falhas
+    return resultados, falhas, sem_fundamentos
 
 
 # --------------------------------------------------------------------------- #
@@ -588,10 +682,106 @@ _cache_tape = {"carimbo": 0.0, "payload": None}
 _lock_tape = threading.Lock()
 
 
+@router.get("/diagnostico")
+def diagnosticar(completo: bool = Query(False, description="Inclui uma varredura completa")):
+    """Estado real das fontes, servido como JSON.
+
+    Existe porque o scanner falha em silêncio quando a fonte muda: sem isto,
+    "não puxa nada" é indistinguível de rate limit, símbolo inexistente ou
+    contrato do yfinance alterado. Abra /renda-variavel/diagnostico no
+    navegador e a resposta diz qual dos três é.
+    """
+    import platform
+
+    relatorio = {"python": platform.python_version(), "versoes": {}, "ambiente": {}}
+
+    for nome in ("yfinance", "pandas", "numpy", "requests"):
+        try:
+            relatorio["versoes"][nome] = getattr(__import__(nome), "__version__", "?")
+        except Exception as exc:  # noqa: BLE001
+            relatorio["versoes"][nome] = f"AUSENTE ({type(exc).__name__})"
+
+    # Carteira do B3
+    inicio = time.time()
+    try:
+        codigos, origem, idade = composicao_ibov.obter_composicao(forcar=True)
+        relatorio["b3"] = {"ok": True, "origem": origem, "papeis": len(codigos),
+                           "segundos": round(time.time() - inicio, 1),
+                           "amostra": codigos[:8]}
+    except Exception as exc:  # noqa: BLE001
+        relatorio["b3"] = {"ok": False, "erro": f"{type(exc).__name__}: {exc}"}
+
+    alvos = ["PETR4.SA", "VALE3.SA", "ITUB4.SA"]
+
+    # Série de preços (chamada vetorizada)
+    inicio = time.time()
+    try:
+        df = yf.download(alvos, period="3y", interval="1d", progress=False,
+                         group_by="ticker", auto_adjust=True)
+        detalhe = {}
+        for alvo in alvos:
+            sub = fatiar_precos(df, alvo)
+            if sub is None or sub.empty:
+                detalhe[alvo] = "sem dados"
+            else:
+                detalhe[alvo] = {"pregoes": int(len(sub)),
+                                 "ultimo_fechamento": round(float(sub["Close"].iloc[-1]), 2),
+                                 "ultima_data": str(sub.index[-1].date())}
+        relatorio["precos"] = {"ok": not df.empty, "vazio": bool(df.empty),
+                               "segundos": round(time.time() - inicio, 1),
+                               "multiindex": isinstance(df.columns, pd.MultiIndex),
+                               "por_ativo": detalhe}
+    except Exception as exc:  # noqa: BLE001
+        relatorio["precos"] = {"ok": False, "erro": f"{type(exc).__name__}: {exc}",
+                               "segundos": round(time.time() - inicio, 1)}
+
+    # Múltiplos — o endpoint que costuma ser limitado
+    campos = ["shortName", "trailingPE", "priceToBook", "returnOnEquity", "profitMargins",
+              "dividendYield", "dividendRate", "currentPrice", "netIncomeToCommon",
+              "bookValue", "sharesOutstanding", "marketCap", "totalStockholderEquity"]
+    multiplos = {}
+    for alvo in alvos:
+        inicio = time.time()
+        try:
+            info = yf.Ticker(alvo).info or {}
+            multiplos[alvo] = {
+                "ok": bool(info),
+                "segundos": round(time.time() - inicio, 1),
+                "total_de_chaves": len(info),
+                "campos": {c: info.get(c) for c in campos},
+                "roe_calculado": calcular_roe(info),
+                "patrimonio_derivado": _derivar_patrimonio_liquido(info),
+                "dy_normalizado": normalizar_dy(info),
+            }
+        except Exception as exc:  # noqa: BLE001
+            multiplos[alvo] = {"ok": False, "segundos": round(time.time() - inicio, 1),
+                               "erro": f"{type(exc).__name__}: {str(exc)[:300]}"}
+    relatorio["multiplos"] = multiplos
+
+    if flag(completo):
+        inicio = time.time()
+        resultado = executar_scanner(forcar=True)
+        relatorio["scanner"] = {
+            "segundos": round(time.time() - inicio, 1),
+            "solicitados": resultado.get("solicitados"),
+            "total": resultado.get("total"),
+            "com_fundamentos": resultado.get("com_fundamentos"),
+            "origem_composicao": resultado.get("origem_composicao"),
+            "falhas": resultado.get("falhas", [])[:15],
+            "sem_fundamentos": resultado.get("sem_fundamentos", [])[:15],
+            "top5": [
+                {k: linha[k] for k in ("ticker", "preco", "pl", "roe", "score_geral", "veredito")}
+                for linha in resultado.get("oportunidades", [])[:5]
+            ],
+        }
+
+    return relatorio
+
+
 @router.get("/composicao-ibov")
 def ver_composicao(forcar: bool = Query(False, description="Ignora o cache de 12h da carteira")):
     """Carteira teórica do IBOV que o scanner está usando, e de onde ela veio."""
-    codigos, meta = montar_universo(forcar=forcar)
+    codigos, meta = montar_universo(forcar=flag(forcar))
     return {**meta, "total": len(codigos), "codigos": codigos}
 
 
@@ -599,6 +789,7 @@ def ver_composicao(forcar: bool = Query(False, description="Ignora o cache de 12
 def executar_scanner(forcar: bool = Query(False, description="Ignora o cache de 15 minutos")):
     """Varre o universo em duas passadas: símbolo primário e, para quem falhou,
     o código alternativo. Falhas são relatadas, nunca escondidas."""
+    forcar = flag(forcar)
     agora = time.time()
     with _lock_scanner:
         payload_cache = _cache_scanner["payload"]
@@ -615,7 +806,7 @@ def executar_scanner(forcar: bool = Query(False, description="Ignora o cache de 
         if candidatos:
             mapa_primario.setdefault(candidatos[0], codigo)
 
-    resultados, falhas = coletar_bloco(mapa_primario)
+    resultados, falhas, sem_fundamentos = coletar_bloco(mapa_primario)
     resolvidos = {linha["ticker"] for linha in resultados}
 
     # 2ª passada: só quem falhou e tem um símbolo alternativo. Evita manter
@@ -633,7 +824,8 @@ def executar_scanner(forcar: bool = Query(False, description="Ignora o cache de 
     falhas_finais = [f for f in falhas if f["ticker"] not in mapa_alternativo]
 
     if mapa_alternativo:
-        extras, falhas_extras = coletar_bloco(mapa_alternativo)
+        extras, falhas_extras, sem_fund_extras = coletar_bloco(mapa_alternativo)
+        sem_fundamentos.extend(sem_fund_extras)
         resultados.extend(extras)
         resolvidos.update(linha["ticker"] for linha in extras)
         falhas_finais.extend(f for f in falhas_extras if f["ticker"] not in resolvidos)
@@ -648,11 +840,22 @@ def executar_scanner(forcar: bool = Query(False, description="Ignora o cache de 
 
     resultados.sort(key=lambda item: item["score_geral"], reverse=True)
 
+    # Papel que entrou na tabela só com preço: os múltiplos não vieram. Isso
+    # não é falha do papel, mas precisa aparecer — senão um scanner inteiro
+    # sem fundamentos passaria por normal.
+    sem_fund_unicos = {}
+    for item in sem_fundamentos:
+        if item["ticker"] in resolvidos:
+            sem_fund_unicos.setdefault(item["ticker"], item)
+
     payload = {
         **meta,
+        **carimbo_de_coleta(),
         "total": len(resultados),
         "solicitados": len(codigos),
+        "com_fundamentos": sum(1 for r in resultados if r["fundamentos_disponiveis"]),
         "falhas": sorted(falhas_unicas, key=lambda f: f["ticker"]),
+        "sem_fundamentos": sorted(sem_fund_unicos.values(), key=lambda f: f["ticker"]),
         "oportunidades": resultados,
     }
 
@@ -705,10 +908,13 @@ def _auditar_simbolo(ticker_clean, simbolo):
         preco = float(close.iloc[-1])
 
     def _num(chave, escala=1.0):
+        bruto = info.get(chave)
+        if bruto is None or bruto == "":
+            return None
         try:
-            return float(info.get(chave) or 0.0) * escala
+            return float(bruto) * escala
         except (TypeError, ValueError):
-            return 0.0
+            return None
 
     pl = _num("trailingPE")
     pvp = _num("priceToBook")
@@ -734,6 +940,7 @@ def _auditar_simbolo(ticker_clean, simbolo):
     )
 
     return {
+        **carimbo_de_coleta(),
         "ticker": ticker_clean,
         "simbolo_yahoo": simbolo,
         "nome_empresa": info.get("shortName") or ticker_clean,
@@ -749,12 +956,14 @@ def _auditar_simbolo(ticker_clean, simbolo):
             "destruicao_capital": destruicao_historica,
         },
         "multiplos": {
-            "p_l": round(pl, 2) if pl else None,
-            "p_vp": round(pvp, 2) if pvp else None,
-            "ev_ebitda": round(ev_ebitda, 2) if ev_ebitda else None,
-            "dividend_yield_pct": round(dy, 2),
+            # None significa "sem dado na fonte", e a tela mostra "—".
+            # Arredondar com `if valor` transformava 0 legítimo em None.
+            "p_l": round(pl, 2) if pl is not None else None,
+            "p_vp": round(pvp, 2) if pvp is not None else None,
+            "ev_ebitda": round(ev_ebitda, 2) if ev_ebitda is not None else None,
+            "dividend_yield_pct": round(dy, 2) if dy is not None else None,
             "roe_pct": round(roe, 2) if roe is not None else None,
-            "margem_liquida_pct": round(margem_liq, 2),
+            "margem_liquida_pct": round(margem_liq, 2) if margem_liq is not None else None,
         },
         "historico_10_anos": dados_10_anos,
     }

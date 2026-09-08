@@ -27,12 +27,16 @@
       <h1 class="text-xl font-bold tracking-wider uppercase text-sky-400">Alphaforge <span class="text-xs text-gray-400 font-mono">Analytics</span></h1>
     </div>
     <div class="text-xs font-mono text-indigo-400">MODULE: RESEARCH & PORTFOLIO</div>
- <!-- Ticker Tape (Cotações em Tempo Real) -->
-  <div class="ticker-wrap py-2">
+ <!-- Ticker Tape — cotações atrasadas 15 min (Yahoo/ICE), não são tempo real -->
+  <div class="ticker-wrap py-2 relative">
     <div class="ticker" id="tickerTape">
       <span class="ticker-item text-gray-500">Conectando ao feed da bolsa...</span>
     </div>
-  </div> 
+    <span class="absolute right-0 top-0 bottom-0 flex items-center pl-6 pr-2 bg-gradient-to-l from-[#070b14] via-[#070b14] to-transparent text-[10px] font-mono text-amber-500/80 whitespace-nowrap"
+          title="O Yahoo publica a B3 com 15 minutos de atraso (fonte: ICE Data Services)">
+      ATRASO 15 MIN
+    </span>
+  </div>
 </header>
 
   <!-- Abas -->
@@ -52,7 +56,7 @@
         <!-- Bloco de Upload -->
         <div class="bg-[#111827] p-6 rounded-xl border border-gray-800">
           <h2 class="text-lg font-bold text-sky-400 mb-2">Auditoria de Crédito (PDF)</h2>
-          <p class="text-xs text-gray-400 mb-6">Motor de IA executando extração de dados e modelagem de insolvência.</p>
+          <p class="text-xs text-gray-400 mb-6">Extração dos campos do balanço por IA; índices de crédito calculados por fórmula.</p>
           <input type="file" id="pdfFileInput" accept="application/pdf" class="block w-full text-xs text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-sky-600 file:text-white cursor-pointer"/>
           <button onclick="auditarPDF()" id="btnAuditarPDF" class="mt-6 w-full bg-sky-600 hover:bg-sky-500 py-3 rounded-lg text-sm font-bold text-white shadow-lg transition">
             Processar Documento
@@ -79,7 +83,7 @@
             </p>
             <p class="flex items-start gap-3">
               <span class="bg-emerald-600 text-white font-bold px-2 py-0.5 rounded text-xs mt-0.5">✓</span>
-              <span class="text-gray-300">A Inteligência Artificial (Gemini) fará a leitura profunda do arquivo, calculando o <b>Z-Score</b>, <b>ICJ</b>, <b>Alavancagem</b> e gerando um Parecer de Risco instantaneamente.</span>
+              <span class="text-gray-300">O modelo <b>apenas localiza e transcreve</b> os campos do balanço (ativo, passivo, EBITDA, dívida). <b>Z-Score, ICJ e Alavancagem são calculados por fórmula</b> no servidor, a partir desses campos — número de crédito não sai de modelo de linguagem. Campo que não estiver no documento fica em branco e o laudo sai como inconclusivo.</span>
             </p>
           </div>
         </div>
@@ -99,7 +103,10 @@
           <div class="bg-[#0b0f19] p-4 rounded-lg border border-gray-800"><span class="text-xs text-gray-400 block mb-1">Classificação Z</span><p class="text-md font-semibold text-sky-400 mt-1" id="classificacaoZValor">-</p></div>
         </div>
         <p class="text-sm text-gray-300 italic bg-[#0b0f19] p-4 rounded border border-gray-800 mt-2" id="parecerCredito"></p>
+        <p class="text-[11px] text-gray-500 border-t border-gray-800 pt-3" id="origemCredito"></p>
       </div>
+
+      <p id="creditoAviso" class="hidden text-xs rounded-lg px-4 py-3 border"></p>
     </section>
 
     <!-- ABA 2: RENDA VARIÁVEL -->
@@ -136,6 +143,12 @@
             <tbody id="tabelaScannerCorpo" class="divide-y divide-gray-800 text-gray-200"></tbody>
           </table>
         </div>
+        <p class="text-[11px] text-amber-500/80 border-t border-gray-800 pt-3 leading-relaxed">
+          ⚠ Cotações do Yahoo Finance (ICE Data Services), <b>atrasadas 15 minutos</b> em relação à B3,
+          sobre fechamentos diários. Somado ao cache de 15 min, o preço na tela pode ter até ~30 minutos.
+          Não use como preço de execução nem como referência em material de cliente.
+          Múltiplos (P/L, P/VP, ROE) refletem o último balanço publicado, não o dia.
+        </p>
       </div>
 
       <div class="bg-[#111827] p-6 rounded-xl border border-gray-800">
@@ -155,6 +168,7 @@
           <div class="text-right">
             <span id="badgeRecomendacao" class="px-4 py-2 rounded-lg text-sm font-extrabold bg-emerald-600 text-white">COMPRA</span>
             <p class="text-2xl font-bold text-emerald-400 mt-2" id="acaoPreco">R$ 0,00</p>
+            <p class="text-[10px] text-amber-500/80 mt-1" id="acaoCarimbo"></p>
           </div>
         </div>
       </div>
@@ -171,6 +185,8 @@
           🔍 Atualizar Radar
         </button>
       </div>
+
+      <p id="fundosAviso" class="hidden text-xs rounded-lg px-4 py-3 border"></p>
 
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Tijolo -->
@@ -223,6 +239,8 @@
         </div>
       </div>
 
+      <p id="portfolioAviso" class="hidden text-xs rounded-lg px-4 py-3 border"></p>
+
       <div id="resultadoAlocacao" class="hidden grid grid-cols-1 md:grid-cols-3 gap-6">
         <div class="md:col-span-1 space-y-4">
           <div class="bg-[#111827] p-5 rounded-xl border border-gray-800">
@@ -241,6 +259,7 @@
         <div class="md:col-span-2 bg-[#111827] p-6 rounded-xl border border-gray-800">
           <h3 class="text-md font-bold text-gray-300 mb-4">Pesos Ótimos do Portfólio</h3>
           <div id="listaPesos" class="space-y-4"></div>
+          <p class="text-[11px] text-gray-500 mt-4 border-t border-gray-800 pt-3" id="portTaxa"></p>
         </div>
       </div>
     </section>
@@ -298,21 +317,57 @@ async function iniciarTickerTape() {
     async function auditarPDF() {
       const fileInput = document.getElementById('pdfFileInput');
       const btn = document.getElementById('btnAuditarPDF');
-      if (!fileInput.files[0]) { alert("Selecione um PDF."); return; }
+      if (!fileInput.files[0]) {
+        mostrarAviso('creditoAviso', 'Selecione um PDF antes de processar.', 'alerta');
+        return;
+      }
       btn.innerText = "Auditando..."; btn.disabled = true;
+      mostrarAviso('creditoAviso', '');
       try {
         const fd = new FormData();
         fd.append('file', fileInput.files[0]);
         const res = await fetch('/renda-fixa/auditar-pdf', { method: 'POST', body: fd });
+        if (!res.ok) {
+          mostrarAviso('creditoAviso', `O servidor respondeu ${res.status}.`);
+          return;
+        }
         const d = await res.json();
         document.getElementById('painelResultadoCredito').classList.remove('hidden');
         document.getElementById('emissorLaudo').innerText = d.emissor || "Emissor";
-        document.getElementById('alavancagemValor').innerText = (d.alavancagem_dl_ebitda || 0) + "x";
-        document.getElementById('icjValor').innerText = (d.cobertura_juros_icj || 0) + "x";
-        document.getElementById('zScoreValor').innerText = d.altman_z_score || "-";
-        document.getElementById('classificacaoZValor').innerText = d.classificacao_z || "-";
+
+        // Índice não calculado vira "—", nunca 0x. Zero na tela é lido como
+        // medição, e era assim que um laudo sem dado parecia um laudo.
+        document.getElementById('alavancagemValor').innerHTML = num(d.alavancagem_dl_ebitda, 2, 'x');
+        document.getElementById('icjValor').innerHTML = num(d.cobertura_juros_icj, 2, 'x');
+        document.getElementById('zScoreValor').innerHTML = num(d.altman_z_score, 2);
+        document.getElementById('classificacaoZValor').innerText = d.classificacao_z || "—";
         document.getElementById('parecerCredito').innerText = d.parecer || "";
-      } catch (e) { alert("Erro ao auditar PDF."); } finally { btn.innerText = "Processar Documento"; btn.disabled = false; }
+
+        const status = d.status || "";
+        const badge = document.getElementById('badgeStatusCredito');
+        badge.innerText = status || "—";
+        const estilo = status.startsWith("APROVADO") ? "bg-emerald-500/20 text-emerald-400"
+                     : (status.startsWith("REPROVADO") ? "bg-rose-500/20 text-rose-400"
+                     : "bg-amber-500/20 text-amber-400");
+        badge.className = `px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wider ${estilo}`;
+
+        document.getElementById('origemCredito').innerText = d.origem_dados
+          ? `Origem: ${d.origem_dados}${d.periodo ? ' · competência ' + d.periodo : ''}`
+          : '';
+
+        const faltantes = Array.isArray(d.campos_faltantes) ? d.campos_faltantes : [];
+        const vetos = Array.isArray(d.motivos_veto) ? d.motivos_veto : [];
+        if (vetos.length) {
+          mostrarAviso('creditoAviso', `<b>Motivos do veto:</b><br>${vetos.map(esc).join('<br>')}`);
+        } else if (faltantes.length) {
+          mostrarAviso('creditoAviso',
+            `<b>Laudo inconclusivo.</b> Não localizados no documento: ${faltantes.map(esc).join(', ')}. `
+            + `Sem esses campos os índices não são calculáveis — e ausência de veto não é aprovação.`,
+            'alerta');
+        }
+      } catch (e) {
+        mostrarAviso('creditoAviso', `Falha ao auditar o PDF: ${esc(e.message || e)}`);
+      } finally { btn.innerText = "Processar Documento"; btn.disabled = false; }
     }
 
     
@@ -392,8 +447,30 @@ async function iniciarTickerTape() {
           ? ` · ${data.papeis_no_indice} no índice + ${data.papeis_fora_do_indice} fora`
           : '';
 
+        // Horário da coleta, não da tela: num resultado servido do cache o
+        // carimbo é o da coleta original, que é justamente o que importa.
+        const coleta = data.coletado_em_legivel ? ` · coletado ${data.coletado_em_legivel}` : '';
+
+        const comFund = data.com_fundamentos ?? itens.length;
+        const cobertura = `${comFund}/${itens.length} com múltiplos`;
+
         document.getElementById('scannerCobertura').innerText =
-          `${itens.length} de ${solicitados} papéis · ${origem}${composicao}${fonte ? ' · ' + fonte : ''}`;
+          `${itens.length} de ${solicitados} papéis · ${cobertura}${coleta} · ${origem}${composicao}${fonte ? ' · ' + fonte : ''}`;
+
+        // Papel sem múltiplos entra na tabela só com preço e técnico. Isso
+        // precisa ser dito: um scanner inteiro sem fundamentos parece normal
+        // se ninguém avisar.
+        const semFund = Array.isArray(data.sem_fundamentos) ? data.sem_fundamentos : [];
+        if (semFund.length) {
+          const motivos = [...new Set(semFund.map(f => f.motivo))].join(', ');
+          const listaSemFund = semFund.length <= 12
+            ? semFund.map(f => esc(f.ticker)).join(', ')
+            : semFund.slice(0, 12).map(f => esc(f.ticker)).join(', ') + ` e mais ${semFund.length - 12}`;
+          mostrarAviso('scannerAviso',
+            `<b>${semFund.length} papéis sem múltiplos do Yahoo</b> — entraram só com preço e técnico, `
+            + `e não recebem veredito fundamentalista. Motivo: ${esc(motivos)}.<br>${listaSemFund}`,
+            'alerta');
+        }
 
         if (data.origem_composicao === 'fallback') {
           mostrarAviso('scannerAviso',
@@ -415,11 +492,16 @@ async function iniciarTickerTape() {
         }
 
         corpo.innerHTML = itens.map(i => {
-          const cor = i.veredito.includes('COMPRA') ? 'text-emerald-400'
-                    : (i.veredito.includes('VENDA') ? 'text-rose-400' : 'text-amber-400');
+          const semDados = i.veredito.includes('SEM DADOS');
+          const cor = semDados ? 'text-gray-500'
+                    : (i.veredito.includes('COMPRA') ? 'text-emerald-400'
+                    : (i.veredito.includes('VENDA') ? 'text-rose-400' : 'text-amber-400'));
+          const marca = i.fundamentos_disponiveis === false
+            ? ' <span class="text-[9px] text-amber-600/80 font-normal" title="Múltiplos não vieram do Yahoo: só preço e técnico">só preço</span>'
+            : '';
           return `
-          <tr class="hover:bg-[#0b0f19] scanner-row cursor-pointer" onclick="selecionarAtivo('${esc(i.ticker)}')" data-ticker="${esc(i.ticker)}" data-nome="${esc((i.nome || '').toLowerCase())}">
-            <td class="p-2.5 font-bold text-sky-400">${esc(i.ticker)}</td>
+          <tr class="hover:bg-[#0b0f19] scanner-row cursor-pointer ${semDados ? 'opacity-60' : ''}" onclick="selecionarAtivo('${esc(i.ticker)}')" data-ticker="${esc(i.ticker)}" data-nome="${esc((i.nome || '').toLowerCase())}">
+            <td class="p-2.5 font-bold text-sky-400">${esc(i.ticker)}${marca}</td>
             <td class="p-2.5">R$ ${num(i.preco)}</td>
             <td class="p-2.5">${num(i.pl, 2, 'x')}</td>
             <td class="p-2.5">${num(i.roe, 1, '%')}</td>
@@ -475,6 +557,9 @@ async function iniciarTickerTape() {
         document.getElementById('painelResultadoAcao').classList.remove('hidden');
         document.getElementById('acaoNome').innerText = `${d.nome_empresa} (${d.ticker})`;
         document.getElementById('acaoPreco').innerText = `R$ ${Number(d.preco_atual ?? 0).toFixed(2)}`;
+        document.getElementById('acaoCarimbo').innerText = d.coletado_em_legivel
+          ? `coletado ${d.coletado_em_legivel} · atraso ${d.atraso_fonte_minutos ?? 15} min (Yahoo)`
+          : '';
 
         const rec = d.recomendacao || 'NEUTRO';
         const badge = document.getElementById('badgeRecomendacao');
@@ -503,38 +588,49 @@ async function iniciarTickerTape() {
         const getCorRec = (rec) => {
           if (rec === "COMPRA") return "bg-emerald-600 text-white";
           if (rec === "AGUARDAR") return "bg-rose-600 text-white";
+          if (rec === "SEM DADOS") return "bg-gray-700 text-gray-300";
           return "bg-amber-600 text-white";
         };
 
-        const renderFii = (fii) => {
-          return `
-            <tr class="hover:bg-[#0b0f19]">
-              <td class="p-2 font-bold text-sky-400">${fii.ticker} <span class="block text-[9px] text-gray-500">P/VP ${fii.pvp}</span></td>
-              <td class="p-2">R$ ${fii.preco.toFixed(2)}</td>
-              <td class="p-2 text-gray-300">R$ ${fii.ponto_entrada.toFixed(2)}</td>
-              <td class="p-2 font-mono text-emerald-400">${fii.dy}%</td>
+        // toFixed direto quebrava a tabela inteira num único campo nulo.
+        const renderFii = (fii) => `
+            <tr class="hover:bg-[#0b0f19] ${fii.fundamentos_disponiveis === false ? 'opacity-60' : ''}">
+              <td class="p-2 font-bold text-sky-400">${esc(fii.ticker)}
+                <span class="block text-[9px] text-gray-500">P/VP ${num(fii.pvp)}</span></td>
+              <td class="p-2">R$ ${num(fii.preco)}</td>
+              <td class="p-2 text-gray-300">${fii.ponto_entrada === null || fii.ponto_entrada === undefined ? '<span class="text-gray-600">—</span>' : 'R$ ' + num(fii.ponto_entrada)}</td>
+              <td class="p-2 font-mono text-emerald-400">${num(fii.dy, 2, '%')}</td>
               <td class="p-2 text-center">
-                <span class="px-2 py-1 rounded text-[9px] font-bold ${getCorRec(fii.recomendacao)}">${fii.recomendacao}</span>
+                <span class="px-2 py-1 rounded text-[9px] font-bold ${getCorRec(fii.recomendacao)}" title="${esc(fii.racional || '')}">${esc(fii.recomendacao)}</span>
               </td>
             </tr>`;
-        };
-        
-        const renderEtf = (etf) => {
-           return `
-            <tr class="hover:bg-[#0b0f19]">
-              <td class="p-2 font-bold text-sky-400">${etf.ticker} <span class="block text-[9px] text-gray-500 truncate max-w-[80px]">${etf.nome}</span></td>
-              <td class="p-2">R$ ${etf.preco.toFixed(2)}</td>
-              <td class="p-2 text-gray-300">R$ ${etf.ponto_entrada.toFixed(2)}</td>
-              <td class="p-2 text-center">
-                <span class="px-2 py-1 rounded text-[9px] font-bold ${getCorRec(etf.recomendacao)}">${etf.recomendacao}</span>
-              </td>
-            </tr>`;
-        };
 
-        document.getElementById('tabelaTijolo').innerHTML = data.tijolo.map(renderFii).join('');
-        document.getElementById('tabelaPapel').innerHTML = data.papel.map(renderFii).join('');
-        document.getElementById('tabelaETFs').innerHTML = data.etfs.map(renderEtf).join('');
-      } catch (e) { alert("Erro ao buscar Fundos."); } finally { btn.innerText = "🔍 Atualizar Radar"; btn.disabled = false;}
+        const renderEtf = (etf) => `
+            <tr class="hover:bg-[#0b0f19]">
+              <td class="p-2 font-bold text-sky-400">${esc(etf.ticker)}
+                <span class="block text-[9px] text-gray-500 truncate max-w-[80px]">${esc(etf.racional || '')}</span></td>
+              <td class="p-2">R$ ${num(etf.preco)}</td>
+              <td class="p-2 text-gray-300">R$ ${num(etf.ponto_entrada)}</td>
+              <td class="p-2 text-center">
+                <span class="px-2 py-1 rounded text-[9px] font-bold ${getCorRec(etf.recomendacao)}">${esc(etf.recomendacao)}</span>
+              </td>
+            </tr>`;
+
+        document.getElementById('tabelaTijolo').innerHTML = (data.tijolo || []).map(renderFii).join('');
+        document.getElementById('tabelaPapel').innerHTML = (data.papel || []).map(renderFii).join('');
+        document.getElementById('tabelaETFs').innerHTML = (data.etfs || []).map(renderEtf).join('');
+
+        const semMultiplos = (data.total_fiis || 0) - (data.com_fundamentos || 0);
+        if (semMultiplos > 0) {
+          mostrarAviso('fundosAviso',
+            `<b>${semMultiplos} de ${data.total_fiis} FIIs sem P/VP e DY do Yahoo</b> — entraram só com preço `
+            + `e ficam sem recomendação. O gatilho de entrada depende do valor patrimonial.`, 'alerta');
+        } else {
+          mostrarAviso('fundosAviso', '');
+        }
+      } catch (e) {
+        mostrarAviso('fundosAviso', `Falha ao carregar o radar: ${esc(e.message || e)}`);
+      } finally { btn.innerText = "🔍 Atualizar Radar"; btn.disabled = false;}
     }
 
     async function otimizarPortfolio() {
@@ -546,15 +642,37 @@ async function iniciarTickerTape() {
       btn.innerText = "🧮 Simulando...";
       painel.classList.add('hidden');
 
+      mostrarAviso('portfolioAviso', '');
       try {
         const res = await fetch(`/wealth/otimizar-portfolio?tickers=${encodeURIComponent(tickers)}`);
+        if (!res.ok) { mostrarAviso('portfolioAviso', `O servidor respondeu ${res.status}.`); return; }
         const data = await res.json();
 
-        if (data.erro) { alert(data.erro); return; }
+        if (data.erro) {
+          const semDados = Array.isArray(data.ativos_sem_dados) && data.ativos_sem_dados.length
+            ? ` Sem histórico: ${data.ativos_sem_dados.map(esc).join(', ')}.` : '';
+          mostrarAviso('portfolioAviso', esc(data.erro) + semDados);
+          return;
+        }
 
         document.getElementById('portRetorno').innerText = `${data.retorno_esperado_aa}%`;
         document.getElementById('portVol').innerText = `${data.volatilidade_aa}%`;
         document.getElementById('portSharpe').innerText = data.sharpe_ratio;
+
+        // O Sharpe depende da taxa livre de risco: mostrar qual foi usada, e de
+        // onde veio, evita comparar dois resultados calculados com taxas
+        // diferentes sem perceber.
+        const fontes = { bcb: 'meta Selic do BCB', cache: 'meta Selic (cache)',
+                         fallback: '⚠ Selic embutida no código', parametro: 'taxa informada por você' };
+        document.getElementById('portTaxa').innerText =
+          `Taxa livre de risco: ${data.taxa_livre_risco_aa}% a.a. — ${fontes[data.origem_taxa_livre_risco] || '—'}`
+          + `${data.vigencia_taxa_livre_risco ? ' (vigência ' + data.vigencia_taxa_livre_risco + ')' : ''}`
+          + ` · ${data.simulacoes} simulações sobre ${data.pregoes_utilizados} pregões`;
+
+        if (Array.isArray(data.ativos_sem_dados) && data.ativos_sem_dados.length) {
+          mostrarAviso('portfolioAviso',
+            `Ficaram de fora por falta de histórico: ${data.ativos_sem_dados.map(esc).join(', ')}.`, 'alerta');
+        }
 
         document.getElementById('listaPesos').innerHTML = data.alocacao_otima.map(item => `
           <div>
@@ -569,7 +687,9 @@ async function iniciarTickerTape() {
         `).join('');
 
         painel.classList.remove('hidden');
-      } catch (e) { alert("Erro na simulação do portfólio."); } finally { btn.disabled = false; btn.innerText = "🧮 Otimizar Pesos"; }
+      } catch (e) {
+        mostrarAviso('portfolioAviso', `Falha na simulação: ${esc(e.message || e)}`);
+      } finally { btn.disabled = false; btn.innerText = "🧮 Otimizar Pesos"; }
     }
   </script>
 </body>
