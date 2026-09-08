@@ -108,14 +108,24 @@
         <div>
           <h2 class="text-lg font-bold text-sky-400">Scanner Quantamental</h2>
         </div>
-        <button onclick="executarScanner()" id="btnScanner" class="bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 px-6 py-2.5 rounded-lg text-sm font-bold text-white shadow-lg transition">
-          ⚡ Varrer Ações
-        </button>
+        <div class="flex items-center gap-2">
+          <button onclick="executarScanner(false)" id="btnScanner" class="bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 px-6 py-2.5 rounded-lg text-sm font-bold text-white shadow-lg transition">
+            ⚡ Varrer Ações
+          </button>
+          <button onclick="executarScanner(true)" id="btnScannerForcar" title="Ignora o cache de 15 minutos e refaz a coleta" class="border border-gray-700 hover:border-sky-500 text-gray-400 hover:text-sky-400 px-3 py-2.5 rounded-lg text-sm transition">
+            ↻
+          </button>
+        </div>
       </div>
+
+      <p id="scannerAviso" class="hidden text-xs rounded-lg px-4 py-3 border"></p>
 
       <div id="painelScanner" class="hidden bg-[#111827] p-6 rounded-xl border border-gray-800 space-y-4">
         <div class="flex justify-between items-center gap-2">
-          <h3 class="text-sm font-bold text-gray-300">Resultados (<span id="scannerContador" class="text-sky-400"></span>)</h3>
+          <div>
+            <h3 class="text-sm font-bold text-gray-300">Resultados (<span id="scannerContador" class="text-sky-400"></span>)</h3>
+            <p id="scannerCobertura" class="text-[11px] text-gray-500 mt-0.5"></p>
+          </div>
           <input type="text" id="filtroScanner" onkeyup="filtrarTabelaScanner()" placeholder="Buscar..." class="bg-[#0b0f19] border border-gray-800 rounded-lg px-3 py-1.5 text-xs w-48">
         </div>
         <div class="overflow-x-auto max-h-[400px] overflow-y-auto">
@@ -134,6 +144,7 @@
           <input type="text" id="tickerAcao" value="VALE3" class="bg-[#0b0f19] border border-gray-800 rounded-lg px-4 py-2 text-sm w-full uppercase">
           <button onclick="consultarAcao()" id="btnConsultarAcao" class="bg-sky-600 hover:bg-sky-500 px-6 py-2 rounded-lg text-sm font-semibold">Analisar</button>
         </div>
+        <p id="acaoAviso" class="hidden text-xs rounded-lg px-4 py-3 border mt-4"></p>
       </div>
       <div id="painelResultadoAcao" class="hidden space-y-6">
         <div class="bg-[#111827] p-6 rounded-xl border border-gray-800 flex justify-between items-center">
@@ -306,24 +317,125 @@ async function iniciarTickerTape() {
 
     
 
-    async function executarScanner() {
+    // --- utilitários de exibição -------------------------------------------
+    // Antes o template imprimia literalmente "null" quando o Yahoo não trazia
+    // o múltiplo, e não havia escape no nome da empresa (aspas quebravam a
+    // linha inteira da tabela).
+    function esc(v) {
+      return String(v ?? '').replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    function num(v, casas = 2, sufixo = '') {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return '<span class="text-gray-600">—</span>';
+      return Number(v).toFixed(casas) + sufixo;
+    }
+
+    function mostrarAviso(id, mensagem, tipo = 'erro') {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (!mensagem) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+      const estilos = {
+        erro: 'bg-rose-950/40 border-rose-800 text-rose-300',
+        alerta: 'bg-amber-950/40 border-amber-800 text-amber-300',
+        info: 'bg-[#0b0f19] border-gray-800 text-gray-400'
+      };
+      el.className = `text-xs rounded-lg px-4 py-3 border ${estilos[tipo] || estilos.info}`;
+      el.innerHTML = mensagem;
+    }
+
+    async function executarScanner(forcar = false) {
       const btn = document.getElementById('btnScanner');
+      const btnForcar = document.getElementById('btnScannerForcar');
       const corpo = document.getElementById('tabelaScannerCorpo');
-      btn.innerText = "⌛ Varrendo..."; btn.disabled = true;
+      const rotuloOriginal = "⚡ Varrer Ações";
+
+      btn.innerText = "⌛ Varrendo..."; btn.disabled = true; btnForcar.disabled = true;
+      mostrarAviso('scannerAviso', '');
+
       try {
-        const res = await fetch('/renda-variavel/scanner-quantamental');
+        const res = await fetch(`/renda-variavel/scanner-quantamental?forcar=${forcar ? 'true' : 'false'}`);
+        if (!res.ok) {
+          mostrarAviso('scannerAviso', `O servidor respondeu ${res.status}. Verifique se a API está no ar.`);
+          return;
+        }
+
         const data = await res.json();
+
+        // O endpoint pode responder 200 com {"erro": ...} — antes isso virava
+        // um painel vazio marcando "0" resultados, sem explicação nenhuma.
+        if (data.erro) {
+          mostrarAviso('scannerAviso', esc(data.erro));
+          return;
+        }
+
+        const itens = Array.isArray(data.oportunidades) ? data.oportunidades : [];
         document.getElementById('painelScanner').classList.remove('hidden');
-        document.getElementById('scannerContador').innerText = data.total;
-        corpo.innerHTML = data.oportunidades.map(i => `
-          <tr class="hover:bg-[#0b0f19] scanner-row" onclick="selecionarAtivo('${i.ticker}')" data-ticker="${i.ticker}" data-nome="${i.nome.toLowerCase()}">
-            <td class="p-2.5 font-bold text-sky-400">${i.ticker}</td><td class="p-2.5">R$ ${i.preco.toFixed(2)}</td>
-            <td class="p-2.5">${i.pl}</td><td class="p-2.5">${i.roe}%</td>
+        document.getElementById('scannerContador').innerText = itens.length;
+
+        const solicitados = data.solicitados ?? itens.length;
+        const idade = Number(data.idade_segundos || 0);
+        const origem = data.cache
+          ? `cache de ${Math.floor(idade / 60)} min — use ↻ para refazer`
+          : 'coleta ao vivo';
+
+        // De onde veio a carteira do IBOV: B3 ao vivo, cache de 12h ou a lista
+        // embutida no código (que pode estar desatualizada).
+        const fontes = {
+          b3: 'carteira IBOV direto do B3',
+          cache: 'carteira IBOV do cache local',
+          fallback: '⚠ carteira IBOV da lista embutida (B3 indisponível)'
+        };
+        const fonte = fontes[data.origem_composicao] || '';
+        const composicao = data.papeis_no_indice
+          ? ` · ${data.papeis_no_indice} no índice + ${data.papeis_fora_do_indice} fora`
+          : '';
+
+        document.getElementById('scannerCobertura').innerText =
+          `${itens.length} de ${solicitados} papéis · ${origem}${composicao}${fonte ? ' · ' + fonte : ''}`;
+
+        if (data.origem_composicao === 'fallback') {
+          mostrarAviso('scannerAviso',
+            'O B3 não respondeu: a varredura usou a carteira embutida no código, que pode estar defasada.',
+            'alerta');
+        }
+
+        const falhas = Array.isArray(data.falhas) ? data.falhas : [];
+        if (falhas.length) {
+          const lista = falhas.map(f => {
+            const simbolo = f.simbolo ? ` [${esc(f.simbolo)}]` : '';
+            return `${esc(f.ticker)}${simbolo} — ${esc(f.motivo)}`;
+          }).join('; ');
+          mostrarAviso(
+            'scannerAviso',
+            `<b>${falhas.length} papéis fora do resultado.</b> ${lista}`,
+            'alerta'
+          );
+        }
+
+        corpo.innerHTML = itens.map(i => {
+          const cor = i.veredito.includes('COMPRA') ? 'text-emerald-400'
+                    : (i.veredito.includes('VENDA') ? 'text-rose-400' : 'text-amber-400');
+          return `
+          <tr class="hover:bg-[#0b0f19] scanner-row cursor-pointer" onclick="selecionarAtivo('${esc(i.ticker)}')" data-ticker="${esc(i.ticker)}" data-nome="${esc((i.nome || '').toLowerCase())}">
+            <td class="p-2.5 font-bold text-sky-400">${esc(i.ticker)}</td>
+            <td class="p-2.5">R$ ${num(i.preco)}</td>
+            <td class="p-2.5">${num(i.pl, 2, 'x')}</td>
+            <td class="p-2.5">${num(i.roe, 1, '%')}</td>
             <td class="p-2.5 text-center font-bold">${i.score_geral}</td>
-            <td class="p-2.5 text-center font-bold ${i.veredito.includes('COMPRA') ? 'text-emerald-400' : (i.veredito.includes('VENDA') ? 'text-rose-400' : 'text-amber-400')}">${i.veredito}</td>
-          </tr>
-        `).join('');
-      } catch(e) {} finally { btn.innerText = "⚡ Varrer Ações"; btn.disabled = false; }
+            <td class="p-2.5 text-center font-bold ${cor}">${esc(i.veredito)}</td>
+          </tr>`;
+        }).join('');
+
+        if (!itens.length && !falhas.length) {
+          mostrarAviso('scannerAviso', 'A varredura terminou sem resultados.', 'alerta');
+        }
+      } catch (e) {
+        mostrarAviso('scannerAviso', `Não foi possível concluir a varredura: ${esc(e.message || e)}`);
+      } finally {
+        btn.innerText = rotuloOriginal; btn.disabled = false; btnForcar.disabled = false;
+      }
     }
 
     function filtrarTabelaScanner() {
@@ -344,23 +456,41 @@ async function iniciarTickerTape() {
     }
 
     async function consultarAcao() {
-      const ticker = document.getElementById('tickerAcao').value;
+      const ticker = document.getElementById('tickerAcao').value.trim();
       const btn = document.getElementById('btnConsultarAcao');
+      if (!ticker) { mostrarAviso('acaoAviso', 'Informe um ticker.', 'alerta'); return; }
+
       btn.innerText = "Analisando..."; btn.disabled = true;
+      mostrarAviso('acaoAviso', '');
       try {
         const res = await fetch(`/renda-variavel/acao/${encodeURIComponent(ticker)}`);
+        if (!res.ok) {
+          mostrarAviso('acaoAviso', `O servidor respondeu ${res.status}.`);
+          return;
+        }
         const d = await res.json();
-        if (d.erro) { alert(d.erro); return; }
+        // Erro inline em vez de alert(): o alert bloqueava a página inteira.
+        if (d.erro) { mostrarAviso('acaoAviso', esc(d.erro)); return; }
+
         document.getElementById('painelResultadoAcao').classList.remove('hidden');
         document.getElementById('acaoNome').innerText = `${d.nome_empresa} (${d.ticker})`;
-        document.getElementById('acaoPreco').innerText = `R$ ${d.preco_atual.toFixed(2)}`;
-        
+        document.getElementById('acaoPreco').innerText = `R$ ${Number(d.preco_atual ?? 0).toFixed(2)}`;
+
+        const rec = d.recomendacao || 'NEUTRO';
         const badge = document.getElementById('badgeRecomendacao');
-        badge.innerText = d.recomendacao;
-        badge.className = d.recomendacao.includes("COMPRA") ? "px-4 py-2 rounded-lg text-sm font-extrabold bg-emerald-600 text-white" : (d.recomendacao.includes("VENDA") ? "px-4 py-2 rounded-lg text-sm font-extrabold bg-rose-600 text-white" : "px-4 py-2 rounded-lg text-sm font-extrabold bg-amber-600 text-white");
-        
-        document.getElementById('listaJustificativas').innerHTML = d.analise_racional.map(j => `<div>✓ ${j}</div>`).join('');
-      } catch (e) {} finally { btn.innerText = "Analisar"; btn.disabled = false;}
+        badge.innerText = rec;
+        badge.className = rec.includes("COMPRA")
+          ? "px-4 py-2 rounded-lg text-sm font-extrabold bg-emerald-600 text-white"
+          : (rec.includes("VENDA")
+              ? "px-4 py-2 rounded-lg text-sm font-extrabold bg-rose-600 text-white"
+              : "px-4 py-2 rounded-lg text-sm font-extrabold bg-amber-600 text-white");
+
+        const racional = Array.isArray(d.analise_racional) ? d.analise_racional : [];
+        document.getElementById('listaJustificativas').innerHTML =
+          racional.map(j => `<div>✓ ${esc(j)}</div>`).join('');
+      } catch (e) {
+        mostrarAviso('acaoAviso', `Falha na consulta: ${esc(e.message || e)}`);
+      } finally { btn.innerText = "Analisar"; btn.disabled = false; }
     }
 
     async function carregarFundos() {
