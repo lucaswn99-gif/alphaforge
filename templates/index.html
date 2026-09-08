@@ -453,7 +453,8 @@ async function iniciarTickerTape() {
         const coleta = data.coletado_em_legivel ? ` · coletado ${data.coletado_em_legivel}` : '';
 
         const comFund = data.com_fundamentos ?? itens.length;
-        const cobertura = `${comFund}/${itens.length} com múltiplos`;
+        const comVeredito = data.com_veredito ?? comFund;
+        const cobertura = `${comVeredito}/${itens.length} com veredito · ${comFund} com algum múltiplo`;
 
         document.getElementById('scannerCobertura').innerText =
           `${itens.length} de ${solicitados} papéis · ${cobertura}${coleta} · ${origem}${composicao}${fonte ? ' · ' + fonte : ''}`;
@@ -462,7 +463,7 @@ async function iniciarTickerTape() {
         // precisa ser dito: um scanner inteiro sem fundamentos parece normal
         // se ninguém avisar.
         const semFund = Array.isArray(data.sem_fundamentos) ? data.sem_fundamentos : [];
-        if (semFund.length) {
+        if (semFund.length && comFund === 0) {
           const motivos = [...new Set(semFund.map(f => f.motivo))].join(', ');
           const listaSemFund = semFund.length <= 12
             ? semFund.map(f => esc(f.ticker)).join(', ')
@@ -493,13 +494,16 @@ async function iniciarTickerTape() {
         }
 
         corpo.innerHTML = itens.map(i => {
-          const semDados = i.veredito.includes('SEM DADOS');
+          const semDados = i.veredito.includes('SEM DADOS') || i.veredito.includes('PARCIAIS');
           const cor = semDados ? 'text-gray-500'
                     : (i.veredito.includes('COMPRA') ? 'text-emerald-400'
                     : (i.veredito.includes('VENDA') ? 'text-rose-400' : 'text-amber-400'));
-          const marca = i.fundamentos_disponiveis === false
-            ? ' <span class="text-[9px] text-amber-600/80 font-normal" title="Múltiplos não vieram do Yahoo: só preço e técnico">só preço</span>'
-            : '';
+          // De onde vieram os múltiplos daquela linha: quoteSummary, proventos
+          // ou balanço da CVM. Sem isso não dá para saber o que sustenta o score.
+          const origem = i.origem_fundamentos
+            ? ` <span class="text-[9px] text-gray-500 font-normal" title="Origem dos múltiplos">${esc(i.origem_fundamentos)}</span>`
+            : ' <span class="text-[9px] text-amber-600/80 font-normal" title="Nenhuma fonte de múltiplos respondeu">só preço</span>';
+          const marca = origem;
           return `
           <tr class="hover:bg-[#0b0f19] scanner-row cursor-pointer ${semDados ? 'opacity-60' : ''}" onclick="selecionarAtivo('${esc(i.ticker)}')" data-ticker="${esc(i.ticker)}" data-nome="${esc((i.nome || '').toLowerCase())}">
             <td class="p-2.5 font-bold text-sky-400">${esc(i.ticker)}${marca}</td>

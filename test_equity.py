@@ -550,13 +550,40 @@ class TestMotorComIndicadoresAusentes(unittest.TestCase):
         self.assertTrue(any("Sem dado na fonte" in a for a in alertas))
 
     def test_ausencia_nao_pontua_nem_a_favor_nem_contra(self):
-        base = dict(pvp=None, roe=None, dy=None, margem_liq=None,
+        """Com cobertura suficiente (3+ indicadores) o teto de dados parciais
+        não interfere, e dá para isolar o efeito de um indicador."""
+        base = dict(pvp=2.0, roe=10.0, dy=1.0, margem_liq=5.0,
                     tendencia_grafica="BAIXA", rsi_val=50.0)
         sem_pl, _, _, _ = equity.calcular_score_quantamental(pl=None, **base)
         pl_alto, _, _, _ = equity.calcular_score_quantamental(pl=40.0, **base)
         pl_bom, _, _, _ = equity.calcular_score_quantamental(pl=8.0, **base)
         self.assertEqual(pl_alto - sem_pl, -10)
         self.assertEqual(pl_bom - sem_pl, 15)
+
+    def test_cobertura_rala_nao_vira_recomendacao(self):
+        """Um DY sozinho não sustenta COMPRA: o motor exige 3 dos 5."""
+        score, veredito, _, _ = equity.calcular_score_quantamental(
+            pl=None, pvp=None, roe=None, dy=9.0, margem_liq=None,
+            tendencia_grafica="ALTA", rsi_val=30.0,
+        )
+        self.assertTrue(veredito.startswith("DADOS PARCIAIS"))
+        self.assertIn("1/5", veredito)
+        self.assertLessEqual(score, 55)
+
+    def test_tres_indicadores_ja_permitem_veredito(self):
+        _, veredito, _, _ = equity.calcular_score_quantamental(
+            pl=8.0, pvp=1.0, roe=20.0, dy=None, margem_liq=None,
+            tendencia_grafica="ALTA", rsi_val=45.0,
+        )
+        self.assertIn("COMPRA", veredito)
+
+    def test_prejuizo_vence_a_cobertura_rala(self):
+        """Margem negativa é resultado apurado: o veto vale mesmo com 1 de 5."""
+        _, veredito, _, _ = equity.calcular_score_quantamental(
+            pl=None, pvp=None, roe=None, dy=None, margem_liq=-12.0,
+            tendencia_grafica="ALTA", rsi_val=50.0,
+        )
+        self.assertEqual(veredito, "VENDA / ALTO RISCO")
 
     def test_margem_ausente_nao_e_prejuizo(self):
         _, veredito, _, _ = equity.calcular_score_quantamental(

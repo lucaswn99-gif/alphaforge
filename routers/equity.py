@@ -21,7 +21,7 @@ import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, Query
 
-from modules import composicao_ibov
+from modules import composicao_ibov, fundamentos_cvm
 
 router = APIRouter(prefix="/renda-variavel", tags=["Renda Variável & Ações"])
 
@@ -65,6 +65,13 @@ SCANNER_MAX_WORKERS = 8
 SCANNER_TENTATIVAS = 3
 SCANNER_CACHE_TTL = 900  # 15 min
 TAPE_CACHE_TTL = 45
+
+# Quantos dos cinco indicadores fundamentalistas (P/L, P/VP, ROE, DY, margem)
+# precisam estar apurados para o motor emitir compra ou venda. Abaixo disso o
+# papel entra na tabela como pendência: veredito fundamentalista apoiado em um
+# indicador só é ruído com cara de recomendação.
+MINIMO_INDICADORES = 3
+TOTAL_INDICADORES = 5
 
 CAMPOS_UTEIS_INFO = (
     "trailingPE", "priceToBook", "returnOnEquity", "profitMargins",
@@ -534,6 +541,33 @@ def extrair_fundamentos(simbolo, tentativas=SCANNER_TENTATIVAS):
     return None, motivo
 
 
+def dy_da_serie(sub, preco):
+    """DY dos últimos 12 meses pela coluna Dividends do download vetorizado.
+
+    Não custa requisição extra: os proventos vêm junto do preço quando o
+    download usa actions=True. Série sem a coluna devolve None ("não sei");
+    série com a coluna e sem provento no período devolve 0.0 ("não paga").
+    """
+    if sub is None or "Dividends" not in getattr(sub, "columns", []):
+        return None
+    preco = float(preco or 0.0)
+    if preco <= 0:
+        return None
+    try:
+        proventos = sub["Dividends"].dropna()
+        proventos = proventos[proventos > 0]
+        if len(proventos) == 0:
+            return 0.0
+        corte = sub.index.max() - pd.Timedelta(days=365)
+        total = float(proventos[proventos.index > corte].sum())
+    except Exception:  # noqa: BLE001
+        return None
+    if total <= 0:
+        return 0.0
+    dy = total / preco * 100.0
+    return dy if 0 < dy < 100 else None
+
+
 def fatiar_precos(df, simbolo):
     """Extrai o sub-dataframe OHLCV de um ticker do download vetorizado.
 
@@ -663,14 +697,20 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
     )
 
     if em_prejuizo or destruicao_historica:
-        # Value trap é sinal de preço: vale mesmo sem fundamento nenhum.
+        # Value trap e prejuízo são sinais fortes o bastante para valer mesmo
+        # com cobertura parcial: são sinal de preço e de resultado apurado.
         veredito = "VENDA / ALTO RISCO"
     elif fundamentos_avaliados == 0:
         # Só preço e técnico na mão. Base 50 + tendência de alta dava 60, que
         # a classificação lia como COMPRA — recomendação fundamentalista sobre
-        # zero fundamento. O teto força o papel a ficar como pendência.
+        # zero fundamento.
         score = min(score, 55)
         veredito = "SEM DADOS FUNDAMENTALISTAS"
+    elif fundamentos_avaliados < MINIMO_INDICADORES:
+        # Cobertura rala. Um DY sozinho não sustenta um "COMPRA": o score
+        # continua visível para triagem, mas sem virar recomendação.
+        score = min(score, 55)
+        veredito = f"DADOS PARCIAIS ({fundamentos_avaliados}/{TOTAL_INDICADORES})"
 
     return score, veredito, pontos_positivos, alertas_risco
 
@@ -692,6 +732,9 @@ def coletar_bloco(mapa):
     simbolos = list(mapa.keys())
 
     try:
+        # actions=True traz a coluna Dividends junto do preço, na MESMA
+        # requisição. É o que devolve o DY sem passar pelo `.info`, que o Yahoo
+        # bloqueia para IP de datacenter.
         df_precos = yf.download(
             simbolos,
             period=SCANNER_HISTORICO,
@@ -699,6 +742,7 @@ def coletar_bloco(mapa):
             progress=False,
             group_by="ticker",
             auto_adjust=True,
+            actions=True,
         )
     except Exception as exc:  # noqa: BLE001
         motivo = f"download: {type(exc).__name__}"
@@ -728,18 +772,13 @@ def coletar_bloco(mapa):
     for simbolo, codigo in mapa.items():
         # O preço manda. Os múltiplos vêm do .info, que é o endpoint que o
         # Yahoo limita — descartar o papel quando ele falha esvaziava a tabela
-        # inteira num rate limit. Agora o papel entra só com preço e técnico,
-        # marcado como fundamentos indisponíveis.
+        # inteira num rate limit. Agora o papel entra com preço e técnico, e os
+        # fundamentos são buscados em cascata.
         sub = fatiar_precos(df_precos, simbolo)
         if sub is None or len(sub) < SMA_PERIODO:
             falhas.append({"ticker": codigo, "simbolo": simbolo,
                            "motivo": "histórico insuficiente para SMA50"})
             continue
-
-        info = fundamentos.get(simbolo)
-        tem_fundamentos = info is not None
-        if info is None:
-            info = dict(INFO_VAZIA)
 
         try:
             close = sub["Close"]
@@ -754,6 +793,37 @@ def coletar_bloco(mapa):
             anual = serie_anual(close)
             destruicao = houve_destruicao_de_capital(anual)
 
+            # --- fundamentos em cascata -------------------------------------
+            # 1. quoteSummary (.info) quando o Yahoo responde
+            # 2. proventos da própria série de preço (DY)
+            # 3. balanço publicado na CVM (ROE, margem, P/L, P/VP)
+            info = fundamentos.get(simbolo)
+            tem_quote_summary = info is not None
+            info = dict(info) if tem_quote_summary else dict(INFO_VAZIA)
+            origens = ["quoteSummary"] if tem_quote_summary else []
+            exercicio_cvm = None
+
+            if info.get("dy") is None:
+                dy_serie = dy_da_serie(sub, preco)
+                if dy_serie is not None:
+                    info["dy"] = dy_serie
+                    origens.append("proventos")
+
+            if any(info.get(campo) is None for campo in ("pl", "pvp", "roe", "margem_liq")):
+                cvm = fundamentos_cvm.multiplos_do_ticker(codigo, preco=preco)
+                if cvm.get("disponivel"):
+                    preencheu = False
+                    for campo in ("pl", "pvp", "roe", "margem_liq"):
+                        if info.get(campo) is None and cvm.get(campo) is not None:
+                            info[campo] = cvm[campo]
+                            preencheu = True
+                    if preencheu:
+                        exercicio_cvm = cvm.get("exercicio")
+                        origens.append(f"CVM {exercicio_cvm}" if exercicio_cvm else "CVM")
+
+            apurados = sum(1 for campo in ("pl", "pvp", "roe", "dy", "margem_liq")
+                           if info.get(campo) is not None)
+
             score, veredito, _, alertas = calcular_score_quantamental(
                 pl=info["pl"], pvp=info["pvp"], roe=info["roe"], dy=info["dy"],
                 margem_liq=info["margem_liq"], tendencia_grafica=tendencia,
@@ -762,13 +832,15 @@ def coletar_bloco(mapa):
 
             def _arred(valor, casas=2):
                 return round(valor, casas) if valor is not None else None
-
             resultados.append({
                 "ticker": codigo,
                 "simbolo_yahoo": simbolo,
                 "nome": info["nome"] or codigo,
                 "setor": info["setor"],
-                "fundamentos_disponiveis": tem_fundamentos,
+                "fundamentos_disponiveis": apurados > 0,
+                "indicadores_apurados": apurados,
+                "origem_fundamentos": " + ".join(origens) if origens else None,
+                "exercicio_cvm": exercicio_cvm,
                 "preco": round(preco, 2),
                 "pl": _arred(info["pl"]),
                 "pvp": _arred(info["pvp"]),
@@ -913,6 +985,30 @@ def diagnosticar(completo: bool = Query(False, description="Inclui uma varredura
                                   "segundos": round(time.time() - inicio, 1)}
     relatorio["demonstrativos"] = alternativos
 
+    # Fonte oficial: cadastro do B3 (ticker -> CNPJ) + balanço da CVM.
+    # É o caminho que não depende do IP, e a seção mostra a cadeia inteira
+    # para dar para conferir se o ticker foi ligado à empresa certa.
+    from modules import cadastro_b3
+
+    cadastro = cadastro_b3.carregar()
+    cvm = {
+        "base_disponivel": fundamentos_cvm.base_disponivel(),
+        "empresas_no_cadastro": len(cadastro),
+        "por_ativo": {},
+    }
+    for alvo in alvos:
+        codigo = alvo.replace(".SA", "")
+        preco_ref = (alternativos.get(alvo) or {}).get("preco_usado") or 0.0
+        multiplos = fundamentos_cvm.multiplos_do_ticker(codigo, preco=preco_ref)
+        cvm["por_ativo"][codigo] = {
+            "cnpj": multiplos.get("cnpj"),
+            "empresa_na_cvm": multiplos.get("denominacao"),
+            "exercicio": multiplos.get("exercicio"),
+            "disponivel": multiplos.get("disponivel"),
+            "multiplos": {k: multiplos.get(k) for k in ("pl", "pvp", "roe", "margem_liq")},
+        }
+    relatorio["cvm"] = cvm
+
     if flag(completo):
         inicio = time.time()
         resultado = executar_scanner(forcar=True)
@@ -1009,6 +1105,8 @@ def executar_scanner(forcar: bool = Query(False, description="Ignora o cache de 
         "total": len(resultados),
         "solicitados": len(codigos),
         "com_fundamentos": sum(1 for r in resultados if r["fundamentos_disponiveis"]),
+        "com_veredito": sum(1 for r in resultados
+                            if r["indicadores_apurados"] >= MINIMO_INDICADORES),
         "falhas": sorted(falhas_unicas, key=lambda f: f["ticker"]),
         "sem_fundamentos": sorted(sem_fund_unicos.values(), key=lambda f: f["ticker"]),
         "oportunidades": resultados,
