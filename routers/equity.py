@@ -50,10 +50,16 @@ TICKER_FALLBACKS = {
 # e as classes de ação que o índice não carrega). Somados à carteira do índice.
 ACOES_FORA_DO_INDICE = [
     "ITUB3", "ELET6", "JBSS3", "ITSA3", "GGBR3", "CPLE6", "CMIG3", "SAPR4", "SAPR3",
-    "CRFB3", "GMAT3", "ALPA4", "EVEN3", "EZTC3", "MOVI3", "SIMH3", "ECOR3", "JSLG3",
-    "GGPS3", "SLCE3", "SMTO3", "RECV3", "IRBR3", "ABCB4", "BPAN4", "BRSR6", "TUPY3",
+    "GMAT3", "ALPA4", "EVEN3", "EZTC3", "MOVI3", "SIMH3", "ECOR3", "JSLG3",
+    "GGPS3", "SLCE3", "SMTO3", "RECV3", "IRBR3", "ABCB4", "BRSR6", "TUPY3",
     "ALUP11", "STBP3", "JHSF3",
 ]
+
+# Saíram da lista por terem deixado de ser negociados: não constam mais no
+# cadastro de listadas do B3 e o Yahoo não devolve histórico para eles.
+# CRFB3  Carrefour Brasil (Atacadão S.A.) - fechamento de capital
+# BPAN4  Banco Pan - fechamento de capital
+FORA_DE_NEGOCIACAO = ("CRFB3", "BPAN4")
 
 RSI_PERIODO = 14
 SMA_PERIODO = 50
@@ -72,6 +78,50 @@ TAPE_CACHE_TTL = 45
 # indicador só é ruído com cara de recomendação.
 MINIMO_INDICADORES = 3
 TOTAL_INDICADORES = 5
+
+# --------------------------------------------------------------------------- #
+# Régua do score
+# --------------------------------------------------------------------------- #
+# Faixas graduadas em vez de corte binário. O modelo antigo dava os mesmos +15
+# para P/L 5,03 e P/L 11,9, e os mesmos +15 para ROE 15,5% e 68,5% — com isso
+# os dez primeiros da varredura empatavam em 98 e o scanner deixava de ordenar.
+#
+# Cada faixa é (limite_superior, pontos); a última vale de lá para cima. Os
+# pesos declaram a tese: rentabilidade pesa mais que múltiplo barato, e o
+# técnico entra como ajuste, não como fundamento.
+#
+# Para recalibrar, mexa aqui — nada de limiar espalhado pelo código.
+
+FAIXAS_PL = [(0, 0), (5, 18), (8, 16), (11, 13), (15, 10), (20, 5), (25, 2), (float("inf"), 0)]
+FAIXAS_PVP = [(0, 0), (0.7, 12), (1.0, 11), (1.5, 9), (2.5, 6), (4.0, 2), (float("inf"), 0)]
+FAIXAS_ROE = [(0, 0), (8, 2), (12, 7), (15, 11), (20, 15), (30, 18), (45, 21), (float("inf"), 22)]
+FAIXAS_MARGEM = [(0, 0), (5, 2), (10, 4), (20, 6), (30, 7), (float("inf"), 8)]
+# DY acima de 14% raramente é recorrente: costuma ser distribuição
+# extraordinária ou preço derretendo. Pontua menos que a faixa anterior.
+FAIXAS_DY = [(2, 1), (4, 4), (6, 7), (9, 9), (14, 10), (float("inf"), 7)]
+
+PESO_MAXIMO = {"pl": 18, "pvp": 12, "roe": 22, "margem_liq": 8, "dy": 10}
+PONTOS_FUNDAMENTOS = 70   # o bloco fundamentalista vale 70 dos 100
+
+# Ajuste técnico: soma depois dos fundamentos, com peso deliberadamente menor.
+PONTOS_TENDENCIA_ALTA = 6
+PONTOS_TENDENCIA_BAIXA = -4
+FAIXAS_RSI = [(30, 8), (40, 5), (60, 0), (70, -2), (float("inf"), -6)]
+
+# Cortes do veredito. COMPRA FORTE exige fundamento quase cheio E técnico a
+# favor — é para sair em poucos papéis por varredura, não em dezenas.
+CORTE_COMPRA_FORTE = 70
+CORTE_COMPRA = 55
+CORTE_VENDA = 40
+
+
+def _pontuar(valor, faixas):
+    """Pontos da faixa em que o valor cai. Faixas em ordem crescente."""
+    for limite, pontos in faixas:
+        if valor <= limite:
+            return pontos
+    return faixas[-1][1]
+
 
 CAMPOS_UTEIS_INFO = (
     "trailingPE", "priceToBook", "returnOnEquity", "profitMargins",
@@ -568,6 +618,24 @@ def dy_da_serie(sub, preco):
     return dy if 0 < dy < 100 else None
 
 
+def historico_individual(simbolo):
+    """Série de um papel só, direto pelo Ticker.history.
+
+    O download em lote de 100+ símbolos volta incompleto de vez em quando, e
+    papéis líquidos como CPLE6 e JBSS3 caíam como "histórico insuficiente". A
+    consulta individual usa o mesmo endpoint (que funciona até em datacenter),
+    só que sem o lote.
+    """
+    try:
+        historico = yf.Ticker(simbolo).history(
+            period=SCANNER_HISTORICO, interval="1d", auto_adjust=True)
+    except Exception:  # noqa: BLE001
+        return None
+    if historico is None or historico.empty or "Close" not in historico.columns:
+        return None
+    return historico.dropna(subset=["Close"])
+
+
 def fatiar_precos(df, simbolo):
     """Extrai o sub-dataframe OHLCV de um ticker do download vetorizado.
 
@@ -598,12 +666,11 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
     """Motor de Decisão ÚNICO. Scanner e auditoria individual passam por aqui
     com o mesmo conjunto de entradas, inclusive `destruicao_historica`.
 
-    TODO indicador fundamentalista aceita None, que significa "não apurado" —
-    diferente de zero. Isso é o que permite pontuar um papel só com dado de
-    preço quando o Yahoo recusa os múltiplos: o indicador ausente não pontua,
-    nem a favor nem contra, e aparece na lista de ressalvas.
+    Todo indicador aceita None, que significa "não apurado" — diferente de
+    zero. O bloco fundamentalista é normalizado pela cobertura: um papel com
+    3 dos 5 indicadores é pontuado sobre o máximo que ESSES três permitem, em
+    vez de ser punido por não ter os outros dois.
     """
-    score = 50
     alertas_risco = []
     pontos_positivos = []
     nao_apurados = []
@@ -631,63 +698,94 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
     if destruicao_historica:
         alertas_risco.append("Destruição contínua de capital recente (Value Trap).")
 
-    # Múltiplos
+    # --- bloco fundamentalista, normalizado pela cobertura -----------------
+    obtidos = 0.0
+    possiveis = 0.0
+
     if pl is None:
         nao_apurados.append("P/L")
-    elif 0 < pl < 12 and not em_prejuizo:
-        score += 15
-        pontos_positivos.append(f"P/L atrativo ({pl:.1f}x)")
-    elif pl > 25:
-        score -= 10
-        alertas_risco.append(f"P/L elevado ({pl:.1f}x)")
+    else:
+        possiveis += PESO_MAXIMO["pl"]
+        if pl > 0 and not em_prejuizo:
+            ganho = _pontuar(pl, FAIXAS_PL)
+            obtidos += ganho
+            if ganho >= 11:
+                pontos_positivos.append(f"P/L atrativo ({pl:.1f}x)")
+        if pl > 25:
+            alertas_risco.append(f"P/L elevado ({pl:.1f}x)")
 
     if pvp is None:
         nao_apurados.append("P/VP")
-    elif 0 < pvp < 1.8 and not em_prejuizo:
-        score += 10
-        pontos_positivos.append(f"P/VP descontado ({pvp:.2f}x)")
+    else:
+        possiveis += PESO_MAXIMO["pvp"]
+        if pvp > 0 and not em_prejuizo:
+            ganho = _pontuar(pvp, FAIXAS_PVP)
+            obtidos += ganho
+            if ganho >= 7:
+                pontos_positivos.append(f"P/VP descontado ({pvp:.2f}x)")
+        if pvp > 4:
+            alertas_risco.append(f"P/VP esticado ({pvp:.2f}x)")
 
-    if roe is not None and roe >= 15:
-        score += 15
-        pontos_positivos.append(f"Alta rentabilidade (ROE {roe:.1f}%)")
+    if roe is not None:
+        possiveis += PESO_MAXIMO["roe"]
+        ganho = _pontuar(roe, FAIXAS_ROE)
+        obtidos += ganho
+        if ganho >= 13:
+            pontos_positivos.append(f"Alta rentabilidade (ROE {roe:.1f}%)")
+
+    if margem_liq is not None:
+        possiveis += PESO_MAXIMO["margem_liq"]
+        if margem_liq > 0:
+            ganho = _pontuar(margem_liq, FAIXAS_MARGEM)
+            obtidos += ganho
+            if ganho >= 5:
+                pontos_positivos.append(f"Margem líquida sólida ({margem_liq:.1f}%)")
 
     if dy is None:
         nao_apurados.append("dividend yield")
-    elif dy >= 6 and not em_prejuizo:
-        score += 10
-        pontos_positivos.append(f"Bons dividendos ({dy:.1f}%)")
+    else:
+        possiveis += PESO_MAXIMO["dy"]
+        if not em_prejuizo:
+            ganho = _pontuar(dy, FAIXAS_DY)
+            obtidos += ganho
+            if ganho >= 8:
+                pontos_positivos.append(f"Bons dividendos ({dy:.1f}%)")
+        if dy > 14:
+            alertas_risco.append(
+                f"Dividend yield de {dy:.1f}% raramente é recorrente - confira se houve "
+                "distribuição extraordinária ou queda forte de preço.")
+
+    if possiveis > 0:
+        score = PONTOS_FUNDAMENTOS * (obtidos / possiveis)
+    else:
+        score = 0.0
+
+    # --- ajuste técnico -----------------------------------------------------
+    if tendencia_grafica == "ALTA":
+        score += PONTOS_TENDENCIA_ALTA
+        pontos_positivos.append("Tendência Gráfica de ALTA (Preço > SMA50)")
+    else:
+        score += PONTOS_TENDENCIA_BAIXA
+        alertas_risco.append("Tendência Gráfica de BAIXA (Preço < SMA50)")
+
+    ajuste_rsi = _pontuar(rsi_val, FAIXAS_RSI)
+    score += ajuste_rsi
+    if ajuste_rsi >= 5:
+        pontos_positivos.append(f"Sobrevenda (RSI {rsi_val}) - possível ponto de entrada")
+    elif ajuste_rsi <= -2:
+        alertas_risco.append(f"Sobrecompra (RSI {rsi_val}) - papel esticado")
 
     if nao_apurados:
         alertas_risco.append(
-            "Sem dado na fonte para " + ", ".join(nao_apurados) + " - não pontuado."
-        )
+            "Sem dado na fonte para " + ", ".join(nao_apurados) + " - não pontuado.")
 
-    # Técnico / Gráfico
-    if tendencia_grafica == "ALTA":
-        score += 10
-        pontos_positivos.append("Tendência Gráfica de ALTA (Preço > SMA50)")
-    else:
-        score -= 5
-        alertas_risco.append("Tendência Gráfica de BAIXA (Preço < SMA50)")
+    score = int(round(max(0.0, min(100.0, score))))
 
-    if rsi_val < 35:
-        score += 10
-        pontos_positivos.append(f"Sobrevenda (RSI {rsi_val}) - Possível ponto de entrada")
-    elif rsi_val > 70:
-        score -= 10
-        alertas_risco.append(f"Sobrecompra (RSI {rsi_val}) - Papel esticado")
-
-    # Limites
-    score = max(5, min(98, score))
-    if em_prejuizo or destruicao_historica:
-        score = min(score, 35)
-
-    # Classificação
-    if score >= 75:
+    if score >= CORTE_COMPRA_FORTE:
         veredito = "COMPRA FORTE"
-    elif score >= 60:
+    elif score >= CORTE_COMPRA:
         veredito = "COMPRA"
-    elif score <= 40:
+    elif score <= CORTE_VENDA:
         veredito = "VENDA"
     else:
         veredito = "NEUTRO"
@@ -697,18 +795,12 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
     )
 
     if em_prejuizo or destruicao_historica:
-        # Value trap e prejuízo são sinais fortes o bastante para valer mesmo
-        # com cobertura parcial: são sinal de preço e de resultado apurado.
+        score = min(score, 35)
         veredito = "VENDA / ALTO RISCO"
     elif fundamentos_avaliados == 0:
-        # Só preço e técnico na mão. Base 50 + tendência de alta dava 60, que
-        # a classificação lia como COMPRA — recomendação fundamentalista sobre
-        # zero fundamento.
         score = min(score, 55)
         veredito = "SEM DADOS FUNDAMENTALISTAS"
     elif fundamentos_avaliados < MINIMO_INDICADORES:
-        # Cobertura rala. Um DY sozinho não sustenta um "COMPRA": o score
-        # continua visível para triagem, mas sem virar recomendação.
         score = min(score, 55)
         veredito = f"DADOS PARCIAIS ({fundamentos_avaliados}/{TOTAL_INDICADORES})"
 
@@ -775,6 +867,10 @@ def coletar_bloco(mapa):
         # inteira num rate limit. Agora o papel entra com preço e técnico, e os
         # fundamentos são buscados em cascata.
         sub = fatiar_precos(df_precos, simbolo)
+        if sub is None or len(sub) < SMA_PERIODO:
+            # Antes de descartar, tenta fora do lote: o download vetorizado
+            # volta incompleto com frequência para alguns papéis.
+            sub = historico_individual(simbolo)
         if sub is None or len(sub) < SMA_PERIODO:
             falhas.append({"ticker": codigo, "simbolo": simbolo,
                            "motivo": "histórico insuficiente para SMA50"})

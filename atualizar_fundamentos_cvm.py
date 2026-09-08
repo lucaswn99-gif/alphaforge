@@ -37,7 +37,7 @@ TIMEOUT = 180
 TAMANHO_BLOCO = 200_000  # linhas por chunk: a DFP passa de 1 milhão
 
 COLUNAS = ["CNPJ_CIA", "DENOM_CIA", "DT_FIM_EXERC", "ORDEM_EXERC",
-           "ESCALA_MOEDA", "CD_CONTA", "VL_CONTA"]
+           "ESCALA_MOEDA", "CD_CONTA", "DS_CONTA", "VL_CONTA"]
 
 # Conta da CVM -> campo nosso. Só o que o motor de score consome.
 CONTAS = {
@@ -64,6 +64,50 @@ CONTAS = {
 CONTAS_ALTERNATIVAS = {"3.13": "lucro_liquido"}
 
 ESCALAS = {"MIL": 1_000.0, "MILHAR": 1_000.0, "UNIDADE": 1.0, "UNIT": 1.0}
+
+# Casar pela DESCRIÇÃO da conta, não só pelo código. Banco usa plano de contas
+# diferente: a conta 2.03 de uma indústria é patrimônio líquido, e na DFP de um
+# banco significa outra coisa — foi assim que o Itaú apareceu com patrimônio de
+# R$ 2,3 trilhões, que é o ativo dele. A descrição a CVM padroniza.
+# Comparação é por igualdade exata do texto normalizado (sem acento, minúsculo).
+DESCRICOES = {
+    "ativo_total": ("ativo total",),
+    "ativo_circulante": ("ativo circulante",),
+    "passivo_circulante": ("passivo circulante",),
+    "passivo_nao_circulante": ("passivo nao circulante",),
+    "patrimonio_liquido": (
+        "patrimonio liquido consolidado",
+        "patrimonio liquido",
+    ),
+    "receita_liquida": (
+        "receita de venda de bens e/ou servicos",
+        "receitas da intermediacao financeira",
+        "receita liquida de vendas e servicos",
+        "receitas de intermediacao financeira",
+    ),
+    "lucro_liquido": (
+        "lucro/prejuizo consolidado do periodo",
+        "lucro ou prejuizo liquido consolidado do periodo",
+        "lucro/prejuizo do periodo",
+    ),
+    "ebit": (
+        "resultado antes do resultado financeiro e dos tributos",
+    ),
+    "resultado_financeiro": ("resultado financeiro",),
+}
+
+
+def _normalizar_texto(bruto):
+    import unicodedata
+    texto = unicodedata.normalize("NFKD", str(bruto or ""))
+    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+    return " ".join(texto.lower().split())
+
+
+DESCRICAO_PARA_CAMPO = {}
+for _campo, _textos in DESCRICOES.items():
+    for _texto in _textos:
+        DESCRICAO_PARA_CAMPO.setdefault(_normalizar_texto(_texto), _campo)
 
 CAMPOS = ["ativo_total", "ativo_circulante", "passivo_circulante",
           "passivo_nao_circulante", "patrimonio_liquido", "receita_liquida",
@@ -100,7 +144,12 @@ def ler_demonstrativo(arquivo_zip, nome_csv, mapa_contas, alternativas=None):
                                  usecols=COLUNAS, dtype=str, chunksize=TAMANHO_BLOCO)
             for bloco in blocos:
                 bloco = bloco[bloco["ORDEM_EXERC"].str.strip().str.upper() == "ÚLTIMO"]
-                bloco = bloco[bloco["CD_CONTA"].str.strip().isin(interessa)]
+                # Aceita por código OU por descrição. Filtrar só por código
+                # descartava a linha do banco antes de olhar a descrição — que
+                # é justamente o que corrige o plano de contas diferente.
+                por_codigo = bloco["CD_CONTA"].str.strip().isin(interessa)
+                por_texto = bloco["DS_CONTA"].map(_normalizar_texto).isin(DESCRICAO_PARA_CAMPO)
+                bloco = bloco[por_codigo | por_texto]
                 if bloco.empty:
                     continue
 
@@ -118,10 +167,17 @@ def ler_demonstrativo(arquivo_zip, nome_csv, mapa_contas, alternativas=None):
                         continue
 
                     conta = str(linha.CD_CONTA).strip()
-                    campo = mapa_contas.get(conta)
-                    alternativo = campo is None
-                    if alternativo:
-                        campo = alternativas.get(conta)
+                    descricao = _normalizar_texto(linha.DS_CONTA)
+
+                    # Prioridade: descrição padronizada > código da conta.
+                    campo = DESCRICAO_PARA_CAMPO.get(descricao)
+                    por_descricao = campo is not None
+                    alternativo = False
+                    if campo is None:
+                        campo = mapa_contas.get(conta)
+                        if campo is None:
+                            campo = alternativas.get(conta)
+                            alternativo = campo is not None
                     if not campo:
                         continue
 
@@ -130,8 +186,11 @@ def ler_demonstrativo(arquivo_zip, nome_csv, mapa_contas, alternativas=None):
                         valor *= _escala(linha.ESCALA_MOEDA)
 
                     registro = coletado[(cnpj, int(ano))]
-                    if alternativo and campo in registro:
-                        continue  # a conta principal manda
+                    # Valor vindo da descrição nunca é sobrescrito por código.
+                    if campo in registro and not por_descricao:
+                        continue
+                    if campo in registro and alternativo:
+                        continue
                     registro[campo] = valor
                     registro.setdefault("denom_cia", str(linha.DENOM_CIA).strip())
     except KeyError:
@@ -149,12 +208,24 @@ def processar_ano(ano):
 
     registros = defaultdict(dict)
     for grupo, mapa in CONTAS.items():
-        nome_csv = f"dfp_cia_aberta_{grupo}_con_{ano}.csv"
         alternativas = CONTAS_ALTERNATIVAS if grupo == "DRE" else None
-        parcial = ler_demonstrativo(arquivo_zip, nome_csv, mapa, alternativas)
-        print(f"   {grupo}: {len(parcial)} companhias")
-        for chave, valores in parcial.items():
+
+        consolidado = ler_demonstrativo(
+            arquivo_zip, f"dfp_cia_aberta_{grupo}_con_{ano}.csv", mapa, alternativas)
+        print(f"   {grupo} consolidado: {len(consolidado)} companhias")
+
+        # Empresa sem controlada não publica consolidado — só o individual.
+        # Era por isso que Sanepar e Assaí não apareciam na base.
+        individual = ler_demonstrativo(
+            arquivo_zip, f"dfp_cia_aberta_{grupo}_ind_{ano}.csv", mapa, alternativas)
+        novas = set(individual) - set(consolidado)
+        if novas:
+            print(f"   {grupo} individual:   +{len(novas)} companhias sem consolidado")
+
+        for chave, valores in consolidado.items():
             registros[chave].update(valores)
+        for chave in novas:
+            registros[chave].update(individual[chave])
 
     return registros
 
@@ -195,6 +266,89 @@ def gravar(registros, banco=BANCO):
     conexao.close()
 
 
+def _bi(valor):
+    return "—" if valor is None else f"{valor / 1e9:.1f}"
+
+
+def relatorio_qualidade(banco=BANCO):
+    """Checagens que denunciam mapeamento errado de conta.
+
+    Patrimônio maior que o ativo é impossível; patrimônio acima de 90% do ativo
+    é implausível para qualquer companhia operacional. Foi assim que o erro dos
+    bancos apareceu — vale deixar a checagem no script.
+    """
+    conexao = sqlite3.connect(banco)
+    cursor = conexao.cursor()
+    total = cursor.execute("SELECT COUNT(*) FROM fundamentos").fetchone()[0] or 1
+
+    checagens = [
+        ("patrimônio > ativo (impossível)",
+         "patrimonio_liquido IS NOT NULL AND ativo_total IS NOT NULL "
+         "AND patrimonio_liquido > ativo_total"),
+        ("patrimônio > 90% do ativo (implausível)",
+         "patrimonio_liquido IS NOT NULL AND ativo_total > 0 "
+         "AND patrimonio_liquido > 0.9 * ativo_total"),
+        ("LPA zerado", "lpa_on = 0"),
+        ("sem lucro líquido", "lucro_liquido IS NULL"),
+        ("sem patrimônio líquido", "patrimonio_liquido IS NULL"),
+    ]
+    print("\nQualidade:")
+    for rotulo, condicao in checagens:
+        n = cursor.execute(f"SELECT COUNT(*) FROM fundamentos WHERE {condicao}").fetchone()[0]
+        marca = "  <-- revisar" if n > total * 0.05 else ""
+        print(f"   {rotulo:<40} {n:>5}  {n / total:>6.1%}{marca}")
+
+    print("\nAmostra (maiores ativos do exercício mais recente):")
+    for nome, ativo, pl, receita, lucro, lpa in cursor.execute(
+            """SELECT denom_cia, ativo_total, patrimonio_liquido, receita_liquida,
+                      lucro_liquido, lpa_on
+               FROM fundamentos WHERE ano = (SELECT MAX(ano) FROM fundamentos)
+               ORDER BY ativo_total DESC LIMIT 8"""):
+        roe = (lucro / pl * 100) if (lucro is not None and pl) else None
+        print(f"   {(nome or '')[:30]:<30} ativo {_bi(ativo):>8}bi  PL {_bi(pl):>8}bi  "
+              f"receita {_bi(receita):>7}bi  lucro {_bi(lucro):>7}bi  "
+              f"ROE {'—' if roe is None else format(roe, '.1f') + '%':>7}  LPA {lpa}")
+    conexao.close()
+
+
+def inspecionar(cnpj_alvo, ano):
+    """Despeja o plano de contas de UMA companhia.
+
+        python atualizar_fundamentos_cvm.py --inspecionar 60872504000123 2025
+
+    Serve para descobrir como um emissor publica as contas quando o mapeamento
+    padrão erra — em vez de continuar adivinhando o layout.
+    """
+    cnpj_alvo = "".join(ch for ch in str(cnpj_alvo) if ch.isdigit())
+    arquivo_zip = baixar_zip(ano)
+    if arquivo_zip is None:
+        return
+    for grupo in ("BPA", "BPP", "DRE"):
+        nome_csv = f"dfp_cia_aberta_{grupo}_con_{ano}.csv"
+        print(f"\n===== {grupo} =====")
+        try:
+            with arquivo_zip.open(nome_csv) as fluxo:
+                blocos = pd.read_csv(fluxo, sep=";", encoding="iso-8859-1",
+                                     usecols=COLUNAS, dtype=str, chunksize=TAMANHO_BLOCO)
+                for bloco in blocos:
+                    alvo = bloco[
+                        bloco["CNPJ_CIA"].str.replace(r"\D", "", regex=True) == cnpj_alvo]
+                    alvo = alvo[alvo["ORDEM_EXERC"].str.strip().str.upper() == "ÚLTIMO"]
+                    for linha in alvo.itertuples(index=False):
+                        conta = str(linha.CD_CONTA).strip()
+                        # Só o topo da árvore: 1, 1.01, 2.03, 3.11, 3.99.01.01
+                        if conta.count(".") > 2:
+                            continue
+                        try:
+                            valor = float(str(linha.VL_CONTA).replace(",", "."))
+                        except (TypeError, ValueError):
+                            continue
+                        print(f"   {conta:<12} {str(linha.DS_CONTA)[:52]:<52} "
+                              f"{valor:>18,.0f}  [{linha.ESCALA_MOEDA}]")
+        except Exception as exc:  # noqa: BLE001
+            print(f"   ! {type(exc).__name__}: {exc}")
+
+
 def main(anos):
     registros = {}
     for ano in anos:
@@ -204,9 +358,20 @@ def main(anos):
     if not registros:
         raise SystemExit("Nenhum dado obtido da CVM.")
     gravar(registros)
+    relatorio_qualidade()
 
 
 if __name__ == "__main__":
+    if "--inspecionar" in sys.argv:
+        posicao = sys.argv.index("--inspecionar")
+        restante = sys.argv[posicao + 1:]
+        if not restante:
+            raise SystemExit("uso: --inspecionar <cnpj> [ano]")
+        cnpj = restante[0]
+        ano_alvo = int(restante[1]) if len(restante) > 1 else 2025
+        inspecionar(cnpj, ano_alvo)
+        raise SystemExit(0)
+
     argumentos = [a for a in sys.argv[1:] if a.isdigit()]
     if argumentos:
         anos_alvo = [int(a) for a in argumentos]

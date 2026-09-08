@@ -76,6 +76,15 @@ def balanco_por_cnpj(cnpj, banco=None):
         linha = conexao.execute(
             "SELECT * FROM fundamentos WHERE cnpj = ? ORDER BY ano DESC LIMIT 1", (cnpj,)
         ).fetchone()
+        if linha is None and len(cnpj) >= 8:
+            # O B3 às vezes cadastra o CNPJ de uma filial e a CVM publica pelo
+            # da matriz: TUPY3 é 84683374/0003-00 no B3 e /0001-49 na CVM. Os 8
+            # primeiros dígitos são a raiz da empresa, e na base coletada
+            # nenhuma raiz é compartilhada por duas companhias.
+            linha = conexao.execute(
+                "SELECT * FROM fundamentos WHERE cnpj LIKE ? ORDER BY ano DESC LIMIT 1",
+                (cnpj[:8] + "%",)
+            ).fetchone()
     except sqlite3.Error:
         linha = None
     finally:

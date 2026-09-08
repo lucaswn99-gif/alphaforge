@@ -20,7 +20,7 @@ import atualizar_fundamentos_cvm as coletor  # noqa: E402
 from modules import cadastro_b3, fundamentos_cvm  # noqa: E402
 
 CABECALHO = ("CNPJ_CIA;DENOM_CIA;DT_FIM_EXERC;ORDEM_EXERC;ESCALA_MOEDA;"
-             "CD_CONTA;VL_CONTA")
+             "CD_CONTA;DS_CONTA;VL_CONTA")
 
 
 def _csv(linhas):
@@ -44,21 +44,21 @@ def _linhas_vale(ano=2025, escala="MIL"):
     """Números em MIL: patrimônio 200 bi, lucro 40 bi, receita 200 bi, LPA 9,3."""
     fim = f"{ano}-12-31"
     bpa = [
-        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};1;500000000",
-        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};1.01;150000000",
-        f"{CNPJ_VALE};VALE S.A.;{fim};PENÚLTIMO;{escala};1;480000000",
+        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};1;Ativo Total;500000000",
+        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};1.01;Ativo Circulante;150000000",
+        f"{CNPJ_VALE};VALE S.A.;{fim};PENÚLTIMO;{escala};1;Ativo Total;480000000",
     ]
     bpp = [
-        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};2.01;100000000",
-        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};2.02;200000000",
-        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};2.03;200000000",
+        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};2.01;Passivo Circulante;100000000",
+        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};2.02;Passivo Não Circulante;200000000",
+        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};2.03;Patrimônio Líquido Consolidado;200000000",
     ]
     dre = [
-        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};3.01;200000000",
-        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};3.05;60000000",
-        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};3.06;-8000000",
-        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};3.11;40000000",
-        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};3.99.01.01;9.30",
+        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};3.01;Receita de Venda de Bens e/ou Serviços;200000000",
+        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};3.05;Resultado Antes do Resultado Financeiro e dos Tributos;60000000",
+        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};3.06;Resultado Financeiro;-8000000",
+        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};3.11;Lucro/Prejuízo Consolidado do Período;40000000",
+        f"{CNPJ_VALE};VALE S.A.;{fim};ÚLTIMO;{escala};3.99.01.01;ON;9.30",
     ]
     return bpa, bpp, dre
 
@@ -175,8 +175,8 @@ class TestColetorCvm(unittest.TestCase):
     def test_conta_alternativa_nao_sobrescreve_a_principal(self):
         fim = "2025-12-31"
         dre = [
-            f"{CNPJ_VALE};VALE;{fim};ÚLTIMO;MIL;3.11;40000000",
-            f"{CNPJ_VALE};VALE;{fim};ÚLTIMO;MIL;3.13;37000000",
+            f"{CNPJ_VALE};VALE;{fim};ÚLTIMO;MIL;3.11;Lucro/Prejuízo Consolidado do Período;40000000",
+            f"{CNPJ_VALE};VALE;{fim};ÚLTIMO;MIL;3.13;Lucro por Acao;37000000",
         ]
         arquivo = _zip_dfp(2025, [], [], dre)
         parcial = coletor.ler_demonstrativo(
@@ -186,12 +186,39 @@ class TestColetorCvm(unittest.TestCase):
 
     def test_conta_alternativa_entra_quando_a_principal_falta(self):
         fim = "2025-12-31"
-        dre = [f"{CNPJ_VALE};VALE;{fim};ÚLTIMO;MIL;3.13;37000000"]
+        dre = [f"{CNPJ_VALE};VALE;{fim};ÚLTIMO;MIL;3.13;Lucro Atribuído a Sócios;37000000"]
         arquivo = _zip_dfp(2025, [], [], dre)
         parcial = coletor.ler_demonstrativo(
             arquivo, "dfp_cia_aberta_DRE_con_2025.csv",
             coletor.CONTAS["DRE"], coletor.CONTAS_ALTERNATIVAS)
         self.assertEqual(parcial[(CNPJ_VALE, 2025)]["lucro_liquido"], 37_000_000 * 1000)
+
+    def test_layout_de_banco_e_lido_pela_descricao(self):
+        """O erro real: na DFP de banco a conta 2.03 não é patrimônio líquido.
+        O Itaú apareceu com PL de R$ 2,3 tri, que é o ativo dele. Casar pela
+        descrição padronizada resolve, e o código sozinho não resolveria."""
+        cnpj = "60872504000123"
+        fim = "2025-12-31"
+        bpp = [
+            # 2.03 aqui é OUTRA coisa, com valor absurdo se lido como patrimônio
+            f"{cnpj};ITAU UNIBANCO;{fim};ÚLTIMO;MIL;2.03;Depósitos e Captações;2350900000",
+            f"{cnpj};ITAU UNIBANCO;{fim};ÚLTIMO;MIL;2.08;Patrimônio Líquido Consolidado;205000000",
+        ]
+        arquivo = _zip_dfp(2025, [], bpp, [])
+        parcial = coletor.ler_demonstrativo(
+            arquivo, "dfp_cia_aberta_BPP_con_2025.csv", coletor.CONTAS["BPP"])
+        pl = parcial[(cnpj, 2025)]["patrimonio_liquido"]
+        self.assertEqual(pl, 205_000_000 * 1000, "a descrição tem que vencer o código")
+        self.assertNotEqual(pl, 2_350_900_000 * 1000)
+
+    def test_descricao_vence_mesmo_com_codigo_conhecido(self):
+        cnpj = "11111111111111"
+        fim = "2025-12-31"
+        bpp = [f"{cnpj};X;{fim};ÚLTIMO;MIL;2.03;Patrimônio Líquido Consolidado;50000"]
+        arquivo = _zip_dfp(2025, [], bpp, [])
+        parcial = coletor.ler_demonstrativo(
+            arquivo, "dfp_cia_aberta_BPP_con_2025.csv", coletor.CONTAS["BPP"])
+        self.assertEqual(parcial[(cnpj, 2025)]["patrimonio_liquido"], 50_000 * 1000)
 
     def test_csv_ausente_no_zip_nao_estoura(self):
         arquivo = _zip_dfp(2025, [], [], [])

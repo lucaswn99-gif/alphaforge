@@ -31,14 +31,24 @@ CABECALHOS = {
     "Accept": "application/json, text/plain, */*",
 }
 TIMEOUT = 15
-TAMANHO_PAGINA = 200
-MAX_PAGINAS = 40
+# pageSize 200 faz o endpoint devolver lista VAZIA — ele tem teto. 100
+# responde e o cadastro inteiro cabe em ~36 páginas.
+TAMANHO_PAGINA = 100
+MAX_PAGINAS = 60
 
 ARQUIVO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cadastro_b3.json")
 
-# A raiz do ticker são as letras iniciais; o resto é a classe (3 ON, 4 PN,
-# 11 unit, 5/6 PNA/PNB).
-_RAIZ = re.compile(r"^([A-Z]{4})\d{1,2}$")
+# A raiz do ticker são os 4 primeiros caracteres; o resto é a classe (3 ON,
+# 4 PN, 11 unit, 5/6 PNA/PNB). Aceita dígito na raiz: B3SA3 tem raiz "B3SA",
+# e exigir só letras deixava a B3 de fora do próprio scanner.
+_RAIZ = re.compile(r"^([A-Z0-9]{4})\d{1,2}$")
+
+# Empresas que trocaram de nome e cujo código antigo saiu do cadastro do B3.
+# A classe de ação legada continua sendo negociada e apontando para o mesmo
+# CNPJ da companhia renomeada.
+ALIASES_RAIZ = {
+    "ELET": "AXIA",   # Eletrobras -> Axia Energia
+}
 
 
 def raiz_do_ticker(ticker):
@@ -55,6 +65,9 @@ def normalizar_cnpj(bruto):
     return digitos.zfill(14) if len(digitos) <= 14 else None
 
 
+VERBOSO = False
+
+
 def _pagina(numero):
     parametros = {"language": "pt-br", "pageNumber": numero, "pageSize": TAMANHO_PAGINA}
     payload = base64.b64encode(json.dumps(parametros).encode("utf-8")).decode("ascii")
@@ -65,8 +78,12 @@ def _pagina(numero):
             if resposta.status_code != 200:
                 continue
             return resposta.json()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            if VERBOSO:
+                print(f"   pagina {numero}: {type(exc).__name__}: {exc}")
             continue
+    if VERBOSO:
+        print(f"   pagina {numero}: sem resposta utilizavel")
     return None
 
 
@@ -135,7 +152,8 @@ def cnpj_do_ticker(ticker, caminho=None):
     raiz = raiz_do_ticker(ticker)
     if not raiz:
         return None
-    empresa = carregar(caminho).get(raiz)
+    cadastro = carregar(caminho)
+    empresa = cadastro.get(raiz) or cadastro.get(ALIASES_RAIZ.get(raiz, ""))
     return empresa.get("cnpj") if empresa else None
 
 
@@ -144,8 +162,11 @@ def limpar_memoria():
 
 
 if __name__ == "__main__":
+    VERBOSO = True
     mapa = baixar_cadastro()
     if not mapa:
-        raise SystemExit("Nao consegui ler o cadastro de listadas do B3.")
+        raise SystemExit(
+            "Nao consegui ler o cadastro de listadas do B3.\n"
+            "Verifique acesso a sistemaswebb3-listados.b3.com.br.")
     caminho = gravar(mapa)
     print(f"{len(mapa)} empresas gravadas em {caminho}")
