@@ -1,13 +1,16 @@
-fastapi
-uvicorn
-pandas
-numpy
-scikit-learn
-joblib
-jinja2
-python-multipart
-ccxt
-requests
-python-dotenv
-pypdf
-yfinance
+# Versões fixadas de propósito: o yfinance muda o formato de campos do `info`
+# entre releases menores (a escala de dividendYield mudou dentro da série 0.2.x
+# e de novo na 1.x). Sem pin, o deploy quebra sozinho num rebuild.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pandas==2.2.3
+numpy==2.2.1
+scikit-learn==1.6.1
+joblib==1.4.2
+jinja2==3.1.5
+python-multipart==0.0.20
+ccxt==4.4.50
+requests==2.32.3
+python-dotenv==1.0.1
+pypdf==5.1.0
+yfinance==1.7.0
