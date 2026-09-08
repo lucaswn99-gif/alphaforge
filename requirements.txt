@@ -1,7 +1,11 @@
 fastapi
 uvicorn
 pandas
+numpy
+scikit-learn
+joblib
+jinja2
+python-multipart
 ccxt
 requests
 python-dotenv
-pydantic
