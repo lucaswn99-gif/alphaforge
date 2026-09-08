@@ -292,7 +292,56 @@ def get_ticker_tape():
                     })
             except:
                 continue
-                
+
+        # Trecho de cálculo e tratamento defensivo para ROE e Valuation
+
+info = ativo.info
+
+# 1. Tratamento seguro de ROE (extrai ou calcula via Lucro Líquido / Patrimônio Líquido)
+roe_bruto = info.get("returnOnEquity")
+if roe_bruto is not None and roe_bruto != 0:
+    roe = round(float(roe_bruto) * 100, 2)
+else:
+    # Fallback: calcula ROE manualmente se houver lucro e patrimônio líquido
+    net_income = info.get("netIncomeToCommon") or 0
+    total_equity = info.get("totalStockholderEquity") or 1
+    if total_equity > 0 and net_income != 0:
+        roe = round((net_income / total_equity) * 100, 2)
+    else:
+        roe = 0.0
+
+# 2. Tratamento seguro de Preço Justo e Graham (não travar se algum múltiplo falhar)
+lpa = info.get("trailingEps") or 0.0
+vpa = info.get("bookValue") or 0.0
+preco_atual = info.get("currentPrice") or info.get("regularMarketPrice") or 0.0
+
+preco_graham = None
+desconto_graham = None
+
+if lpa > 0 and vpa > 0:
+    try:
+        preco_graham = round(float(np.sqrt(22.5 * lpa * vpa)), 2)
+        if preco_atual > 0:
+            desconto_graham = round(((preco_graham - preco_atual) / preco_graham) * 100, 2)
+    except Exception:
+        preco_graham = None
+
+# 3. Motor de Recomendação Robusto (não trava mesmo se o ROE for neutro/negativo)
+pvp = info.get("priceToBook") or 1.0
+pl = info.get("trailingPE") or 0.0
+
+if preco_atual <= 0:
+    recomendacao = "DADOS INDISPONÍVEIS"
+elif desconto_graham is not None and desconto_graham > 15:
+    recomendacao = "COMPRA FORTE (Subavaliado por Graham)"
+elif pvp < 0.90 and roe > 5.0:
+    recomendacao = "COMPRA (Desconto Patrimonial com Rentabilidade)"
+elif pvp < 0.80:
+    recomendacao = "COMPRA ESPECULATIVA (Forte Desconto P/VP)"
+elif pl > 15.0 or pvp > 2.0:
+    recomendacao = "REALIZAR / NEUTRO (Múltiplos Esticados)"
+else:
+    recomendacao = "MANTER (Preço de Equilíbrio)"
         return resultados
     except Exception as e:
         return []
