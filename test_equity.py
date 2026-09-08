@@ -635,3 +635,99 @@ class TestCacheScanner(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestFundamentosPorDemonstrativo(unittest.TestCase):
+    """O caso do print: preço e SMA50 vieram, `.info` não. Balanço e DRE usam
+    outro endpoint do Yahoo e permitem reconstruir os múltiplos."""
+
+    PRECO = 79.52
+
+    def _ativo(self, balanco=None, dre=None, proventos=None, info=None, explode_info=False):
+        colunas = pd.to_datetime(["2025-12-31", "2024-12-31"])
+
+        def frame(linhas):
+            if linhas is None:
+                return pd.DataFrame()
+            return pd.DataFrame({colunas[0]: [v[0] for v in linhas.values()],
+                                 colunas[1]: [v[1] for v in linhas.values()]},
+                                index=list(linhas))
+
+        class Ativo:
+            dividends = proventos if proventos is not None else pd.Series(dtype=float)
+
+            def __init__(self_inner):
+                if explode_info:
+                    raise RuntimeError("nao usar")
+
+            @property
+            def info(self_inner):
+                if explode_info:
+                    raise RuntimeError("YFRateLimitError")
+                return info or {}
+
+            balance_sheet = frame(balanco)
+            income_stmt = frame(dre)
+
+        return Ativo()
+
+    def test_reconstroi_roe_margem_pl_e_pvp(self):
+        ativo = self._ativo(
+            balanco={"Stockholders Equity": [200e9, 190e9], "Share Issued": [4.3e9, 4.3e9]},
+            dre={"Net Income": [40e9, 35e9], "Total Revenue": [200e9, 190e9]},
+        )
+        d = equity.fundamentos_por_demonstrativo(ativo, self.PRECO)
+        self.assertAlmostEqual(d["roe"], 20.0, places=4)          # 40/200
+        self.assertAlmostEqual(d["margem_liq"], 20.0, places=4)   # 40/200
+        self.assertAlmostEqual(d["pvp"], (79.52 * 4.3e9) / 200e9, places=6)
+        self.assertAlmostEqual(d["pl"], 79.52 / (40e9 / 4.3e9), places=6)
+
+    def test_rotulo_alternativo_e_aceito(self):
+        """O Yahoo varia o nome da linha entre empresas."""
+        ativo = self._ativo(
+            balanco={"Common Stock Equity": [100e9, 90e9]},
+            dre={"Net Income Common Stockholders": [15e9, 12e9]},
+        )
+        self.assertAlmostEqual(equity.fundamentos_por_demonstrativo(ativo, self.PRECO)["roe"], 15.0)
+
+    def test_dy_soma_so_os_proventos_dos_ultimos_12_meses(self):
+        hoje = pd.Timestamp.now().normalize()
+        datas = pd.to_datetime([hoje - pd.Timedelta(days=d) for d in (900, 400, 200, 30)])
+        proventos = pd.Series([1.0, 1.5, 2.0, 2.5], index=datas)
+        ativo = self._ativo(proventos=proventos)
+        # Janela de 12 meses a partir de hoje: 2,0 + 2,5 = 4,5
+        self.assertAlmostEqual(equity.fundamentos_por_demonstrativo(ativo, 100.0)["dy"], 4.5, places=6)
+
+    def test_empresa_que_parou_de_pagar_tem_dy_zero(self):
+        """Ancorar a janela no último provento inflava o DY de quem parou."""
+        antigos = pd.to_datetime([pd.Timestamp.now().normalize() - pd.Timedelta(days=d)
+                                  for d in (900, 800)])
+        ativo = self._ativo(proventos=pd.Series([3.0, 3.0], index=antigos))
+        self.assertEqual(equity.fundamentos_por_demonstrativo(ativo, 100.0)["dy"], 0.0)
+
+    def test_sem_serie_de_proventos_e_none_e_nao_zero(self):
+        self.assertIsNone(equity.fundamentos_por_demonstrativo(self._ativo(), 100.0)["dy"])
+
+    def test_sem_demonstrativo_devolve_tudo_none(self):
+        d = equity.fundamentos_por_demonstrativo(self._ativo(), self.PRECO)
+        for chave in ("pl", "pvp", "roe", "margem_liq", "dy"):
+            self.assertIsNone(d[chave])
+
+    def test_patrimonio_negativo_nao_produz_roe(self):
+        ativo = self._ativo(balanco={"Stockholders Equity": [-5e9, -4e9]},
+                            dre={"Net Income": [1e9, 1e9]})
+        self.assertIsNone(equity.fundamentos_por_demonstrativo(ativo, self.PRECO)["roe"])
+
+    def test_prejuizo_nao_vira_pl_negativo(self):
+        """P/L com lucro negativo não tem leitura útil: fica None."""
+        ativo = self._ativo(balanco={"Stockholders Equity": [100e9, 90e9], "Share Issued": [1e9, 1e9]},
+                            dre={"Net Income": [-8e9, -5e9], "Total Revenue": [50e9, 48e9]})
+        d = equity.fundamentos_por_demonstrativo(ativo, self.PRECO)
+        self.assertIsNone(d["pl"])
+        self.assertAlmostEqual(d["roe"], -8.0, places=4)   # prejuízo real aparece
+        self.assertAlmostEqual(d["margem_liq"], -16.0, places=4)
+
+    def test_roe_implausivel_e_descartado(self):
+        ativo = self._ativo(balanco={"Stockholders Equity": [1.0, 1.0]},
+                            dre={"Net Income": [50e9, 50e9]})
+        self.assertIsNone(equity.fundamentos_por_demonstrativo(ativo, self.PRECO)["roe"])

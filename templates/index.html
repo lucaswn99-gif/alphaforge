@@ -169,6 +169,7 @@
             <span id="badgeRecomendacao" class="px-4 py-2 rounded-lg text-sm font-extrabold bg-emerald-600 text-white">COMPRA</span>
             <p class="text-2xl font-bold text-emerald-400 mt-2" id="acaoPreco">R$ 0,00</p>
             <p class="text-[10px] text-amber-500/80 mt-1" id="acaoCarimbo"></p>
+            <p class="text-[10px] text-gray-500 mt-0.5" id="acaoOrigemMultiplos"></p>
           </div>
         </div>
       </div>
@@ -569,6 +570,12 @@ async function iniciarTickerTape() {
           : (rec.includes("VENDA")
               ? "px-4 py-2 rounded-lg text-sm font-extrabold bg-rose-600 text-white"
               : "px-4 py-2 rounded-lg text-sm font-extrabold bg-amber-600 text-white");
+
+        // De onde vieram os múltiplos: quoteSummary (.info) ou reconstruídos do
+        // balanço/DRE. Sem isso não dá para saber se o veredito está apoiado no
+        // dado pronto do Yahoo ou numa reconstrução.
+        document.getElementById('acaoOrigemMultiplos').innerText =
+          d.origem_multiplos ? `múltiplos: ${d.origem_multiplos}` : '';
 
         const racional = Array.isArray(d.analise_racional) ? d.analise_racional : [];
         document.getElementById('listaJustificativas').innerHTML =

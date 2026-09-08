@@ -353,6 +353,123 @@ def calcular_roe(info):
     return None
 
 
+# Rótulos que o Yahoo usa nos demonstrativos. Variam entre empresas e entre
+# versões do yfinance, então tentamos em ordem até um responder.
+ROTULOS_DEMONSTRATIVO = {
+    "patrimonio_liquido": ("Stockholders Equity", "Total Stockholder Equity",
+                           "Common Stock Equity", "Total Equity Gross Minority Interest"),
+    "lucro_liquido": ("Net Income", "Net Income Common Stockholders",
+                      "Net Income From Continuing Operation Net Minority Interest",
+                      "Net Income Continuous Operations"),
+    "receita_liquida": ("Total Revenue", "Operating Revenue"),
+    "acoes_emitidas": ("Share Issued", "Ordinary Shares Number"),
+}
+
+
+def _linha_demonstrativo(df, rotulos):
+    """Valor mais recente entre os rótulos possíveis de um demonstrativo."""
+    if df is None or getattr(df, "empty", True):
+        return None
+    for rotulo in rotulos:
+        try:
+            serie = df.loc[rotulo].dropna()
+        except (KeyError, TypeError, AttributeError, IndexError):
+            continue
+        if len(serie):
+            try:
+                valor = float(serie.iloc[0])
+            except (TypeError, ValueError):
+                continue
+            if valor == valor:  # descarta NaN
+                return valor
+    return None
+
+
+def _dy_por_proventos(ativo, preco):
+    """DY dos últimos 12 meses a partir da série de proventos.
+
+    Os dividendos vêm pelo endpoint de histórico, o mesmo que entrega preço —
+    então costumam continuar disponíveis quando o `.info` já não vem.
+    """
+    if not preco or preco <= 0:
+        return None
+    try:
+        proventos = ativo.dividends
+    except Exception:  # noqa: BLE001
+        return None
+    if proventos is None or len(proventos) == 0:
+        return None  # sem série: não sabemos, diferente de "não paga"
+
+    try:
+        indice = proventos.index
+        # Janela ancorada em HOJE, não no último provento. Ancorar no último
+        # pagamento faria uma empresa que parou de distribuir há dois anos
+        # aparecer com o DY da época em que ainda pagava.
+        agora = pd.Timestamp.now(tz=indice.tz) if getattr(indice, "tz", None) else pd.Timestamp.now()
+        recentes = proventos[indice > (agora - pd.Timedelta(days=365))]
+        total = float(recentes.sum())
+    except Exception:  # noqa: BLE001
+        return None
+
+    if total <= 0:
+        return 0.0  # a série existe e não houve provento em 12 meses
+
+    dy = total / float(preco) * 100.0
+    return dy if 0 < dy < 100 else None
+
+
+def fundamentos_por_demonstrativo(ativo, preco):
+    """Múltiplos reconstruídos a partir de balanço, DRE e proventos.
+
+    Existe porque `.info` usa o endpoint quoteSummary do Yahoo, que é o
+    primeiro a ser limitado — e quando ele cai, o papel aparecia só com preço e
+    sem veredito. Balanço e DRE vêm por outra rota e costumam sobreviver.
+
+    Tudo que não fecha volta None: reconstruir é aceitável, estimar não.
+    """
+    derivados = {"pl": None, "pvp": None, "roe": None, "margem_liq": None, "dy": None,
+                 "origem": "demonstrativos"}
+
+    try:
+        balanco = ativo.balance_sheet
+    except Exception:  # noqa: BLE001
+        balanco = None
+    try:
+        dre = ativo.income_stmt
+    except Exception:  # noqa: BLE001
+        dre = None
+
+    patrimonio = _linha_demonstrativo(balanco, ROTULOS_DEMONSTRATIVO["patrimonio_liquido"])
+    acoes = _linha_demonstrativo(balanco, ROTULOS_DEMONSTRATIVO["acoes_emitidas"])
+    lucro = _linha_demonstrativo(dre, ROTULOS_DEMONSTRATIVO["lucro_liquido"])
+    receita = _linha_demonstrativo(dre, ROTULOS_DEMONSTRATIVO["receita_liquida"])
+
+    if lucro is not None and patrimonio and patrimonio > 0:
+        roe = lucro / patrimonio * 100.0
+        if abs(roe) <= ROE_MAXIMO_PLAUSIVEL:
+            derivados["roe"] = roe
+
+    if lucro is not None and receita and receita > 0:
+        derivados["margem_liq"] = lucro / receita * 100.0
+
+    if preco and acoes and acoes > 0:
+        if patrimonio and patrimonio > 0:
+            pvp = (preco * acoes) / patrimonio
+            if 0 < pvp < 100:
+                derivados["pvp"] = pvp
+        if lucro is not None and lucro > 0:
+            lpa = lucro / acoes
+            if lpa > 0:
+                pl = preco / lpa
+                if 0 < pl < 1000:
+                    derivados["pl"] = pl
+
+    derivados["dy"] = _dy_por_proventos(ativo, preco)
+    derivados["campos_brutos"] = {"patrimonio_liquido": patrimonio, "lucro_liquido": lucro,
+                                  "receita_liquida": receita, "acoes_emitidas": acoes}
+    return derivados
+
+
 def _info_tem_conteudo(info):
     """Payload parcial do Yahoo ainda é aproveitável.
 
@@ -758,6 +875,44 @@ def diagnosticar(completo: bool = Query(False, description="Inclui uma varredura
                                "erro": f"{type(exc).__name__}: {str(exc)[:300]}"}
     relatorio["multiplos"] = multiplos
 
+    # Quais endpoints do Yahoo ainda respondem. `.info` (quoteSummary) cai
+    # primeiro; balanço, DRE e proventos vêm por outra rota. É esta seção que
+    # diz se dá para reconstruir os múltiplos quando o .info some.
+    alternativos = {}
+    for alvo in alvos:
+        inicio = time.time()
+        try:
+            ativo = yf.Ticker(alvo)
+            balanco = ativo.balance_sheet
+            dre = ativo.income_stmt
+            try:
+                proventos = ativo.dividends
+                n_proventos = int(len(proventos)) if proventos is not None else 0
+            except Exception:  # noqa: BLE001
+                n_proventos = -1
+
+            try:
+                historico = ativo.history(period="5d", auto_adjust=True)
+                preco_ref = float(historico["Close"].dropna().iloc[-1])
+            except Exception:  # noqa: BLE001
+                preco_ref = 0.0
+            derivados = fundamentos_por_demonstrativo(ativo, preco_ref)
+
+            alternativos[alvo] = {
+                "segundos": round(time.time() - inicio, 1),
+                "balanco_ok": balanco is not None and not getattr(balanco, "empty", True),
+                "dre_ok": dre is not None and not getattr(dre, "empty", True),
+                "proventos": n_proventos,
+                "preco_usado": round(preco_ref, 2),
+                "campos_brutos": derivados.get("campos_brutos"),
+                "multiplos_reconstruidos": {k: derivados[k]
+                                            for k in ("pl", "pvp", "roe", "margem_liq", "dy")},
+            }
+        except Exception as exc:  # noqa: BLE001
+            alternativos[alvo] = {"erro": f"{type(exc).__name__}: {str(exc)[:200]}",
+                                  "segundos": round(time.time() - inicio, 1)}
+    relatorio["demonstrativos"] = alternativos
+
     if flag(completo):
         inicio = time.time()
         resultado = executar_scanner(forcar=True)
@@ -923,6 +1078,29 @@ def _auditar_simbolo(ticker_clean, simbolo):
     margem_liq = _num("profitMargins", 100.0)
     dy = normalizar_dy(info, preco_ref=preco)
 
+    # Quando o quoteSummary não responde, `.info` volta vazio e todos os
+    # múltiplos ficam None — o papel aparecia só com preço. Balanço, DRE e
+    # proventos vêm por outro endpoint: reconstruímos dali o que faltar.
+    origem_multiplos = "quoteSummary (.info)"
+    derivados = None
+    if any(valor is None for valor in (pl, pvp, roe, margem_liq, dy)):
+        derivados = fundamentos_por_demonstrativo(ativo, preco)
+        preenchidos = []
+        if pl is None and derivados["pl"] is not None:
+            pl, _ = derivados["pl"], preenchidos.append("P/L")
+        if pvp is None and derivados["pvp"] is not None:
+            pvp, _ = derivados["pvp"], preenchidos.append("P/VP")
+        if roe is None and derivados["roe"] is not None:
+            roe, _ = derivados["roe"], preenchidos.append("ROE")
+        if margem_liq is None and derivados["margem_liq"] is not None:
+            margem_liq, _ = derivados["margem_liq"], preenchidos.append("margem")
+        if dy is None and derivados["dy"] is not None:
+            dy, _ = derivados["dy"], preenchidos.append("DY")
+        if preenchidos:
+            origem_multiplos = ("demonstrativos publicados (" + ", ".join(preenchidos) + ")"
+                                if not info else
+                                "quoteSummary + demonstrativos (" + ", ".join(preenchidos) + ")")
+
     dados_10_anos = serie_anual(close)
     destruicao_historica = houve_destruicao_de_capital(dados_10_anos)
 
@@ -949,6 +1127,8 @@ def _auditar_simbolo(ticker_clean, simbolo):
         "score_geral": score,
         "recomendacao": veredito,
         "analise_racional": pontos_positivos + alertas_risco,
+        "origem_multiplos": origem_multiplos,
+        "campos_demonstrativo": (derivados or {}).get("campos_brutos"),
         "indicadores_tecnicos": {
             "rsi_wilder": rsi_val,
             "sma50": round(sma50, 2),
