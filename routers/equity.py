@@ -86,6 +86,7 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
 
     return score, veredito, pontos_positivos, alertas_risco
 
+
 def extrair_fundamentos_seguro(ticker_yf):
     try:
         tk = yf.Ticker(ticker_yf)
@@ -96,16 +97,29 @@ def extrair_fundamentos_seguro(ticker_yf):
         raw_dy = (info.get("dividendYield") or 0.0) * 100
         dy = raw_dy if raw_dy < 100 else raw_dy / 100
 
+        # FALLBACK ROE: Resolve o problema da PETR4 no Scanner
+        roe_bruto = info.get("returnOnEquity")
+        if roe_bruto is not None and roe_bruto != 0:
+            roe = float(roe_bruto) * 100
+        else:
+            net_income = info.get("netIncomeToCommon") or 0
+            total_equity = info.get("totalStockholderEquity") or 1
+            if total_equity > 0 and net_income != 0:
+                roe = (net_income / total_equity) * 100
+            else:
+                roe = 0.0
+
         return {
             "pl": info.get("trailingPE") or 0.0,
             "pvp": info.get("priceToBook") or 0.0,
-            "roe": (info.get("returnOnEquity") or 0.0) * 100,
+            "roe": roe,
             "margem_liq": (info.get("profitMargins") or 0.0) * 100,
             "dy": dy,
             "nome": info.get("shortName", ticker_yf.replace(".SA", ""))
         }
     except:
         return None
+
 
 @router.get("/scanner-quantamental")
 def executar_scanner():
@@ -115,10 +129,8 @@ def executar_scanner():
     lista_yf = list(tickers_yf_map.values())
     
     try:
-        # Download VETORIZADO (1 requisição única puxa todos os preços)
         df_prices = yf.download(lista_yf, period="6mo", interval="1d", progress=False, group_by='ticker')
         
-        # Puxa os múltiplos paralelamente sem quebrar o limite da API
         info_data = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
             futures = {executor.submit(extrair_fundamentos_seguro, tyf): tyf for tyf in lista_yf}
@@ -133,7 +145,6 @@ def executar_scanner():
                 continue
                 
             try:
-                # Trata estrutura do dataframe de preços
                 if len(lista_yf) > 1 and ticker_yf in df_prices.columns.levels[0]:
                     sub_df = df_prices[ticker_yf].dropna()
                 else:
@@ -180,6 +191,7 @@ def executar_scanner():
     except Exception as e:
         return {"erro": str(e), "total": 0, "oportunidades": []}
 
+
 @router.get("/acao/{ticker}")
 def auditar_acao(ticker: str):
     ticker_clean = ticker.upper().strip()
@@ -194,13 +206,24 @@ def auditar_acao(ticker: str):
         pl = info.get("trailingPE") or 0.0
         pvp = info.get("priceToBook") or 0.0
         ev_ebitda = info.get("enterpriseToEbitda") or 0.0
-        roe = (info.get("returnOnEquity") or 0.0) * 100
         margem_liq = (info.get("profitMargins") or 0.0) * 100
         
         raw_dy = (info.get("dividendYield") or 0.0) * 100
         dy = raw_dy if raw_dy < 100 else raw_dy / 100
 
-        # Histórico pesado de 10 Anos (somente puxado na análise individual)
+        # FALLBACK ROE: Resolve o problema na auditoria individual
+        roe_bruto = info.get("returnOnEquity")
+        if roe_bruto is not None and roe_bruto != 0:
+            roe = float(roe_bruto) * 100
+        else:
+            net_income = info.get("netIncomeToCommon") or 0
+            total_equity = info.get("totalStockholderEquity") or 1
+            if total_equity > 0 and net_income != 0:
+                roe = (net_income / total_equity) * 100
+            else:
+                roe = 0.0
+
+        # Histórico pesado de 10 Anos
         historico = ativo.history(period="10y", interval="1d")
         if historico.empty: return {"erro": "Sem dados históricos disponíveis."}
 
@@ -235,7 +258,6 @@ def auditar_acao(ticker: str):
 
         destruicao_historica = len(retornos_anuais) >= 3 and np.mean(retornos_anuais[-3:]) < -30
 
-        # Usa O EXATO MESMO MOTOR do Scanner
         score, veredito, pontos_positivos, alertas_risco = calcular_score_quantamental(
             pl, pvp, roe, dy, margem_liq, tendencia, rsi_val, destruicao_historica
         )
@@ -261,28 +283,25 @@ def auditar_acao(ticker: str):
         }
     except Exception as e:
         return {"erro": f"Erro ao processar ativo: {str(e)}"}
+
+
 @router.get("/ticker-tape")
 def get_ticker_tape():
     """Busca cotações em tempo real para a barra de rolagem (Ticker Tape)"""
-    # Principais termômetros do mercado
     tickers = ["^BVSP", "USDBRL=X", "PETR4.SA", "VALE3.SA", "ITUB4.SA", "WEGE3.SA", "BBDC4.SA", "BBAS3.SA", "ELET3.SA", "RENT3.SA"]
     
     try:
-        # Puxa 5 dias para garantir que teremos o fechamento de ontem e o de hoje
         dados = yf.download(tickers, period="5d", interval="1d", progress=False)['Close']
         
         resultados = []
         for t in tickers:
             try:
-                # Limpa os dados vazios (feriados/fds) e pega os dois últimos dias úteis
                 validos = dados[t].dropna()
                 if len(validos) >= 2:
                     preco_atual = float(validos.iloc[-1])
                     preco_anterior = float(validos.iloc[-2])
                     
                     variacao = ((preco_atual - preco_anterior) / preco_anterior) * 100
-                    
-                    # Nomes limpos para a tela
                     nome = t.replace(".SA", "").replace("^BVSP", "IBOV").replace("USDBRL=X", "USD/BRL")
                     
                     resultados.append({
@@ -293,55 +312,6 @@ def get_ticker_tape():
             except:
                 continue
 
-        # Trecho de cálculo e tratamento defensivo para ROE e Valuation
-
-info = ativo.info
-
-# 1. Tratamento seguro de ROE (extrai ou calcula via Lucro Líquido / Patrimônio Líquido)
-roe_bruto = info.get("returnOnEquity")
-if roe_bruto is not None and roe_bruto != 0:
-    roe = round(float(roe_bruto) * 100, 2)
-else:
-    # Fallback: calcula ROE manualmente se houver lucro e patrimônio líquido
-    net_income = info.get("netIncomeToCommon") or 0
-    total_equity = info.get("totalStockholderEquity") or 1
-    if total_equity > 0 and net_income != 0:
-        roe = round((net_income / total_equity) * 100, 2)
-    else:
-        roe = 0.0
-
-# 2. Tratamento seguro de Preço Justo e Graham (não travar se algum múltiplo falhar)
-lpa = info.get("trailingEps") or 0.0
-vpa = info.get("bookValue") or 0.0
-preco_atual = info.get("currentPrice") or info.get("regularMarketPrice") or 0.0
-
-preco_graham = None
-desconto_graham = None
-
-if lpa > 0 and vpa > 0:
-    try:
-        preco_graham = round(float(np.sqrt(22.5 * lpa * vpa)), 2)
-        if preco_atual > 0:
-            desconto_graham = round(((preco_graham - preco_atual) / preco_graham) * 100, 2)
-    except Exception:
-        preco_graham = None
-
-# 3. Motor de Recomendação Robusto (não trava mesmo se o ROE for neutro/negativo)
-pvp = info.get("priceToBook") or 1.0
-pl = info.get("trailingPE") or 0.0
-
-if preco_atual <= 0:
-    recomendacao = "DADOS INDISPONÍVEIS"
-elif desconto_graham is not None and desconto_graham > 15:
-    recomendacao = "COMPRA FORTE (Subavaliado por Graham)"
-elif pvp < 0.90 and roe > 5.0:
-    recomendacao = "COMPRA (Desconto Patrimonial com Rentabilidade)"
-elif pvp < 0.80:
-    recomendacao = "COMPRA ESPECULATIVA (Forte Desconto P/VP)"
-elif pl > 15.0 or pvp > 2.0:
-    recomendacao = "REALIZAR / NEUTRO (Múltiplos Esticados)"
-else:
-    recomendacao = "MANTER (Preço de Equilíbrio)"
         return resultados
     except Exception as e:
         return []
