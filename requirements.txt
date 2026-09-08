@@ -9,3 +9,4 @@ python-multipart
 ccxt
 requests
 python-dotenvpypdf 
+yfinance 
