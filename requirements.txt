@@ -8,5 +8,6 @@ jinja2
 python-multipart
 ccxt
 requests
-python-dotenvpypdf 
-yfinance 
+python-dotenv
+pypdf
+yfinance
