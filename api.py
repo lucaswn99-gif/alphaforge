@@ -17,7 +17,8 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.responses import FileResponse, HTMLResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from routers import equity, fixed_income, mercado, quantitativo, wealth  # noqa: E402
+from routers import (equity, fixed_income, mercado, opcoes, quantitativo,  # noqa: E402
+                     wealth)
 
 # O router `trading` está fora da aplicação de propósito. Ele dependia do
 # MetaTrader 5 (Windows-only, inerte no servidor) e expunha /executar-ordem,
@@ -28,7 +29,7 @@ from routers import equity, fixed_income, mercado, quantitativo, wealth  # noqa:
 app = FastAPI(
     title="Alphaforge Analytics",
     description="Terminal Institucional Quantamental.",
-    version="3.3.0",
+    version="3.4.0",
 )
 
 app.include_router(fixed_income.router)
@@ -36,6 +37,7 @@ app.include_router(equity.router)
 app.include_router(wealth.router)
 app.include_router(mercado.router)
 app.include_router(quantitativo.router)
+app.include_router(opcoes.router)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ESTATICOS = os.path.join(BASE_DIR, "static")

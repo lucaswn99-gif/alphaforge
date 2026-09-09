@@ -16,3 +16,6 @@ modules/cache_ibov.json
 # Preview enviado pelo Claude para conferencia visual — nao faz parte do servico
 Claude outputs/
 preview_terminal.html
+
+# Arquivo gravado por engano; pode apagar da pasta.
+modules/opcoes_tmp_ignore.py

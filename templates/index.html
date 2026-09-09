@@ -153,6 +153,7 @@
   <button onclick="alternarAba('renda-variavel')" id="btn-tab-renda-variavel" class="aba">Renda Variável</button>
   <button onclick="alternarAba('quant')"          id="btn-tab-quant"           class="aba">Quantitativo</button>
   <button onclick="alternarAba('fundos')"         id="btn-tab-fundos"         class="aba">FIIs &amp; ETFs</button>
+  <button onclick="alternarAba('opcoes')"         id="btn-tab-opcoes"          class="aba">Opções</button>
   <button onclick="alternarAba('renda-fixa')"     id="btn-tab-renda-fixa"     class="aba">Crédito</button>
   <button onclick="alternarAba('allocation')"     id="btn-tab-allocation"     class="aba">Alocação</button>
 </nav>
@@ -319,6 +320,95 @@
           <p class="text-[10px] mt-0.5" style="color: var(--suave)" id="acaoOrigemMultiplos"></p>
         </div>
       </div>
+    </div>
+  </section>
+
+
+  <!-- ================= ABA: OPÇÕES ================= -->
+  <section id="tab-opcoes" class="hidden space-y-5">
+
+    <div class="painel p-4">
+      <h2 class="rotulo">Estruturas recomendadas</h2>
+      <p class="text-[11px] mt-1 mb-4" style="color: var(--suave)">
+        A recomendação usa três eixos: direção, <b>preço da volatilidade</b> (implícita contra a
+        que você espera realizar) e objetivo. O segundo é o que a maioria ignora — estar certo
+        na direção e comprado em opção cara é uma das formas mais comuns de perder dinheiro.
+      </p>
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <label><span class="text-[10px]" style="color: var(--suave)">Ativo</span>
+          <input type="text" id="op_ticker" value="PETR4" class="campo uppercase w-full mt-1"></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Preço do ativo</span>
+          <input type="number" step="any" id="op_spot" value="48.00" class="campo mono w-full mt-1"></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Dias úteis p/ vencer</span>
+          <input type="number" step="1" id="op_dias" value="21" class="campo mono w-full mt-1"></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Vol implícita (%)</span>
+          <input type="number" step="any" id="op_vol_imp" value="42" class="campo mono w-full mt-1"></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Vol que espera (%)</span>
+          <input type="number" step="any" id="op_vol_esp" value="35" class="campo mono w-full mt-1"></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Retorno esperado (% a.a.)</span>
+          <input type="number" step="any" id="op_retorno" value="15" class="campo mono w-full mt-1"></label>
+      </div>
+      <div class="flex gap-3 flex-wrap items-end mt-3">
+        <label><span class="text-[10px]" style="color: var(--suave)">Visão</span>
+          <select id="op_visao" class="campo text-[11px] py-1.5 mt-1 block">
+            <option value="alta_forte">Alta forte</option>
+            <option value="alta_moderada" selected>Alta moderada</option>
+            <option value="lateral">Lateral</option>
+            <option value="baixa_moderada">Baixa moderada</option>
+            <option value="baixa_forte">Baixa forte</option>
+          </select></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Objetivo</span>
+          <select id="op_objetivo" class="campo text-[11px] py-1.5 mt-1 block">
+            <option value="direcional">Direcional</option>
+            <option value="renda">Renda</option>
+            <option value="protecao">Proteção</option>
+          </select></label>
+        <label class="flex items-center gap-1.5 text-[11px] pb-2" style="color: var(--suave)">
+          <input type="checkbox" id="op_tem_acao"> tenho a ação em carteira</label>
+        <button onclick="recomendarOpcoes()" id="btnOpcoes" class="btn">Recomendar</button>
+      </div>
+    </div>
+
+    <p id="opcoesAviso" class="hidden text-xs rounded px-4 py-3 border"></p>
+
+    <div id="painelVol" class="hidden painel p-4">
+      <div class="flex items-center gap-3 flex-wrap">
+        <span id="opBadgeVol" class="px-3 py-1.5 rounded text-[11px] font-bold uppercase tracking-wider">—</span>
+        <p class="text-[11px] flex-1 min-w-[240px]" style="color: var(--suave)" id="opLeituraVol"></p>
+      </div>
+    </div>
+
+    <div id="opcoesSugestoes" class="space-y-4"></div>
+
+    <div id="opcoesRejeitadas" class="painel p-4 hidden">
+      <h3 class="rotulo mb-2">Não sugeridas neste cenário</h3>
+      <div id="opcoesRejeitadasLista" class="space-y-1"></div>
+    </div>
+
+    <div class="painel p-4">
+      <h2 class="rotulo mb-1">Precificador de opção</h2>
+      <p class="text-[11px] mb-3" style="color: var(--suave)">
+        Prêmio teórico, gregas e volatilidade implícita. Informe a vol para precificar,
+        ou o prêmio de tela para extrair a implícita — os dois juntos comparam teórico e mercado.
+      </p>
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <label><span class="text-[10px]" style="color: var(--suave)">Tipo</span>
+          <select id="pc_tipo" class="campo text-[11px] py-1.5 mt-1 block w-full">
+            <option value="call">Call</option><option value="put">Put</option></select></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Preço do ativo</span>
+          <input type="number" step="any" id="pc_spot" value="48.00" class="campo mono w-full mt-1"></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Strike</span>
+          <input type="number" step="any" id="pc_strike" value="50.00" class="campo mono w-full mt-1"></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Dias úteis</span>
+          <input type="number" step="1" id="pc_dias" value="21" class="campo mono w-full mt-1"></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Vol (%)</span>
+          <input type="number" step="any" id="pc_vol" value="42" class="campo mono w-full mt-1"></label>
+        <label><span class="text-[10px]" style="color: var(--suave)">Prêmio de tela</span>
+          <input type="number" step="any" id="pc_premio" placeholder="opcional" class="campo mono w-full mt-1"></label>
+      </div>
+      <button onclick="precificarOpcao()" id="btnPrecificar" class="btn mt-3">Calcular</button>
+      <div id="pcResultado" class="hidden mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+      <p id="pcLeitura" class="text-[10px] mt-3" style="color: var(--suave)"></p>
     </div>
   </section>
 
@@ -687,7 +777,7 @@ function atualizarRelogio() {
 }
 
 // ===================== navegação =========================
-const ABAS = ['mercado', 'renda-variavel', 'quant', 'fundos', 'renda-fixa', 'allocation'];
+const ABAS = ['mercado', 'renda-variavel', 'quant', 'opcoes', 'fundos', 'renda-fixa', 'allocation'];
 const JA_CARREGADA = {};
 
 function alternarAba(aba) {
@@ -1228,6 +1318,224 @@ function montarGrafico(ticker, intervalo) {
 
 function trocarIntervalo(intervalo) {
   if (TV_TICKER) montarGrafico(TV_TICKER, intervalo);
+}
+
+
+// ===================== opções =========================
+// O gráfico de payoff é desenhado à mão em SVG: é uma linha e dois eixos, e
+// carregar biblioteca para isso seria peso sem ganho. O zero fica marcado, e o
+// que está acima dele é pintado de verde, abaixo de vermelho — a leitura é
+// instantânea, que é o ponto de um payoff.
+function desenharPayoff(curva, spot, largura = 520, altura = 150) {
+  if (!curva || curva.length < 2) return '';
+  const xs = curva.map(p => p.preco), ys = curva.map(p => p.resultado);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys, 0), yMax = Math.max(...ys, 0);
+  const margem = 22;
+  const px = v => margem + (v - xMin) / (xMax - xMin || 1) * (largura - margem * 2);
+  const py = v => altura - margem - (v - yMin) / (yMax - yMin || 1) * (altura - margem * 2);
+
+  const linha = curva.map((p, i) => `${i ? 'L' : 'M'}${px(p.preco).toFixed(1)},${py(p.resultado).toFixed(1)}`).join('');
+  const yZero = py(0);
+  // Área preenchida entre a curva e o zero, cortada pelo lado positivo/negativo.
+  const area = (positiva) => {
+    const base = curva.map(p => ({ x: px(p.preco), y: py(positiva ? Math.max(p.resultado, 0) : Math.min(p.resultado, 0)) }));
+    return `M${base[0].x.toFixed(1)},${yZero.toFixed(1)}`
+      + base.map(b => `L${b.x.toFixed(1)},${b.y.toFixed(1)}`).join('')
+      + `L${base[base.length - 1].x.toFixed(1)},${yZero.toFixed(1)}Z`;
+  };
+
+  return `<svg viewBox="0 0 ${largura} ${altura}" width="100%" height="${altura}" style="overflow:visible">
+    <path d="${area(true)}"  fill="var(--verde)"    opacity="0.16"/>
+    <path d="${area(false)}" fill="var(--vermelho)" opacity="0.16"/>
+    <line x1="${margem}" y1="${yZero}" x2="${largura - margem}" y2="${yZero}"
+          stroke="#3a4450" stroke-width="1"/>
+    <line x1="${px(spot)}" y1="${margem / 2}" x2="${px(spot)}" y2="${altura - margem / 2}"
+          stroke="var(--ambar)" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>
+    <path d="${linha}" fill="none" stroke="var(--verde)" stroke-width="1.8"/>
+    <text x="${px(spot)}" y="${margem / 2 - 3}" font-size="8" fill="var(--ambar)"
+          text-anchor="middle" font-family="IBM Plex Mono">spot ${spot}</text>
+    <text x="${margem - 4}" y="${yZero + 3}" font-size="8" fill="#4a554e"
+          text-anchor="end" font-family="IBM Plex Mono">0</text>
+    <text x="${margem}" y="${altura - 4}" font-size="8" fill="#4a554e" font-family="IBM Plex Mono">${xMin.toFixed(0)}</text>
+    <text x="${largura - margem}" y="${altura - 4}" font-size="8" fill="#4a554e"
+          text-anchor="end" font-family="IBM Plex Mono">${xMax.toFixed(0)}</text>
+  </svg>`;
+}
+
+const ESTILO_VOL = {
+  cara:   'background:#3a2c08;color:var(--ambar)',
+  barata: 'background:#0b3a24;color:var(--verde)',
+  justa:  'background:#1a2320;color:#78877f',
+};
+
+function reais(v) {
+  if (v === null || v === undefined) return '<span style="color:#4a554e">ilimitado</span>';
+  return `<span class="mono">${Number(v).toFixed(2)}</span>`;
+}
+
+async function recomendarOpcoes() {
+  const btn = document.getElementById('btnOpcoes');
+  const corpo = {
+    visao: document.getElementById('op_visao').value,
+    objetivo: document.getElementById('op_objetivo').value,
+    spot: Number(document.getElementById('op_spot').value),
+    dias: Number(document.getElementById('op_dias').value),
+    vol_esperada: Number(document.getElementById('op_vol_esp').value),
+    vol_implicita: Number(document.getElementById('op_vol_imp').value) || null,
+    retorno_esperado_ativo: Number(document.getElementById('op_retorno').value),
+    tem_acao: document.getElementById('op_tem_acao').checked,
+  };
+  if (!corpo.spot || !corpo.dias || !corpo.vol_esperada) {
+    mostrarAviso('opcoesAviso', 'Preço do ativo, prazo e volatilidade esperada são obrigatórios.', 'alerta');
+    return;
+  }
+
+  btn.innerText = 'Calculando…'; btn.disabled = true;
+  mostrarAviso('opcoesAviso', '');
+  try {
+    const res = await fetch('/api/opcoes/recomendar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+    if (!res.ok) { mostrarAviso('opcoesAviso', `O servidor respondeu ${res.status}.`); return; }
+    const d = await res.json();
+    if (d.erro) { mostrarAviso('opcoesAviso', esc(d.erro)); return; }
+
+    document.getElementById('painelVol').classList.remove('hidden');
+    const badge = document.getElementById('opBadgeVol');
+    badge.innerText = `implícita ${d.preco_volatilidade}`
+      + (d.razao_implicita_esperada !== null ? ` (${d.razao_implicita_esperada > 0 ? '+' : ''}${d.razao_implicita_esperada}%)` : '');
+    badge.setAttribute('style', ESTILO_VOL[d.preco_volatilidade] || ESTILO_VOL.justa);
+    document.getElementById('opLeituraVol').innerText = d.leitura_volatilidade || '';
+
+    const ticker = document.getElementById('op_ticker').value.toUpperCase();
+    document.getElementById('opcoesSugestoes').innerHTML = (d.sugeridas || []).map((s, i) => {
+      const a = s.avaliacao;
+      const pernas = (a.pernas || []).map(p => {
+        const cor = p.posicao === 'compra' ? 'var(--verde)' : 'var(--vermelho)';
+        const strike = p.strike ? ` ${Number(p.strike).toFixed(2)}` : '';
+        return `<span class="mono text-[10px] px-1.5 py-0.5 rounded" style="background:var(--painel-alt);border:1px solid var(--borda)">
+          <span style="color:${cor}">${p.posicao === 'compra' ? 'C' : 'V'}</span>
+          ${p.quantidade > 1 ? p.quantidade + 'x ' : ''}${esc(p.tipo)}${strike} @ ${Number(p.premio).toFixed(2)}</span>`;
+      }).join(' ');
+
+      return `
+      <div class="painel p-4">
+        <div class="flex justify-between items-start gap-3 flex-wrap mb-3">
+          <div class="flex-1 min-w-[260px]">
+            <div class="flex items-center gap-2">
+              <span class="mono text-[10px] px-1.5 rounded" style="background:var(--verde);color:#04120b">${i + 1}º</span>
+              <h3 class="text-sm font-bold">${esc(s.nome)}</h3>
+              <span class="text-[10px] mono" style="color:#4a554e">aderência ${s.aderencia}</span>
+            </div>
+            <p class="text-[11px] mt-1" style="color: var(--suave)">${esc(s.resumo)}</p>
+            <div class="flex gap-1 flex-wrap mt-2">${pernas}</div>
+          </div>
+          <div class="text-right">
+            <p class="rotulo">Retorno esperado</p>
+            <p class="text-2xl font-bold mono" style="color:${(a.retorno_esperado_pct || 0) >= 0 ? 'var(--verde)' : 'var(--vermelho)'}">
+              ${a.retorno_esperado_pct === null ? '—' : a.retorno_esperado_pct + '%'}</p>
+            <p class="text-[10px]" style="color: var(--suave)">acerto ${a.probabilidade_lucro}%</p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div>${desenharPayoff(s.curva_payoff, corpo.spot)}</div>
+          <div class="grid grid-cols-2 gap-2 text-[11px]">
+            <div class="p-2 rounded" style="background:var(--painel-alt)">
+              <span class="rotulo block">${a.tipo_montagem === 'crédito' ? 'Crédito recebido' : 'Custo'}</span>
+              ${reais(Math.abs(a.custo_liquido))}</div>
+            <div class="p-2 rounded" style="background:var(--painel-alt)">
+              <span class="rotulo block">Ganho máximo</span>${reais(a.lucro_maximo)}</div>
+            <div class="p-2 rounded" style="background:var(--painel-alt)">
+              <span class="rotulo block">Perda máxima</span>
+              <span style="color:${a.perda_ilimitada ? 'var(--vermelho)' : 'inherit'}">${reais(a.perda_maxima)}</span></div>
+            <div class="p-2 rounded" style="background:var(--painel-alt)">
+              <span class="rotulo block">Equilíbrio</span>
+              <span class="mono">${(a.pontos_equilibrio || []).map(x => Number(x).toFixed(2)).join(' · ') || '—'}</span></div>
+            <div class="p-2 rounded col-span-2" style="background:var(--painel-alt)">
+              <span class="rotulo block mb-1">Gregas</span>
+              <span class="mono text-[10px]" style="color: var(--suave)">
+                Δ ${num(a.gregas.delta, 3)} · Γ ${num(a.gregas.gama, 4)} ·
+                vega ${num(a.gregas.vega, 3)} · θ ${num(a.gregas.theta, 3)}/dia</span></div>
+          </div>
+        </div>
+
+        <div class="mt-3 pt-2 border-t space-y-1" style="border-color: var(--borda)">
+          ${(s.razoes || []).map(r => `<p class="text-[10px]" style="color:${r.startsWith('⚠') ? 'var(--ambar)' : 'var(--suave)'}">${esc(r)}</p>`).join('')}
+          <p class="text-[10px] mt-2" style="color: var(--suave)"><b>Quando usar:</b> ${esc(s.quando)}</p>
+          <p class="text-[10px]" style="color: var(--ambar)"><b>Quando NÃO usar:</b> ${esc(s.quando_nao)}</p>
+        </div>
+      </div>`;
+    }).join('');
+
+    // As rejeitadas ficam à vista: saber por que uma estrutura não foi
+    // sugerida ensina mais que a lista das sugeridas.
+    const rej = d.rejeitadas || [];
+    document.getElementById('opcoesRejeitadas').classList.toggle('hidden', !rej.length);
+    document.getElementById('opcoesRejeitadasLista').innerHTML = rej.map(r =>
+      `<p class="text-[11px]" style="color:#4a554e"><b style="color:var(--suave)">${esc(r.nome)}</b> — ${esc(r.motivo)}</p>`).join('');
+
+    mostrarAviso('opcoesAviso',
+      `<b>Prêmios teóricos.</b> ${esc(d.premissa)} Taxa livre de risco: ${d.taxa_livre_risco_aa}% a.a.`
+      + ` · Retorno esperado do ativo assumido: ${(d.retorno_esperado_ativo * 100).toFixed(1)}% a.a.`, 'info');
+  } catch (e) {
+    mostrarAviso('opcoesAviso', `Falha ao recomendar: ${esc(e.message || e)}`);
+  } finally { btn.innerText = 'Recomendar'; btn.disabled = false; }
+}
+
+async function precificarOpcao() {
+  const btn = document.getElementById('btnPrecificar');
+  const q = new URLSearchParams({
+    tipo: document.getElementById('pc_tipo').value,
+    spot: document.getElementById('pc_spot').value,
+    strike: document.getElementById('pc_strike').value,
+    dias: document.getElementById('pc_dias').value,
+  });
+  const vol = document.getElementById('pc_vol').value;
+  const premio = document.getElementById('pc_premio').value;
+  if (vol) q.set('vol', vol);
+  if (premio) q.set('premio_mercado', premio);
+
+  btn.innerText = 'Calculando…'; btn.disabled = true;
+  try {
+    const res = await fetch(`/api/opcoes/precificar?${q}`);
+    const d = await res.json();
+    if (d.erro) { mostrarAviso('opcoesAviso', esc(d.erro), 'alerta'); return; }
+    mostrarAviso('opcoesAviso', '');
+
+    const cartao = (rotulo, valor, cor) => `
+      <div class="p-2.5 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+        <span class="rotulo block mb-1">${rotulo}</span>
+        <span class="mono text-sm font-semibold" style="color:${cor || 'inherit'}">${valor}</span></div>`;
+
+    // Teórico contra tela é a leitura que interessa: se o mercado pede mais
+    // que o modelo, a implícita está acima da vol que você digitou.
+    const diferenca = (d.premio_mercado && d.premio_teorico)
+      ? (d.premio_mercado - d.premio_teorico) : null;
+
+    document.getElementById('pcResultado').classList.remove('hidden');
+    document.getElementById('pcResultado').innerHTML =
+      cartao('Prêmio teórico', Number(d.premio_teorico).toFixed(3), 'var(--verde)')
+      + cartao('Vol usada', d.volatilidade_usada_pct + '%')
+      + cartao('Vol implícita', d.volatilidade_implicita_pct ? d.volatilidade_implicita_pct + '%' : '—')
+      + cartao('Delta', num(d.gregas.delta, 4))
+      + cartao('Gama', num(d.gregas.gama, 5))
+      + cartao('Vega', num(d.gregas.vega, 4))
+      + cartao('Theta/dia', num(d.gregas.theta, 4), 'var(--vermelho)')
+      + cartao('Rho', num(d.gregas.rho, 4))
+      + (diferenca !== null
+          ? cartao('Tela − teórico', diferenca.toFixed(3),
+                   diferenca > 0 ? 'var(--ambar)' : 'var(--verde)')
+          : '');
+
+    document.getElementById('pcLeitura').innerText =
+      `Vega por 1 ponto de volatilidade · theta por dia corrido · taxa ${d.premissas.taxa_livre_risco_aa}% a.a. `
+      + `(${d.premissas.origem_taxa}) · ${d.premissas.base_prazo} · ${d.premissas.modelo}`;
+  } catch (e) {
+    mostrarAviso('opcoesAviso', `Falha ao precificar: ${esc(e.message || e)}`);
+  } finally { btn.innerText = 'Calcular'; btn.disabled = false; }
 }
 
 // ===================== FIIs e ETFs =========================
