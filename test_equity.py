@@ -222,12 +222,14 @@ class TestRoe(unittest.TestCase):
         _, veredito, _, _ = equity.calcular_score_quantamental(roe=0.0, **base)
         self.assertEqual(veredito, "VENDA / ALTO RISCO")
 
-    def test_roe_nao_apurado_nao_ganha_bonus(self):
-        base = dict(pl=30.0, pvp=3.0, dy=1.0, margem_liq=5.0,
-                    tendencia_grafica="BAIXA", rsi_val=50.0)
+    def test_roe_alto_pontua_mais_que_roe_nao_apurado(self):
+        base = dict(pl=8.0, pvp=1.2, dy=6.0, margem_liq=15.0,
+                    tendencia_grafica="ALTA", rsi_val=50.0)
         sem_roe, _, _, _ = equity.calcular_score_quantamental(roe=None, **base)
-        com_roe, _, _, _ = equity.calcular_score_quantamental(roe=25.0, **base)
-        self.assertEqual(com_roe - sem_roe, 15)
+        com_roe, _, _, _ = equity.calcular_score_quantamental(roe=35.0, **base)
+        roe_fraco, _, _, _ = equity.calcular_score_quantamental(roe=6.0, **base)
+        self.assertGreater(com_roe, sem_roe)
+        self.assertGreater(sem_roe, roe_fraco, "ROE baixo apurado é pior que ROE ausente")
 
 
 class TestRSI(unittest.TestCase):
@@ -314,17 +316,16 @@ class TestMotorUnico(unittest.TestCase):
         self.assertLessEqual(score, 35)
         self.assertTrue(any("Value Trap" in a for a in alertas))
 
-    def test_dy_inflado_mudava_o_score(self):
-        """Quantifica o bug de DY: +10 pontos indevidos, o bastante para virar
-        um VENDA em NEUTRO. Entradas fora do teto de 98 para o efeito aparecer."""
+    def test_dy_inflado_inflava_o_score(self):
+        """O bug de DY somava pontos indevidos. Hoje, além de somar menos, um
+        yield implausível ainda dispara alerta."""
         base = dict(pl=30.0, pvp=3.0, roe=10.0, margem_liq=5.0,
                     tendencia_grafica="BAIXA", rsi_val=50.0, dy=0.5)
-        s_correto, v_correto, _, _ = equity.calcular_score_quantamental(**base)
+        s_correto, _, _, _ = equity.calcular_score_quantamental(**base)
         base_bug = dict(base); base_bug["dy"] = 50.0  # 0,5% lido como 50%
-        s_bug, v_bug, _, _ = equity.calcular_score_quantamental(**base_bug)
-        self.assertEqual(s_bug - s_correto, 10)
-        self.assertEqual(v_correto, "VENDA")
-        self.assertEqual(v_bug, "NEUTRO")
+        s_bug, _, _, alertas = equity.calcular_score_quantamental(**base_bug)
+        self.assertGreater(s_bug, s_correto)
+        self.assertTrue(any("raramente é recorrente" in a for a in alertas))
 
 
 class TestFatiarPrecos(unittest.TestCase):
@@ -471,11 +472,21 @@ class TestFundamentosOpcionais(unittest.TestCase):
     """O caso que esvaziava a tabela: rate limit no .info derrubava os 95
     papéis, mesmo com a série de preço tendo vindo inteira."""
 
+    SEM_CVM = {"pl": None, "pvp": None, "roe": None, "margem_liq": None,
+               "exercicio": None, "disponivel": False}
+    COM_CVM = {"pl": 6.0, "pvp": 1.0, "roe": 18.0, "margem_liq": 12.0,
+               "exercicio": 2025, "disponivel": True}
+
     def setUp(self):
         self.orig_comp = equity.composicao_ibov.obter_composicao
         self.orig_download = equity.yf.download
         self.orig_ticker = equity.yf.Ticker
         self.orig_tentativas = equity.SCANNER_TENTATIVAS
+        self.orig_cvm = equity.fundamentos_cvm.multiplos_do_ticker
+        # Estes testes são sobre o Yahoo cair. A base da CVM entra ou não por
+        # decisão explícita — antes ela entrava conforme o arquivo .db existisse
+        # na máquina, e o mesmo teste passava aqui e falhava na do Lucas.
+        equity.fundamentos_cvm.multiplos_do_ticker = lambda t, **k: dict(self.SEM_CVM)
         self.extras = list(equity.ACOES_FORA_DO_INDICE)
         equity.SCANNER_TENTATIVAS = 1
         equity.ACOES_FORA_DO_INDICE.clear()
@@ -489,6 +500,7 @@ class TestFundamentosOpcionais(unittest.TestCase):
         equity.yf.download = self.orig_download
         equity.yf.Ticker = self.orig_ticker
         equity.SCANNER_TENTATIVAS = self.orig_tentativas
+        equity.fundamentos_cvm.multiplos_do_ticker = self.orig_cvm
         equity.ACOES_FORA_DO_INDICE.extend(self.extras)
         equity._cache_scanner["payload"] = None
         equity._cache_scanner["carimbo"] = 0.0
@@ -538,6 +550,28 @@ class TestFundamentosOpcionais(unittest.TestCase):
         self.assertEqual(resposta["com_fundamentos"], 2)
         self.assertEqual([f["ticker"] for f in resposta["sem_fundamentos"]], ["VALE3"])
 
+    def test_com_a_base_da_cvm_o_yahoo_fora_do_ar_nao_esvazia_os_multiplos(self):
+        """A garantia atual, e o motivo de a versão anterior deste teste ter
+        virado do avesso: no Render o quoteSummary não responde nunca, e é a
+        CVM que sustenta a tabela. Se isto quebrar, o scanner em produção volta
+        a ficar sem múltiplos."""
+        equity.fundamentos_cvm.multiplos_do_ticker = lambda t, **k: dict(self.COM_CVM)
+
+        class Bloqueado:
+            def __init__(self, *a, **k):
+                raise RuntimeError("YFRateLimitError")
+
+        equity.yf.Ticker = Bloqueado
+        resposta = equity.executar_scanner(forcar=True)
+
+        self.assertEqual(resposta["total"], 3)
+        self.assertEqual(resposta["com_fundamentos"], 3)
+        for linha in resposta["oportunidades"]:
+            self.assertAlmostEqual(linha["roe"], 18.0)
+            self.assertEqual(linha["exercicio_cvm"], 2025)
+            self.assertIn("CVM 2025", linha["origem_fundamentos"])
+            self.assertNotIn("SEM DADOS", linha["veredito"])
+
 
 class TestMotorComIndicadoresAusentes(unittest.TestCase):
     def test_tudo_ausente_fica_neutro_e_avisa(self):
@@ -549,16 +583,49 @@ class TestMotorComIndicadoresAusentes(unittest.TestCase):
         self.assertLessEqual(score, 55, "preço puro não pode alcançar faixa de COMPRA")
         self.assertTrue(any("Sem dado na fonte" in a for a in alertas))
 
-    def test_ausencia_nao_pontua_nem_a_favor_nem_contra(self):
-        """Com cobertura suficiente (3+ indicadores) o teto de dados parciais
-        não interfere, e dá para isolar o efeito de um indicador."""
+    def test_multiplo_bom_pontua_mais_que_multiplo_caro(self):
+        """Asserção de ordem, não de delta exato: assim o teste sobrevive a
+        recalibração das faixas, que é o ponto de elas serem configuráveis."""
         base = dict(pvp=2.0, roe=10.0, dy=1.0, margem_liq=5.0,
                     tendencia_grafica="BAIXA", rsi_val=50.0)
-        sem_pl, _, _, _ = equity.calcular_score_quantamental(pl=None, **base)
-        pl_alto, _, _, _ = equity.calcular_score_quantamental(pl=40.0, **base)
-        pl_bom, _, _, _ = equity.calcular_score_quantamental(pl=8.0, **base)
-        self.assertEqual(pl_alto - sem_pl, -10)
-        self.assertEqual(pl_bom - sem_pl, 15)
+        pl_barato, _, _, _ = equity.calcular_score_quantamental(pl=4.0, **base)
+        pl_medio, _, _, _ = equity.calcular_score_quantamental(pl=13.0, **base)
+        pl_caro, _, _, _ = equity.calcular_score_quantamental(pl=40.0, **base)
+        self.assertGreater(pl_barato, pl_medio)
+        self.assertGreater(pl_medio, pl_caro)
+
+    def test_faixas_discriminam_dentro_da_zona_boa(self):
+        """O bug que empatava os dez primeiros em 98: P/L 5 e P/L 11 recebiam
+        os mesmos pontos, e ROE 15,5% empatava com ROE 68,5%."""
+        base = dict(pvp=1.5, dy=7.0, margem_liq=15.0,
+                    tendencia_grafica="ALTA", rsi_val=50.0)
+        muito_barato, _, _, _ = equity.calcular_score_quantamental(pl=5.0, roe=16.0, **base)
+        quase_caro, _, _, _ = equity.calcular_score_quantamental(pl=11.0, roe=16.0, **base)
+        self.assertGreater(muito_barato, quase_caro, "P/L 5 tem que valer mais que P/L 11")
+
+        roe_alto, _, _, _ = equity.calcular_score_quantamental(pl=9.0, roe=68.5, **base)
+        roe_baixo, _, _, _ = equity.calcular_score_quantamental(pl=9.0, roe=15.5, **base)
+        self.assertGreater(roe_alto, roe_baixo, "ROE 68,5% tem que valer mais que 15,5%")
+
+    def test_nenhum_papel_plausivel_encosta_no_teto(self):
+        """Score que satura vira empate, e empate não ordena."""
+        excelente, _, _, _ = equity.calcular_score_quantamental(
+            pl=3.0, pvp=0.5, roe=70.0, dy=11.0, margem_liq=35.0,
+            tendencia_grafica="ALTA", rsi_val=25.0)
+        self.assertLess(excelente, 100)
+        self.assertGreaterEqual(excelente, equity.CORTE_COMPRA_FORTE)
+
+    def test_cobertura_parcial_e_normalizada(self):
+        """3 de 5 indicadores são pontuados sobre o máximo que esses três
+        permitem — o papel não é punido por não ter os outros dois."""
+        completo, _, _, _ = equity.calcular_score_quantamental(
+            pl=5.0, pvp=0.8, roe=30.0, dy=8.0, margem_liq=20.0,
+            tendencia_grafica="ALTA", rsi_val=50.0)
+        parcial, _, _, _ = equity.calcular_score_quantamental(
+            pl=5.0, pvp=0.8, roe=30.0, dy=None, margem_liq=None,
+            tendencia_grafica="ALTA", rsi_val=50.0)
+        self.assertGreater(parcial, 55, "cobertura parcial boa não pode virar nota baixa")
+        self.assertLess(abs(completo - parcial), 15)
 
     def test_cobertura_rala_nao_vira_recomendacao(self):
         """Um DY sozinho não sustenta COMPRA: o motor exige 3 dos 5."""
@@ -758,3 +825,89 @@ class TestFundamentosPorDemonstrativo(unittest.TestCase):
         ativo = self._ativo(balanco={"Stockholders Equity": [1.0, 1.0]},
                             dre={"Net Income": [50e9, 50e9]})
         self.assertIsNone(equity.fundamentos_por_demonstrativo(ativo, self.PRECO)["roe"])
+
+
+class TestCascataUnica(unittest.TestCase):
+    """O scanner e a consulta detalhada têm que ler a mesma coisa.
+
+    Regressão do defeito relatado em 08/09/2026: PETR4 saía COMPRA na tabela
+    (P/L 5.63, ROE 26.5%, do balanço da CVM) e VENDA na consulta detalhada
+    (P/L 31.6, P/VP 8.20, do `.info` do Yahoo), no mesmo preço e no mesmo
+    minuto. Cada rota tinha a sua própria cascata de fontes.
+    """
+
+    CVM_PETR4 = {"pl": 5.63, "pvp": 1.10, "roe": 26.5, "margem_liq": 22.0,
+                 "origem": "cvm", "exercicio": 2025, "cnpj": "33000167000101",
+                 "denominacao": "PETROBRAS", "disponivel": True}
+    YAHOO_PETR4 = {"pl": 31.6, "pvp": 8.20, "roe": 26.0, "margem_liq": 22.0,
+                   "dy": 7.6, "nome": "PETROBRAS PN", "setor": "Energy"}
+
+    def setUp(self):
+        self._original = equity.fundamentos_cvm.multiplos_do_ticker
+
+    def tearDown(self):
+        equity.fundamentos_cvm.multiplos_do_ticker = self._original
+
+    def _stub_cvm(self, payload):
+        equity.fundamentos_cvm.multiplos_do_ticker = lambda t, **k: dict(payload)
+
+    def test_balanco_vence_o_yahoo(self):
+        self._stub_cvm(self.CVM_PETR4)
+        r = equity.resolver_fundamentos("PETR4", 48.09, info_yahoo=self.YAHOO_PETR4)
+        self.assertAlmostEqual(r["valores"]["pl"], 5.63)
+        self.assertAlmostEqual(r["valores"]["pvp"], 1.10)
+        self.assertEqual(r["exercicio_cvm"], 2025)
+        self.assertIn("CVM 2025", r["origens"])
+
+    def test_divergencia_grande_vira_alerta(self):
+        self._stub_cvm(self.CVM_PETR4)
+        r = equity.resolver_fundamentos("PETR4", 48.09, info_yahoo=self.YAHOO_PETR4)
+        campos = {d["campo"] for d in r["divergencias"]}
+        self.assertEqual(campos, {"P/L", "P/VP"})   # ROE e margem batem
+        for item in r["divergencias"]:
+            self.assertLess(item["balanco"], item["yahoo"])
+
+    def test_yahoo_preenche_o_que_a_cvm_nao_tem(self):
+        """A DFP não publica proventos: o DY continua vindo do Yahoo."""
+        self._stub_cvm(self.CVM_PETR4)
+        r = equity.resolver_fundamentos("PETR4", 48.09, info_yahoo=self.YAHOO_PETR4)
+        self.assertAlmostEqual(r["valores"]["dy"], 7.6)
+        self.assertIn("quoteSummary", r["origens"])
+        self.assertEqual(r["valores"]["setor"], "Energy")
+
+    def test_sem_yahoo_o_resultado_e_o_mesmo(self):
+        """O ponto do conserto: o Render (sem quoteSummary) e o navegador
+        (com quoteSummary) precisam chegar ao mesmo veredito."""
+        self._stub_cvm(self.CVM_PETR4)
+        com = equity.resolver_fundamentos("PETR4", 48.09, info_yahoo=self.YAHOO_PETR4)
+        sem = equity.resolver_fundamentos("PETR4", 48.09, info_yahoo=None)
+        for campo in ("pl", "pvp", "roe", "margem_liq"):
+            self.assertEqual(com["valores"][campo], sem["valores"][campo])
+
+        # O DY não vem da DFP; nas duas rotas ele sai de provento (quoteSummary
+        # no navegador, série de preço no Render). Fixando o DY, o veredito só
+        # pode diferir se os múltiplos de balanço diferirem — e não diferem.
+        def _veredito(valores):
+            return equity.calcular_score_quantamental(
+                pl=valores["pl"], pvp=valores["pvp"], roe=valores["roe"],
+                dy=7.6, margem_liq=valores["margem_liq"],
+                tendencia_grafica="ALTA", rsi_val=73.4, destruicao_historica=False,
+            )[1]
+        self.assertEqual(_veredito(com["valores"]), _veredito(sem["valores"]))
+        self.assertIn("COMPRA", _veredito(com["valores"]))
+
+    def test_sem_cvm_o_yahoo_assume(self):
+        self._stub_cvm({"disponivel": False, "pl": None, "pvp": None,
+                        "roe": None, "margem_liq": None, "exercicio": None})
+        r = equity.resolver_fundamentos("XPTO3", 10.0, info_yahoo=self.YAHOO_PETR4)
+        self.assertAlmostEqual(r["valores"]["pl"], 31.6)
+        self.assertEqual(r["divergencias"], [])
+        self.assertEqual(r["origens"], ["quoteSummary"])
+
+    def test_sem_fonte_alguma_devolve_none(self):
+        self._stub_cvm({"disponivel": False, "pl": None, "pvp": None,
+                        "roe": None, "margem_liq": None, "exercicio": None})
+        r = equity.resolver_fundamentos("XPTO3", 10.0)
+        for campo in equity.CAMPOS_FUNDAMENTAIS:
+            self.assertIsNone(r["valores"][campo])
+        self.assertEqual(r["origens"], [])

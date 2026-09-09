@@ -18,8 +18,9 @@ import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, Query
 
-from modules import taxas
-from routers.equity import carimbo_de_coleta, fatiar_precos, normalizar_dy
+from modules import fundamentos_fii, taxas
+from routers.equity import (carimbo_de_coleta, dy_da_serie, fatiar_precos,
+                            normalizar_dy)
 
 router = APIRouter(prefix="/wealth", tags=["Gestão de Patrimônio & Fundos"])
 
@@ -56,11 +57,14 @@ def _fundamentos_fii(simbolo):
             "nome": info.get("shortName") or simbolo.replace(".SA", "")}
 
 
-def _baixar_precos(tickers, periodo="4mo"):
+def _baixar_precos(tickers, periodo="2y"):
+    """2 anos e actions=True: o histórico maior é o que permite somar 12 meses
+    de proventos, e os dividendos vêm na mesma requisição do preço."""
     simbolos = [f"{t}.SA" for t in tickers]
     try:
         return yf.download(simbolos, period=periodo, interval="1d",
-                           progress=False, group_by="ticker", auto_adjust=True)
+                           progress=False, group_by="ticker", auto_adjust=True,
+                           actions=True)
     except Exception:  # noqa: BLE001
         return None
 
@@ -125,6 +129,27 @@ def _montar_fiis(tickers, df_precos, fundamentos):
         dados = fundamentos.get(simbolo) or {}
         pvp = dados.get("pvp")
         dy = dados.get("dy")
+        origens = ["quoteSummary"] if dados else []
+        competencia_vp = None
+        vp_cota = None
+
+        # P/VP do Informe Mensal da CVM quando o Yahoo não traz. É o gatilho de
+        # entrada do FII: sem ele a linha não tem recomendação nenhuma.
+        if pvp is None:
+            informe = fundamentos_fii.pvp_do_fii(ticker, preco)
+            if informe.get("pvp") is not None:
+                pvp = informe["pvp"]
+                vp_cota = informe.get("vp_por_cota")
+                competencia_vp = informe.get("competencia")
+                origens.append(f"CVM {competencia_vp}" if competencia_vp else "CVM")
+
+        # DY pelos proventos que vieram junto do preço: provento pago é fato.
+        if dy is None:
+            dy_serie = dy_da_serie(sub, preco)
+            if dy_serie is not None:
+                dy = dy_serie
+                origens.append("proventos")
+
         recomendacao, racional = _recomendacao_fii(pvp)
 
         linhas.append({
@@ -135,11 +160,15 @@ def _montar_fiis(tickers, df_precos, fundamentos):
             "dy": round(dy, 2) if dy is not None else None,
             # Valor patrimonial por cota implícito no P/VP: é o preço em que o
             # fundo negociaria a 1,00x.
-            "ponto_entrada": round(preco / pvp, 2) if pvp else None,
+            "ponto_entrada": round(vp_cota, 2) if vp_cota else (
+                round(preco / pvp, 2) if pvp else None),
+            "vp_por_cota": round(vp_cota, 2) if vp_cota else None,
+            "competencia_vp": competencia_vp,
             "recomendacao": recomendacao or "SEM DADOS",
             "racional": racional or "P/VP indisponível na fonte",
             "desconto": bool(pvp and 0 < pvp < 1),
-            "fundamentos_disponiveis": bool(dados),
+            "origem_fundamentos": " + ".join(origens) if origens else None,
+            "fundamentos_disponiveis": pvp is not None or dy is not None,
         })
     # None por último: papel sem DY não pode encabeçar um ranking de DY.
     linhas.sort(key=lambda linha: (linha["dy"] is None, -(linha["dy"] or 0.0)))
@@ -198,6 +227,7 @@ def radar_fundos():
         "papel": papel,
         "etfs": etfs,
         "com_fundamentos": sum(1 for l in tijolo + papel if l["fundamentos_disponiveis"]),
+        "com_pvp": sum(1 for l in tijolo + papel if l["pvp"] is not None),
         "total_fiis": len(tijolo) + len(papel),
     }
 

@@ -47,13 +47,25 @@ def _df_precos(simbolos, dias=120, semente=3, tendencia=0.0):
 class TestDividendYieldNoRadar(unittest.TestCase):
     """O bug que ordenava a tabela: DY de 0,5% virava 50% e ia para o topo."""
 
+    SEM_INFORME = {"pvp": None, "vp_por_cota": None, "competencia": None,
+                   "cnpj": None, "disponivel": False, "origem": "cvm-informe"}
+    COM_INFORME = {"pvp": 0.92, "vp_por_cota": 108.0, "competencia": "2026-07-01",
+                   "cnpj": "11728688000147", "disponivel": True,
+                   "origem": "cvm-informe"}
+
     def setUp(self):
         self.orig_download = wealth.yf.download
         self.orig_ticker = wealth.yf.Ticker
+        self.orig_informe = wealth.fundamentos_fii.pvp_do_fii
+        # Estes testes são sobre o Yahoo cair. O informe da CVM entra por
+        # decisão explícita — antes ele entrava conforme o fundos_cvm.db
+        # existisse na máquina, e o mesmo teste passava aqui e falhava lá.
+        wealth.fundamentos_fii.pvp_do_fii = lambda t, p, **k: dict(self.SEM_INFORME)
 
     def tearDown(self):
         wealth.yf.download = self.orig_download
         wealth.yf.Ticker = self.orig_ticker
+        wealth.fundamentos_fii.pvp_do_fii = self.orig_informe
 
     def test_dy_baixo_nao_infla_e_nao_lidera_o_ranking(self):
         wealth.yf.download = lambda simbolos, *a, **k: _df_precos(list(simbolos))
@@ -89,6 +101,25 @@ class TestDividendYieldNoRadar(unittest.TestCase):
             self.assertEqual(linha["recomendacao"], "SEM DADOS")
             self.assertIsNone(linha["dy"])
             self.assertIsNotNone(linha["preco"])
+
+    def test_com_o_informe_da_cvm_o_fii_tem_pvp_mesmo_com_o_yahoo_fora(self):
+        """A garantia atual: metade dos FIIs vinha sem P/VP porque só o Yahoo
+        alimentava esse campo, e ele é bloqueado no Render. O informe mensal
+        sustenta a coluna sozinho."""
+        wealth.yf.download = lambda simbolos, *a, **k: _df_precos(list(simbolos))
+        wealth.fundamentos_fii.pvp_do_fii = lambda t, p, **k: dict(self.COM_INFORME)
+
+        class Bloqueado:
+            def __init__(self, *a, **k):
+                raise RuntimeError("YFRateLimitError")
+
+        wealth.yf.Ticker = Bloqueado
+        resposta = wealth.radar_fundos()
+        self.assertTrue(resposta["tijolo"])
+        for linha in resposta["tijolo"]:
+            self.assertAlmostEqual(linha["pvp"], 0.92)
+            self.assertEqual(linha["competencia_vp"], "2026-07-01")
+            self.assertNotEqual(linha["recomendacao"], "SEM DADOS")
 
     def test_ordenacao_poe_dy_ausente_por_ultimo(self):
         linhas = wealth._montar_fiis(
@@ -238,3 +269,89 @@ class TestOtimizador(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPvpPelaCvm(unittest.TestCase):
+    """O caso da tela: metade dos FIIs sem P/VP do Yahoo e, por isso, sem
+    recomendação. O Informe Mensal da CVM traz o valor patrimonial da cota."""
+
+    def setUp(self):
+        import sqlite3, tempfile, json as _json
+        from modules import cadastro_fii, fundamentos_fii
+        self.cadastro_fii, self.fundamentos_fii = cadastro_fii, fundamentos_fii
+        self.pasta = tempfile.TemporaryDirectory()
+        self.banco = os.path.join(self.pasta.name, "fundos.db")
+        self.cadastro = os.path.join(self.pasta.name, "cadastro_fii.json")
+
+        cadastro_fii.gravar({"HGLG": {"cnpj": "11728688000147", "nome": "CSHG LOG"},
+                             "XPML": {"cnpj": "28757546000100", "nome": "XP MALLS"}},
+                            self.cadastro)
+        cadastro_fii.ARQUIVO = self.cadastro
+        cadastro_fii.ARQUIVO_MANUAL = os.path.join(self.pasta.name, "manual.json")
+        cadastro_fii.limpar_memoria()
+
+        conexao = sqlite3.connect(self.banco)
+        conexao.execute("""CREATE TABLE fundos (cnpj TEXT PRIMARY KEY, competencia TEXT,
+                           vp_por_cota REAL, patrimonio_liquido REAL, cotas_emitidas REAL)""")
+        conexao.executemany("INSERT INTO fundos VALUES (?,?,?,?,?)", [
+            ("11728688000147", "2026-08-31", 158.24, 5.2e9, 32.9e6),   # HGLG
+            ("28757546000100", "2026-08-31", 112.00, 3.1e9, 27.7e6),   # XPML
+        ])
+        conexao.commit(); conexao.close()
+        fundamentos_fii.BANCO = self.banco
+        fundamentos_fii.limpar_cache()
+
+    def tearDown(self):
+        self.pasta.cleanup()
+        self.cadastro_fii.limpar_memoria()
+        self.fundamentos_fii.limpar_cache()
+
+    def test_pvp_sai_do_informe_mensal(self):
+        r = self.fundamentos_fii.pvp_do_fii("HGLG11", preco=147.75)
+        self.assertTrue(r["disponivel"])
+        self.assertAlmostEqual(r["pvp"], 147.75 / 158.24, places=6)
+        self.assertEqual(r["competencia"], "2026-08-31")
+        self.assertAlmostEqual(r["vp_por_cota"], 158.24)
+
+    def test_desconto_patrimonial_vira_compra(self):
+        """HGLG a 147,75 com VP de 158,24 negocia a 0,93x — abaixo do
+        patrimônio, que é o gatilho de entrada."""
+        pvp = self.fundamentos_fii.pvp_do_fii("HGLG11", preco=147.75)["pvp"]
+        recomendacao, _ = wealth._recomendacao_fii(pvp)
+        self.assertEqual(recomendacao, "COMPRA")
+
+    def test_agio_vira_aguardar(self):
+        pvp = self.fundamentos_fii.pvp_do_fii("XPML11", preco=140.0)["pvp"]
+        self.assertEqual(wealth._recomendacao_fii(pvp)[0], "AGUARDAR")
+
+    def test_fundo_fora_do_cadastro(self):
+        r = self.fundamentos_fii.pvp_do_fii("ZZZZ11", preco=100.0)
+        self.assertFalse(r["disponivel"])
+        self.assertIsNone(r["pvp"])
+
+    def test_pvp_implausivel_e_descartado(self):
+        r = self.fundamentos_fii.pvp_do_fii("HGLG11", preco=99999.0)
+        self.assertIsNone(r["pvp"], "P/VP de 600x é dado corrompido")
+        self.assertTrue(r["disponivel"])
+
+    def test_radar_usa_a_cvm_quando_o_yahoo_falha(self):
+        orig_dl, orig_tk = wealth.yf.download, wealth.yf.Ticker
+
+        class Bloqueado:
+            def __init__(self, *a, **k):
+                raise RuntimeError("YFRateLimitError")
+
+        wealth.yf.download = lambda simbolos, *a, **k: _df_precos(list(simbolos))
+        wealth.yf.Ticker = Bloqueado
+        try:
+            linhas = wealth._montar_fiis(["HGLG11", "XPML11"],
+                                         _df_precos(["HGLG11.SA", "XPML11.SA"]), {})
+        finally:
+            wealth.yf.download, wealth.yf.Ticker = orig_dl, orig_tk
+
+        por_ticker = {l["ticker"]: l for l in linhas}
+        self.assertIsNotNone(por_ticker["HGLG11"]["pvp"], "P/VP tem que vir da CVM")
+        self.assertNotEqual(por_ticker["HGLG11"]["recomendacao"], "SEM DADOS")
+        self.assertIn("CVM", por_ticker["HGLG11"]["origem_fundamentos"])
+        self.assertEqual(por_ticker["HGLG11"]["ponto_entrada"], 158.24,
+                         "o ponto de entrada é o valor patrimonial da cota")

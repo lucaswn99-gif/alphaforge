@@ -17,6 +17,7 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import atualizar_fundamentos_cvm as coletor  # noqa: E402
+import atualizar_fundos_cvm as coletor_fii  # noqa: E402
 from modules import cadastro_b3, fundamentos_cvm  # noqa: E402
 
 CABECALHO = ("CNPJ_CIA;DENOM_CIA;DT_FIM_EXERC;ORDEM_EXERC;ESCALA_MOEDA;"
@@ -329,3 +330,166 @@ class TestMultiplosCvm(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestLeituraDaColunaDeVp(unittest.TestCase):
+    """CONFIRMADO contra o informe de 2026: `Valor_Patrimonial_Cotas` é o valor
+    POR COTA (92,2101), e o mesmo registro traz PL 258.202.136,67 e 2.800.149
+    cotas — 258.202.136,67 / 2.800.149 = 92,2101. O plural no nome engana.
+
+    Estes testes travam a leitura e a rede de segurança para o dia em que a
+    CVM trocar o significado sem trocar o nome.
+    """
+
+    def test_decisao_e_do_arquivo_inteiro_nao_da_linha(self):
+        """Uma coluna tem um significado só.
+
+        O defeito: decidindo linha a linha, o mesmo arquivo produzia 1.164
+        fundos "por-cota" e 305 "total/cotas", e estes viravam cotas de R$ 0,02.
+        Aqui um fundo com poucas cotas isoladamente pareceria total — e mesmo
+        assim segue a leitura do arquivo.
+        """
+        pares = [(92.21, 2_800_149.0), (95.0, 800_000.0), (110.0, 2_000_000.0),
+                 (120.0, 600.0)]   # sozinho pareceria "total/cotas" (R$ 0,20)
+        self.assertEqual(coletor_fii.decidir_leitura(pares), "por-cota")
+        self.assertAlmostEqual(
+            coletor_fii.aplicar_leitura(120.0, 600.0, "por-cota"), 120.0)
+
+    def test_arquivo_de_totais_e_lido_como_total(self):
+        pares = [(258_202_136.67, 2_800_149.0), (76_000_000.0, 800_000.0),
+                 (220_000_000.0, 2_000_000.0)]
+        self.assertEqual(coletor_fii.decidir_leitura(pares), "total/cotas")
+        self.assertAlmostEqual(
+            coletor_fii.aplicar_leitura(258_202_136.67, 2_800_149.0, "total/cotas"),
+            92.2101, places=3)
+
+    def test_sem_sinal_claro_devolve_none(self):
+        self.assertIsNone(coletor_fii.decidir_leitura([(1e-6, 10.0), (2e-6, 10.0)]))
+
+
+class TestConferenciaVpContraPl(unittest.TestCase):
+    """O informe traz VP por cota, PL e número de cotas. Ter os três permite
+    conferir em vez de confiar."""
+
+    def test_registro_coerente_passa(self):
+        self.assertTrue(coletor_fii.conferir(92.2101, 258_202_136.67, 2_800_149.0))
+
+    def test_registro_incoerente_reprova(self):
+        self.assertFalse(coletor_fii.conferir(9.22, 258_202_136.67, 2_800_149.0))
+
+    def test_sem_como_conferir_nao_reprova(self):
+        self.assertTrue(coletor_fii.conferir(92.21, None, 2_800_149.0))
+        self.assertTrue(coletor_fii.conferir(92.21, 258_202_136.67, None))
+
+
+class TestTickerPeloIsin(unittest.TestCase):
+    """O informe não publica código de negociação, mas publica ISIN — e o ISIN
+    brasileiro carrega a raiz do ticker. Isso dispensa o cadastro de fundos do
+    B3, que era o outro ponto de falha."""
+
+    def test_isin_de_cota_vira_ticker(self):
+        self.assertEqual(coletor_fii.ticker_do_isin("BRFVPQCTF015"), "FVPQ11")
+        self.assertEqual(coletor_fii.ticker_do_isin("brhglgctf002"), "HGLG11")
+
+    def test_isin_que_nao_e_de_cota_nao_vira_nada(self):
+        for isin in ("BRPETRACNPR6", "BRVALEACNOR0", "", None, "XYZ"):
+            self.assertIsNone(coletor_fii.ticker_do_isin(isin))
+
+
+class TestMapeamentoDeColunasFii(unittest.TestCase):
+    def test_layout_real_do_informe_2026(self):
+        mapa = coletor_fii._mapear_colunas(
+            ["CNPJ_Fundo_Classe", "Data_Referencia", "Patrimonio_Liquido",
+             "Cotas_Emitidas", "Valor_Patrimonial_Cotas",
+             "Percentual_Amortizacao_Cotas_Mes"])
+        self.assertEqual(mapa["cnpj"], "CNPJ_Fundo_Classe")
+        self.assertEqual(mapa["data_referencia"], "Data_Referencia")
+        self.assertEqual(mapa["cotas_emitidas"], "Cotas_Emitidas")
+        self.assertEqual(mapa["vp_por_cota"], "Valor_Patrimonial_Cotas")
+        self.assertEqual(mapa["patrimonio_liquido"], "Patrimonio_Liquido")
+
+    def test_layout_do_arquivo_geral(self):
+        mapa = coletor_fii._mapear_colunas(
+            ["CNPJ_Fundo_Classe", "Data_Referencia", "Codigo_ISIN",
+             "Quantidade_Cotas_Emitidas", "Mercado_Negociacao_Bolsa"])
+        self.assertEqual(mapa["cotas_emitidas"], "Quantidade_Cotas_Emitidas")
+        self.assertEqual(mapa["isin"], "Codigo_ISIN")
+        # "Mercado_Negociacao_Bolsa" não é código de negociação.
+        self.assertNotIn("codigo_negociacao", mapa)
+
+    def test_arquivo_sem_nada_util(self):
+        mapa = coletor_fii._mapear_colunas(["CNPJ_Fundo_Classe", "Data_Referencia",
+                                            "Nome_Administrador", "Outras_Cotas_FI"])
+        self.assertNotIn("vp_por_cota", mapa)
+        self.assertNotIn("cotas_emitidas", mapa)
+
+
+class TestColetaFiiEntreArquivos(unittest.TestCase):
+    """O defeito original: os campos vinham em CSVs diferentes do mesmo zip e
+    cada arquivo era descartado por estar 'incompleto'."""
+
+    CNPJ = "11728688000147"
+    CAB_COMPLETO = ("CNPJ_Fundo_Classe;Data_Referencia;Cotas_Emitidas;"
+                    "Valor_Patrimonial_Cotas\n")
+
+    def _zip(self, arquivos):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as z:
+            for nome, texto in arquivos.items():
+                z.writestr(nome, texto.encode("iso-8859-1"))
+        buffer.seek(0)
+        return zipfile.ZipFile(buffer)
+
+    def _rodar(self, arquivos):
+        original = coletor_fii.baixar_zip
+        coletor_fii.baixar_zip = lambda ano: self._zip(arquivos)
+        try:
+            return coletor_fii.processar_ano(2026)
+        finally:
+            coletor_fii.baixar_zip = original
+
+    def _linhas(self, quantidade, competencia="2026-07-01"):
+        """Vários fundos plausíveis, para a decisão global ter base."""
+        return "".join(
+            "%014d;%s;%d;%.2f\n" % (10000000000000 + i, competencia,
+                                    2_800_149 + i, 92.21 + i)
+            for i in range(quantidade))
+
+    def test_campos_espalhados_se_completam(self):
+        arquivos = {
+            "inf_mensal_fii_geral_2026.csv": (
+                "CNPJ_Fundo_Classe;Data_Referencia;Quantidade_Cotas_Emitidas;"
+                "Codigo_ISIN\n" + self.CNPJ + ";2026-07-01;2800149;BRHGLGCTF002\n"),
+            "inf_mensal_fii_complemento_2026.csv": (
+                "CNPJ_Fundo_Classe;Data_Referencia;Valor_Patrimonial_Cotas\n"
+                + self.CNPJ + ";2026-07-01;92,2101419138767\n"),
+        }
+        registros, tickers = self._rodar(arquivos)
+        self.assertIn(self.CNPJ, registros)
+        self.assertAlmostEqual(registros[self.CNPJ]["vp_por_cota"], 92.2101, places=3)
+        self.assertEqual(tickers, {"HGLG11": self.CNPJ})
+
+    def test_vp_que_nao_bate_com_o_pl_e_descartado(self):
+        """Preferimos P/VP ausente a P/VP errado numa tela de cliente."""
+        cabecalho = ("CNPJ_Fundo_Classe;Data_Referencia;Cotas_Emitidas;"
+                     "Valor_Patrimonial_Cotas;Patrimonio_Liquido\n")
+        bons = "".join(
+            "%014d;2026-07-01;1000000;%d;%d\n" % (10000000000000 + i, 100 + i,
+                                                  (100 + i) * 1000000)
+            for i in range(8))
+        ruim = self.CNPJ + ";2026-07-01;2800149;9,22;258202136,67\n"
+        registros, _ = self._rodar({"a.csv": cabecalho + bons + ruim})
+        self.assertNotIn(self.CNPJ, registros)
+        self.assertEqual(len(registros), 8)
+
+    def test_fica_com_a_competencia_mais_recente(self):
+        corpo = self._linhas(6, "2026-06-01") + self._linhas(6, "2026-07-01")
+        registros, _ = self._rodar({"a.csv": self.CAB_COMPLETO + corpo})
+        self.assertEqual(len(registros), 6)
+        for valores in registros.values():
+            self.assertEqual(valores["competencia"], "2026-07-01")
+
+    def test_cnpj_invalido_e_ignorado(self):
+        corpo = self._linhas(6) + "123;2026-07-01;100;92\n"
+        registros, _ = self._rodar({"a.csv": self.CAB_COMPLETO + corpo})
+        self.assertEqual(len(registros), 6)

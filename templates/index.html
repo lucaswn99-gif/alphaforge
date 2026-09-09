@@ -503,7 +503,14 @@ async function iniciarTickerTape() {
           const origem = i.origem_fundamentos
             ? ` <span class="text-[9px] text-gray-500 font-normal" title="Origem dos múltiplos">${esc(i.origem_fundamentos)}</span>`
             : ' <span class="text-[9px] text-amber-600/80 font-normal" title="Nenhuma fonte de múltiplos respondeu">só preço</span>';
-          const marca = origem;
+          // Quando o balanço e o Yahoo discordam feio no mesmo múltiplo, vale o
+          // balanço — mas a linha avisa, em vez de deixar você descobrir isso
+          // comparando a tabela com a consulta detalhada.
+          const divs = i.divergencias || [];
+          const conflito = divs.length
+            ? ` <span class="text-[9px] text-amber-400 font-normal" title="${esc(divs.map(d => `${d.campo}: balanço ${d.balanco} × Yahoo ${d.yahoo}`).join(' | '))}">⚠ fontes divergem</span>`
+            : '';
+          const marca = origem + conflito;
           return `
           <tr class="hover:bg-[#0b0f19] scanner-row cursor-pointer ${semDados ? 'opacity-60' : ''}" onclick="selecionarAtivo('${esc(i.ticker)}')" data-ticker="${esc(i.ticker)}" data-nome="${esc((i.nome || '').toLowerCase())}">
             <td class="p-2.5 font-bold text-sky-400">${esc(i.ticker)}${marca}</td>
@@ -604,10 +611,16 @@ async function iniciarTickerTape() {
         };
 
         // toFixed direto quebrava a tabela inteira num único campo nulo.
-        const renderFii = (fii) => `
-            <tr class="hover:bg-[#0b0f19] ${fii.fundamentos_disponiveis === false ? 'opacity-60' : ''}">
+        const renderFii = (fii) => {
+          // A competência do informe importa: o valor patrimonial é mensal, e
+          // um P/VP de três meses atrás não é o de hoje.
+          const fonte = fii.competencia_vp
+            ? `VP de ${esc(fii.competencia_vp)}`
+            : (fii.origem_fundamentos ? esc(fii.origem_fundamentos) : 'sem P/VP na fonte');
+          return `
+            <tr class="hover:bg-[#0b0f19] ${fii.pvp === null ? 'opacity-60' : ''}">
               <td class="p-2 font-bold text-sky-400">${esc(fii.ticker)}
-                <span class="block text-[9px] text-gray-500">P/VP ${num(fii.pvp)}</span></td>
+                <span class="block text-[9px] text-gray-500" title="${fonte}">P/VP ${num(fii.pvp)}</span></td>
               <td class="p-2">R$ ${num(fii.preco)}</td>
               <td class="p-2 text-gray-300">${fii.ponto_entrada === null || fii.ponto_entrada === undefined ? '<span class="text-gray-600">—</span>' : 'R$ ' + num(fii.ponto_entrada)}</td>
               <td class="p-2 font-mono text-emerald-400">${num(fii.dy, 2, '%')}</td>
@@ -615,6 +628,7 @@ async function iniciarTickerTape() {
                 <span class="px-2 py-1 rounded text-[9px] font-bold ${getCorRec(fii.recomendacao)}" title="${esc(fii.racional || '')}">${esc(fii.recomendacao)}</span>
               </td>
             </tr>`;
+        };
 
         const renderEtf = (etf) => `
             <tr class="hover:bg-[#0b0f19]">
@@ -631,11 +645,14 @@ async function iniciarTickerTape() {
         document.getElementById('tabelaPapel').innerHTML = (data.papel || []).map(renderFii).join('');
         document.getElementById('tabelaETFs').innerHTML = (data.etfs || []).map(renderEtf).join('');
 
-        const semMultiplos = (data.total_fiis || 0) - (data.com_fundamentos || 0);
-        if (semMultiplos > 0) {
+        // O que importa é quantos têm P/VP: é ele que gera recomendação.
+        const semPvp = (data.total_fiis || 0) - (data.com_pvp || 0);
+        if (semPvp > 0) {
           mostrarAviso('fundosAviso',
-            `<b>${semMultiplos} de ${data.total_fiis} FIIs sem P/VP e DY do Yahoo</b> — entraram só com preço `
-            + `e ficam sem recomendação. O gatilho de entrada depende do valor patrimonial.`, 'alerta');
+            `<b>${semPvp} de ${data.total_fiis} FIIs sem P/VP.</b> Entram com preço e yield, `
+            + `mas sem recomendação — o gatilho de entrada é o desconto sobre o valor `
+            + `patrimonial. Rode <code>atualizar_fundos_cvm.py</code> para preencher pelo `
+            + `Informe Mensal da CVM.`, 'alerta');
         } else {
           mostrarAviso('fundosAviso', '');
         }

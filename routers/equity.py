@@ -538,7 +538,7 @@ def _info_tem_conteudo(info):
     return any(info.get(campo) is not None for campo in CAMPOS_UTEIS_INFO)
 
 
-def _normalizar_info(info, simbolo):
+def _normalizar_info(info, simbolo, preco_ref=0.0):
     """Múltiplos do Yahoo. Campo ausente vira None, nunca 0.0 — o motor
     distingue "não apurado" de "zero", e zerar por omissão era o que fazia
     empresa lucrativa aparecer com ROE 0 e veredito de prejuízo."""
@@ -556,7 +556,7 @@ def _normalizar_info(info, simbolo):
         "pvp": _num("priceToBook"),
         "roe": calcular_roe(info),
         "margem_liq": _num("profitMargins", 100.0),
-        "dy": normalizar_dy(info),
+        "dy": normalizar_dy(info, preco_ref=preco_ref),
         "nome": info.get("shortName") or simbolo.replace(".SA", ""),
         "setor": info.get("sector") or "N/A",
     }
@@ -564,6 +564,111 @@ def _normalizar_info(info, simbolo):
 
 INFO_VAZIA = {"pl": None, "pvp": None, "roe": None, "margem_liq": None, "dy": None,
               "nome": None, "setor": "N/A"}
+
+
+# --------------------------------------------------------------------------- #
+# Cascata única de fundamentos
+# --------------------------------------------------------------------------- #
+CAMPOS_FUNDAMENTAIS = ("pl", "pvp", "roe", "margem_liq", "dy")
+ROTULO_CAMPO = {"pl": "P/L", "pvp": "P/VP", "roe": "ROE",
+                "margem_liq": "margem", "dy": "DY"}
+
+# Diferença relativa acima disso entre o balanço e o Yahoo não é arredondamento:
+# é uma das duas fontes errada, e o usuário tem que ver isso na tela.
+DIVERGENCIA_RELEVANTE = 0.5
+
+
+def _divergem(a, b):
+    if a is None or b is None:
+        return False
+    base = max(abs(a), abs(b))
+    if base <= 0:
+        return False
+    return abs(a - b) / base > DIVERGENCIA_RELEVANTE
+
+
+def resolver_fundamentos(codigo, preco, info_yahoo=None, ativo=None, serie=None):
+    """Múltiplos de um papel, na mesma ordem para o scanner e para a consulta.
+
+    O defeito que isto conserta: o scanner lia a CVM e a consulta detalhada lia
+    o `.info` do Yahoo, então PETR4 saía COMPRA (P/L 5.63, do balanço) numa
+    tela e VENDA (P/L 31.6, do Yahoo) na outra, no mesmo minuto e no mesmo
+    preço. Fonte diferente para o mesmo papel não é divergência de opinião, é
+    defeito — e num terminal usado para falar com cliente é o pior tipo.
+
+    Ordem de confiança:
+      1. CVM — balanço auditado que a própria companhia entregou ao regulador
+      2. quoteSummary (.info) — só responde de IP residencial (por isso o
+         Render e o seu navegador viam fontes diferentes) e erra feio em papel
+         brasileiro; entra para DY, nome e setor, e para o que faltar
+      3. demonstrativos do Yahoo — reconstrução, quando há objeto Ticker
+      4. proventos da série de preço — só DY
+
+    Devolve dict com valores, origens, exercicio_cvm, divergencias e
+    campos_brutos. Campo que não fecha volta None, nunca zero.
+    """
+    valores = {campo: None for campo in CAMPOS_FUNDAMENTAIS}
+    valores["nome"] = None
+    valores["setor"] = "N/A"
+    origens = []
+    exercicio_cvm = None
+    divergencias = []
+    campos_brutos = None
+
+    # 1. Balanço publicado na CVM.
+    cvm = fundamentos_cvm.multiplos_do_ticker(codigo, preco=preco)
+    if cvm.get("disponivel"):
+        preencheu = False
+        for campo in ("pl", "pvp", "roe", "margem_liq"):
+            if cvm.get(campo) is not None:
+                valores[campo] = cvm[campo]
+                preencheu = True
+        if preencheu:
+            exercicio_cvm = cvm.get("exercicio")
+            origens.append(f"CVM {exercicio_cvm}" if exercicio_cvm else "CVM")
+
+    # 2. quoteSummary do Yahoo.
+    if info_yahoo:
+        valores["nome"] = info_yahoo.get("nome") or valores["nome"]
+        valores["setor"] = info_yahoo.get("setor") or valores["setor"]
+        preencheu = False
+        for campo in CAMPOS_FUNDAMENTAIS:
+            vindo = info_yahoo.get(campo)
+            if vindo is None:
+                continue
+            if valores[campo] is None:
+                valores[campo] = vindo
+                preencheu = True
+            elif _divergem(valores[campo], vindo):
+                divergencias.append({
+                    "campo": ROTULO_CAMPO.get(campo, campo),
+                    "balanco": round(valores[campo], 2),
+                    "yahoo": round(vindo, 2),
+                })
+        if preencheu:
+            origens.append("quoteSummary")
+
+    # 3. Balanço e DRE pelo outro endpoint do Yahoo.
+    if ativo is not None and any(valores[c] is None for c in CAMPOS_FUNDAMENTAIS):
+        derivados = fundamentos_por_demonstrativo(ativo, preco)
+        campos_brutos = derivados.get("campos_brutos")
+        preenchidos = []
+        for campo in CAMPOS_FUNDAMENTAIS:
+            if valores[campo] is None and derivados.get(campo) is not None:
+                valores[campo] = derivados[campo]
+                preenchidos.append(ROTULO_CAMPO.get(campo, campo))
+        if preenchidos:
+            origens.append("demonstrativos (" + ", ".join(preenchidos) + ")")
+
+    # 4. Proventos da própria série de preço.
+    if valores["dy"] is None and serie is not None:
+        dy_serie = dy_da_serie(serie, preco)
+        if dy_serie is not None:
+            valores["dy"] = dy_serie
+            origens.append("proventos")
+
+    return {"valores": valores, "origens": origens, "exercicio_cvm": exercicio_cvm,
+            "divergencias": divergencias, "campos_brutos": campos_brutos}
 
 
 def extrair_fundamentos(simbolo, tentativas=SCANNER_TENTATIVAS):
@@ -890,34 +995,18 @@ def coletar_bloco(mapa):
             destruicao = houve_destruicao_de_capital(anual)
 
             # --- fundamentos em cascata -------------------------------------
-            # 1. quoteSummary (.info) quando o Yahoo responde
-            # 2. proventos da própria série de preço (DY)
-            # 3. balanço publicado na CVM (ROE, margem, P/L, P/VP)
-            info = fundamentos.get(simbolo)
-            tem_quote_summary = info is not None
-            info = dict(info) if tem_quote_summary else dict(INFO_VAZIA)
-            origens = ["quoteSummary"] if tem_quote_summary else []
-            exercicio_cvm = None
+            # Mesma função e mesma ordem da consulta detalhada: ver
+            # `resolver_fundamentos`. Antes cada rota tinha a sua cascata, e o
+            # mesmo papel saía COMPRA aqui e VENDA lá.
+            resolvido = resolver_fundamentos(
+                codigo, preco, info_yahoo=fundamentos.get(simbolo), serie=sub,
+            )
+            info = resolvido["valores"]
+            origens = resolvido["origens"]
+            exercicio_cvm = resolvido["exercicio_cvm"]
+            divergencias = resolvido["divergencias"]
 
-            if info.get("dy") is None:
-                dy_serie = dy_da_serie(sub, preco)
-                if dy_serie is not None:
-                    info["dy"] = dy_serie
-                    origens.append("proventos")
-
-            if any(info.get(campo) is None for campo in ("pl", "pvp", "roe", "margem_liq")):
-                cvm = fundamentos_cvm.multiplos_do_ticker(codigo, preco=preco)
-                if cvm.get("disponivel"):
-                    preencheu = False
-                    for campo in ("pl", "pvp", "roe", "margem_liq"):
-                        if info.get(campo) is None and cvm.get(campo) is not None:
-                            info[campo] = cvm[campo]
-                            preencheu = True
-                    if preencheu:
-                        exercicio_cvm = cvm.get("exercicio")
-                        origens.append(f"CVM {exercicio_cvm}" if exercicio_cvm else "CVM")
-
-            apurados = sum(1 for campo in ("pl", "pvp", "roe", "dy", "margem_liq")
+            apurados = sum(1 for campo in CAMPOS_FUNDAMENTAIS
                            if info.get(campo) is not None)
 
             score, veredito, _, alertas = calcular_score_quantamental(
@@ -937,6 +1026,7 @@ def coletar_bloco(mapa):
                 "indicadores_apurados": apurados,
                 "origem_fundamentos": " + ".join(origens) if origens else None,
                 "exercicio_cvm": exercicio_cvm,
+                "divergencias": divergencias or None,
                 "preco": round(preco, 2),
                 "pl": _arred(info["pl"]),
                 "pvp": _arred(info["pvp"]),
@@ -1265,35 +1355,25 @@ def _auditar_simbolo(ticker_clean, simbolo):
         except (TypeError, ValueError):
             return None
 
-    pl = _num("trailingPE")
-    pvp = _num("priceToBook")
     ev_ebitda = _num("enterpriseToEbitda")
-    roe = calcular_roe(info)
-    margem_liq = _num("profitMargins", 100.0)
-    dy = normalizar_dy(info, preco_ref=preco)
 
-    # Quando o quoteSummary não responde, `.info` volta vazio e todos os
-    # múltiplos ficam None — o papel aparecia só com preço. Balanço, DRE e
-    # proventos vêm por outro endpoint: reconstruímos dali o que faltar.
-    origem_multiplos = "quoteSummary (.info)"
-    derivados = None
-    if any(valor is None for valor in (pl, pvp, roe, margem_liq, dy)):
-        derivados = fundamentos_por_demonstrativo(ativo, preco)
-        preenchidos = []
-        if pl is None and derivados["pl"] is not None:
-            pl, _ = derivados["pl"], preenchidos.append("P/L")
-        if pvp is None and derivados["pvp"] is not None:
-            pvp, _ = derivados["pvp"], preenchidos.append("P/VP")
-        if roe is None and derivados["roe"] is not None:
-            roe, _ = derivados["roe"], preenchidos.append("ROE")
-        if margem_liq is None and derivados["margem_liq"] is not None:
-            margem_liq, _ = derivados["margem_liq"], preenchidos.append("margem")
-        if dy is None and derivados["dy"] is not None:
-            dy, _ = derivados["dy"], preenchidos.append("DY")
-        if preenchidos:
-            origem_multiplos = ("demonstrativos publicados (" + ", ".join(preenchidos) + ")"
-                                if not info else
-                                "quoteSummary + demonstrativos (" + ", ".join(preenchidos) + ")")
+    # Exatamente a mesma cascata do scanner — ver `resolver_fundamentos`. Esta
+    # rota lia direto o `.info` e por isso discordava da tabela: o Yahoo dá
+    # P/L 31.6 e P/VP 8.20 para PETR4, contra 5.6 e ~1.1 do balanço de 2025.
+    resolvido = resolver_fundamentos(
+        ticker_clean, preco,
+        info_yahoo=(_normalizar_info(info, simbolo, preco_ref=preco)
+                    if _info_tem_conteudo(info) else None),
+        ativo=ativo,
+    )
+    valores = resolvido["valores"]
+    pl = valores["pl"]
+    pvp = valores["pvp"]
+    roe = valores["roe"]
+    margem_liq = valores["margem_liq"]
+    dy = valores["dy"]
+    origem_multiplos = " + ".join(resolvido["origens"]) or "sem fonte de fundamentos"
+    divergencias = resolvido["divergencias"]
 
     dados_10_anos = serie_anual(close)
     destruicao_historica = houve_destruicao_de_capital(dados_10_anos)
@@ -1311,6 +1391,14 @@ def _auditar_simbolo(ticker_clean, simbolo):
         pl, pvp, roe, dy, margem_liq, tendencia, rsi_val, destruicao_historica
     )
 
+    # Quando as duas fontes discordam, o veredito sai do balanço — mas o
+    # usuário vê que discordaram, em vez de descobrir isso comparando telas.
+    for item in divergencias:
+        alertas_risco.append(
+            f"⚠ {item['campo']}: balanço {item['balanco']} × Yahoo {item['yahoo']} "
+            "— usamos o balanço"
+        )
+
     return {
         **carimbo_de_coleta(),
         "ticker": ticker_clean,
@@ -1322,7 +1410,9 @@ def _auditar_simbolo(ticker_clean, simbolo):
         "recomendacao": veredito,
         "analise_racional": pontos_positivos + alertas_risco,
         "origem_multiplos": origem_multiplos,
-        "campos_demonstrativo": (derivados or {}).get("campos_brutos"),
+        "exercicio_cvm": resolvido["exercicio_cvm"],
+        "divergencias": divergencias or None,
+        "campos_demonstrativo": resolvido["campos_brutos"],
         "indicadores_tecnicos": {
             "rsi_wilder": rsi_val,
             "sma50": round(sma50, 2),
