@@ -275,6 +275,31 @@
       <p id="acaoAviso" class="hidden text-xs rounded px-4 py-3 border mt-3"></p>
     </div>
 
+    <!-- Gráfico do papel. Fica ACIMA do card de veredito de propósito: o
+         desenho da tendência é o que dá contexto ao número, não o contrário. -->
+    <div id="painelGrafico" class="hidden painel p-4">
+      <div class="flex justify-between items-center mb-3 gap-2 flex-wrap">
+        <div>
+          <h2 class="rotulo">Gráfico · <span id="graficoTicker" style="color: var(--verde)"></span></h2>
+          <p class="text-[10px] mt-1" style="color: var(--suave)">
+            EMA 21 e EMA 50 já aplicadas — as mesmas do segmento de momentum
+          </p>
+        </div>
+        <div class="flex gap-1">
+          <button onclick="trocarIntervalo('D')"  class="btn-fantasma int-btn" data-int="D">Diário</button>
+          <button onclick="trocarIntervalo('W')"  class="btn-fantasma int-btn" data-int="W">Semanal</button>
+          <button onclick="trocarIntervalo('M')"  class="btn-fantasma int-btn" data-int="M">Mensal</button>
+        </div>
+      </div>
+      <div id="tvContainer" style="height: 460px"></div>
+      <p class="text-[10px] mt-2" style="color: var(--suave)">
+        Gráfico por <a href="https://br.tradingview.com/" target="_blank" rel="noopener"
+        style="color: var(--verde)">TradingView</a> · cotação da própria fonte deles,
+        independente do preço da tabela acima (que vem do Yahoo, com 15 min de atraso).
+        Divergência de centavos entre os dois é esperada.
+      </p>
+    </div>
+
     <div id="painelResultadoAcao" class="hidden painel p-5">
       <div class="flex justify-between items-start gap-4 flex-wrap">
         <div class="flex items-start gap-3">
@@ -828,6 +853,9 @@ function filtrarTabelaScanner() {
 function selecionarAtivo(ticker) {
   document.getElementById('tickerAcao').value = ticker;
   alternarAba('renda-variavel');
+  // O gráfico sobe na hora; a consulta de fundamentos leva alguns segundos e
+  // não deve segurar o desenho.
+  montarGrafico(ticker, TV_INTERVALO);
   consultarAcao();
   document.getElementById('painelResultadoAcao').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -847,6 +875,7 @@ async function consultarAcao() {
     if (d.erro) { mostrarAviso('acaoAviso', esc(d.erro)); return; }
 
     document.getElementById('painelResultadoAcao').classList.remove('hidden');
+    montarGrafico(d.ticker, TV_INTERVALO);
     document.getElementById('acaoNome').innerText = `${d.nome_empresa} (${d.ticker})`;
     document.getElementById('acaoPreco').innerText = `R$ ${Number(d.preco_atual ?? 0).toFixed(2)}`;
     document.getElementById('acaoCarimbo').innerText = d.coletado_em_legivel
@@ -1019,6 +1048,72 @@ function filtrarQuant() {
   document.querySelectorAll('.quant-row').forEach(r => {
     r.style.display = r.getAttribute('data-ticker').toLowerCase().includes(q) ? '' : 'none';
   });
+}
+
+
+// ===================== gráfico (TradingView) =========================
+// Widget gratuito, carregado sob demanda. O script é injetado a cada troca de
+// papel porque o widget não expõe API de "mudar símbolo" na versão embutida —
+// então o container é limpo e o widget renasce. Sem isso, trocar de ticker
+// empilharia gráficos um sobre o outro.
+//
+// A atribuição no rodapé do painel não é enfeite: é condição de uso do widget
+// gratuito, e sai junto do gráfico.
+let TV_TICKER = null;
+let TV_INTERVALO = 'D';
+
+// O universo do radar é todo B3. FII, ETF e ação usam o mesmo prefixo lá.
+function simboloTradingView(ticker) {
+  return 'BMFBOVESPA:' + String(ticker || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function montarGrafico(ticker, intervalo) {
+  const container = document.getElementById('tvContainer');
+  if (!container || !ticker) return;
+  TV_TICKER = ticker;
+  TV_INTERVALO = intervalo || TV_INTERVALO;
+
+  document.getElementById('painelGrafico').classList.remove('hidden');
+  document.getElementById('graficoTicker').innerText = ticker;
+
+  document.querySelectorAll('.int-btn').forEach(b => {
+    const ativo = b.getAttribute('data-int') === TV_INTERVALO;
+    b.style.borderColor = ativo ? 'var(--verde)' : '';
+    b.style.color = ativo ? 'var(--verde)' : '';
+  });
+
+  container.innerHTML = '';
+  const alvo = document.createElement('div');
+  alvo.className = 'tradingview-widget-container';
+  alvo.style.height = '100%';
+  container.appendChild(alvo);
+
+  const script = document.createElement('script');
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  script.async = true;
+  script.innerHTML = JSON.stringify({
+    symbol: simboloTradingView(ticker),
+    interval: TV_INTERVALO,
+    timezone: 'America/Sao_Paulo',
+    theme: 'dark',
+    style: '1',                 // candles
+    locale: 'br',
+    autosize: true,
+    hide_side_toolbar: false,
+    allow_symbol_change: false, // o papel vem do radar, não da busca do widget
+    // As MESMAS médias do segmento de momentum. Um gráfico com médias
+    // diferentes das do motor faria você conferir uma coisa e ver outra.
+    studies: [
+      { id: 'MAExp@tv-basicstudies', inputs: { length: 21 } },
+      { id: 'MAExp@tv-basicstudies', inputs: { length: 50 } },
+    ],
+    support_host: 'https://www.tradingview.com',
+  });
+  alvo.appendChild(script);
+}
+
+function trocarIntervalo(intervalo) {
+  if (TV_TICKER) montarGrafico(TV_TICKER, intervalo);
 }
 
 // ===================== FIIs e ETFs =========================
