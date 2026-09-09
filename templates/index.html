@@ -49,11 +49,21 @@
     .rotulo { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--suave); font-weight: 600; }
     .linha:hover { background: #0d1410; }
 
-    /* Barra de cotações */
-    .ticker-wrap { width: 100%; overflow: hidden; background: #000; border-bottom: 1px solid var(--borda); white-space: nowrap; }
+    /* Barra de cotações — fundo branco.
+       Verde e vermelho da tela escura não sobrevivem no branco: #00e57a sobre
+       branco fica com contraste de 1.6:1, ilegível. A faixa usa tons próprios,
+       escurecidos até passarem de 4.5:1 — continuam lendo como alta e baixa,
+       mas agora dá para ler o número. */
+    .ticker-wrap { width: 100%; overflow: hidden; background: #ffffff;
+                   border-top: 1px solid #d4dad6; border-bottom: 1px solid #d4dad6;
+                   white-space: nowrap; }
     .ticker { display: inline-block; animation: ticker 42s linear infinite; padding-left: 100%; }
     .ticker:hover { animation-play-state: paused; }
-    .ticker-item { display: inline-block; padding: 0 2rem; font-size: .72rem; font-family: 'IBM Plex Mono', monospace; color: var(--suave); }
+    .ticker-item { display: inline-block; padding: 0 2rem; font-size: .72rem;
+                   font-family: 'IBM Plex Mono', monospace; color: #111815; }
+    .ticker-item b { color: #000; }
+    .ticker-item .sobe  { color: #067a3c; }
+    .ticker-item .desce { color: #c01829; }
     @keyframes ticker { 0% { transform: translate3d(0,0,0); } 100% { transform: translate3d(-100%,0,0); } }
 
     /* Tile de identidade do papel: o logo fica por cima do monograma. Quando a
@@ -128,10 +138,10 @@
 
   <div class="ticker-wrap py-1.5 relative">
     <div class="ticker" id="tickerTape">
-      <span class="ticker-item">Conectando ao feed…</span>
+      <span class="ticker-item" style="color:#6b7671">Conectando ao feed…</span>
     </div>
-    <span class="absolute right-0 top-0 bottom-0 flex items-center pl-8 pr-3 mono text-[9px] whitespace-nowrap"
-          style="background: linear-gradient(to left, #000 60%, transparent); color: var(--ambar)"
+    <span class="absolute right-0 top-0 bottom-0 flex items-center pl-8 pr-3 mono text-[9px] whitespace-nowrap font-semibold"
+          style="background: linear-gradient(to left, #ffffff 62%, rgba(255,255,255,0)); color: #8a5200"
           title="O Yahoo publica a B3 com 15 minutos de atraso (fonte: ICE Data Services)">
       ATRASO 15 MIN
     </span>
