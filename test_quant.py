@@ -307,3 +307,52 @@ class TestScoreQuant(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExercicioAtipico(unittest.TestCase):
+    """Regressão do caso VALE3, exercício 2025 — e da minha própria conclusão
+    errada sobre ele.
+
+    Os números são os da DFP: EBIT de R$ 31,969 bi, perda por não
+    recuperabilidade de R$ 25,147 bi, lucro de R$ 11,811 bi sobre patrimônio de
+    R$ 188,926 bi. O motor lia tudo CERTO — ROE de 6,25% e margem de 5,53% são
+    aritmética exata sobre esses valores — e mesmo assim emitia VENDA com score
+    25 sobre um P/L de 30,7x que era só denominador atípico.
+
+    O defeito não era o dado. Era concluir venda a partir de um evento isolado.
+    """
+
+    EBIT = 31.969e9
+    PERDAS = -25.147e9
+    LUCRO = 11.811e9
+
+    def test_impairment_material_marca_o_exercicio(self):
+        d = quant.exercicio_contaminado(self.PERDAS, self.EBIT)
+        self.assertTrue(d["contaminado"])
+        self.assertAlmostEqual(d["proporcao_ebit"], 0.787, places=2)
+
+    def test_perda_pequena_nao_marca(self):
+        """Baixa rotineira não pode disparar o alerta: se tudo é atípico,
+        nada é."""
+        self.assertFalse(quant.exercicio_contaminado(-0.5e9, self.EBIT)["contaminado"])
+
+    def test_sinal_da_perda_nao_importa(self):
+        """A DFP publica a conta negativa; alguém pode gravá-la positiva."""
+        a = quant.exercicio_contaminado(self.PERDAS, self.EBIT)
+        b = quant.exercicio_contaminado(abs(self.PERDAS), self.EBIT)
+        self.assertEqual(a["contaminado"], b["contaminado"])
+
+    def test_sem_ebit_positivo_nao_afirma_nada(self):
+        d = quant.exercicio_contaminado(self.PERDAS, -1e9)
+        self.assertFalse(d["contaminado"])
+        self.assertIsNone(d["proporcao_ebit"])
+
+    def test_lucro_recorrente_e_estimativa_e_fica_acima_do_publicado(self):
+        estimado = quant.lucro_recorrente(self.LUCRO, self.PERDAS)
+        self.assertGreater(estimado, self.LUCRO)
+        # 11,811 + 25,147 x (1 - 0,34) = 28,4 bi
+        self.assertAlmostEqual(estimado / 1e9, 28.4, places=1)
+
+    def test_sem_dado_nao_estima(self):
+        self.assertIsNone(quant.lucro_recorrente(None, self.PERDAS))
+        self.assertIsNone(quant.lucro_recorrente(self.LUCRO, None))

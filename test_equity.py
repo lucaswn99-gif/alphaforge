@@ -911,3 +911,66 @@ class TestCascataUnica(unittest.TestCase):
         for campo in equity.CAMPOS_FUNDAMENTAIS:
             self.assertIsNone(r["valores"][campo])
         self.assertEqual(r["origens"], [])
+
+
+class TestVereditoEmExercicioAtipico(unittest.TestCase):
+    """VALE3, 2025: o motor lia o balanço corretamente e ainda assim concluía
+    errado. Impairment de R$ 25,1 bi sobre EBIT de R$ 31,9 bi derruba o lucro,
+    infla o P/L e faz o score cair — mas isso descreve o evento, não o negócio.
+    """
+
+    ATIPICO = {"contaminado": True, "perdas": 25.147e9, "proporcao_ebit": 0.787}
+    NORMAL = {"contaminado": False, "perdas": 0.5e9, "proporcao_ebit": 0.016}
+
+    # Perfil do papel no ano contaminado: P/L alto e ROE baixo por causa do
+    # lucro deprimido, mas margem e dividendos ainda de pé.
+    ENTRADAS = dict(pl=30.7, pvp=1.7, roe=6.25, dy=7.9, margem_liq=5.5,
+                    tendencia_grafica="ALTA", rsi_val=60.9)
+
+    def test_sem_a_marcacao_o_motor_manda_vender(self):
+        _, veredito, _, _ = equity.calcular_score_quantamental(**self.ENTRADAS)
+        self.assertIn(veredito, ("VENDA", "NEUTRO"))
+
+    def test_com_a_marcacao_vira_pedido_de_leitura_humana(self):
+        _, veredito, _, alertas = equity.calcular_score_quantamental(
+            **self.ENTRADAS, exercicio_atipico=self.ATIPICO)
+        self.assertEqual(veredito, "REVISAR — EXERCÍCIO ATÍPICO")
+        self.assertTrue(any("atípico" in a for a in alertas))
+        self.assertTrue(any("79%" in a for a in alertas))
+
+    def test_nao_vira_compra(self):
+        """O alerta suspende a afirmação de venda; não inventa convicção de
+        compra sobre um ano que ninguém leu."""
+        score, veredito, _, _ = equity.calcular_score_quantamental(
+            **self.ENTRADAS, exercicio_atipico=self.ATIPICO)
+        self.assertNotIn("COMPRA", veredito)
+        self.assertLess(score, equity.CORTE_COMPRA)
+
+    def test_prejuizo_continua_mandando(self):
+        """Prejuízo não é evento isolado: a trava de risco vence a marcação."""
+        entradas = dict(self.ENTRADAS); entradas["roe"] = -8.0
+        _, veredito, _, _ = equity.calcular_score_quantamental(
+            **entradas, exercicio_atipico=self.ATIPICO)
+        self.assertEqual(veredito, "VENDA / ALTO RISCO")
+
+    def test_destruicao_de_capital_continua_mandando(self):
+        _, veredito, _, _ = equity.calcular_score_quantamental(
+            **self.ENTRADAS, destruicao_historica=True, exercicio_atipico=self.ATIPICO)
+        self.assertEqual(veredito, "VENDA / ALTO RISCO")
+
+    def test_exercicio_normal_nao_muda_nada(self):
+        antes = equity.calcular_score_quantamental(**self.ENTRADAS)
+        depois = equity.calcular_score_quantamental(
+            **self.ENTRADAS, exercicio_atipico=self.NORMAL)
+        self.assertEqual(antes[0], depois[0])
+        self.assertEqual(antes[1], depois[1])
+
+    def test_papel_bom_em_ano_atipico_nao_perde_a_compra(self):
+        """A marcação só suspende VENDA e NEUTRO. Quem já pontuava alto segue
+        com o veredito que o score sustenta."""
+        bom = dict(pl=6.0, pvp=1.0, roe=22.0, dy=8.0, margem_liq=18.0,
+                   tendencia_grafica="ALTA", rsi_val=52.0)
+        _, veredito, _, alertas = equity.calcular_score_quantamental(
+            **bom, exercicio_atipico=self.ATIPICO)
+        self.assertIn("COMPRA", veredito)
+        self.assertTrue(any("atípico" in a for a in alertas))

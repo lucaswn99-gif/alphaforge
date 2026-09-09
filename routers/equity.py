@@ -21,7 +21,7 @@ import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, Query
 
-from modules import composicao_ibov, fundamentos_cvm, identidade
+from modules import composicao_ibov, fundamentos_cvm, identidade, quant
 
 router = APIRouter(prefix="/renda-variavel", tags=["Renda Variável & Ações"])
 
@@ -614,10 +614,21 @@ def resolver_fundamentos(codigo, preco, info_yahoo=None, ativo=None, serie=None)
     exercicio_cvm = None
     divergencias = []
     campos_brutos = None
+    atipico = None
 
     # 1. Balanço publicado na CVM.
     cvm = fundamentos_cvm.multiplos_do_ticker(codigo, preco=preco)
     if cvm.get("disponivel"):
+        # Item não recorrente do mesmo exercício: sem ele, um ano de impairment
+        # é indistinguível de uma empresa cara. Ver `quant.exercicio_contaminado`.
+        balanco = fundamentos_cvm.balanco_por_cnpj(cvm.get("cnpj")) or {}
+        if balanco:
+            atipico = quant.exercicio_contaminado(
+                balanco.get("perdas_nao_recorrentes"), balanco.get("ebit"))
+            if atipico.get("contaminado"):
+                atipico["lucro_recorrente_estimado"] = quant.lucro_recorrente(
+                    balanco.get("lucro_liquido"), balanco.get("perdas_nao_recorrentes"))
+                atipico["lucro_publicado"] = balanco.get("lucro_liquido")
         preencheu = False
         for campo in ("pl", "pvp", "roe", "margem_liq"):
             if cvm.get(campo) is not None:
@@ -668,7 +679,8 @@ def resolver_fundamentos(codigo, preco, info_yahoo=None, ativo=None, serie=None)
             origens.append("proventos")
 
     return {"valores": valores, "origens": origens, "exercicio_cvm": exercicio_cvm,
-            "divergencias": divergencias, "campos_brutos": campos_brutos}
+            "divergencias": divergencias, "campos_brutos": campos_brutos,
+            "exercicio_atipico": atipico}
 
 
 def extrair_fundamentos(simbolo, tentativas=SCANNER_TENTATIVAS):
@@ -767,7 +779,8 @@ def fatiar_precos(df, simbolo):
 # --------------------------------------------------------------------------- #
 
 def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
-                                rsi_val, destruicao_historica=False):
+                                rsi_val, destruicao_historica=False,
+                                exercicio_atipico=None):
     """Motor de Decisão ÚNICO. Scanner e auditoria individual passam por aqui
     com o mesmo conjunto de entradas, inclusive `destruicao_historica`.
 
@@ -899,6 +912,20 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
         1 for indicador in (pl, pvp, roe, dy, margem_liq) if indicador is not None
     )
 
+    # Exercício contaminado por item não recorrente: P/L, ROE e margem daquele
+    # ano descrevem o evento, não o negócio. Emitir VENDA sobre isso é ler
+    # certo e concluir errado — foi o que aconteceu com VALE3 em 2025, quando
+    # R$ 25,1 bi de impairment sobre EBIT de R$ 31,9 bi derrubaram o lucro e o
+    # motor devolveu VENDA com score 25. Prejuízo e destruição de capital
+    # continuam mandando: aqueles não são evento isolado.
+    atipico = (exercicio_atipico or {}).get("contaminado") if exercicio_atipico else False
+    if atipico:
+        proporcao = (exercicio_atipico or {}).get("proporcao_ebit")
+        alertas_risco.append(
+            "⚠ Exercício atípico: perda não recorrente equivale a "
+            f"{proporcao * 100:.0f}% do EBIT" if proporcao else
+            "⚠ Exercício com perda não recorrente relevante")
+
     if em_prejuizo or destruicao_historica:
         score = min(score, 35)
         veredito = "VENDA / ALTO RISCO"
@@ -908,6 +935,10 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
     elif fundamentos_avaliados < MINIMO_INDICADORES:
         score = min(score, 55)
         veredito = f"DADOS PARCIAIS ({fundamentos_avaliados}/{TOTAL_INDICADORES})"
+    elif atipico and veredito in ("VENDA", "NEUTRO"):
+        # Não vira compra — vira pedido de leitura humana, que é o que o caso
+        # merece. O score fica onde está; só o rótulo deixa de afirmar venda.
+        veredito = "REVISAR — EXERCÍCIO ATÍPICO"
 
     return score, veredito, pontos_positivos, alertas_risco
 
@@ -1023,6 +1054,7 @@ def coletar_bloco(mapa):
                 pl=info["pl"], pvp=info["pvp"], roe=info["roe"], dy=info["dy"],
                 margem_liq=info["margem_liq"], tendencia_grafica=tendencia,
                 rsi_val=rsi_val, destruicao_historica=destruicao,
+                exercicio_atipico=resolvido["exercicio_atipico"],
             )
 
             def _arred(valor, casas=2):
@@ -1037,6 +1069,7 @@ def coletar_bloco(mapa):
                 "origem_fundamentos": " + ".join(origens) if origens else None,
                 "exercicio_cvm": exercicio_cvm,
                 "divergencias": divergencias or None,
+                "exercicio_atipico": resolvido["exercicio_atipico"],
                 "preco": round(preco, 2),
                 "variacao_dia": _arred(variacao_dia),
                 "identidade": identidade.identidade(codigo),
@@ -1400,7 +1433,8 @@ def _auditar_simbolo(ticker_clean, simbolo):
 
     # Exatamente o mesmo motor e as mesmas entradas do scanner.
     score, veredito, pontos_positivos, alertas_risco = calcular_score_quantamental(
-        pl, pvp, roe, dy, margem_liq, tendencia, rsi_val, destruicao_historica
+        pl, pvp, roe, dy, margem_liq, tendencia, rsi_val, destruicao_historica,
+        exercicio_atipico=resolvido["exercicio_atipico"],
     )
 
     # Quando as duas fontes discordam, o veredito sai do balanço — mas o
@@ -1424,6 +1458,7 @@ def _auditar_simbolo(ticker_clean, simbolo):
         "origem_multiplos": origem_multiplos,
         "exercicio_cvm": resolvido["exercicio_cvm"],
         "divergencias": divergencias or None,
+        "exercicio_atipico": resolvido["exercicio_atipico"],
         "campos_demonstrativo": resolvido["campos_brutos"],
         "indicadores_tecnicos": {
             "rsi_wilder": rsi_val,

@@ -64,6 +64,11 @@ CONTAS = {
         "3.05": "ebit",
         "3.06": "resultado_financeiro",
         "3.06.02": "despesa_financeira",
+        # Impairment. A Vale reconheceu R$ 25,1 bi nesta conta em 2025 e o
+        # lucro caiu de ~R$ 35 bi para R$ 11,8 bi — o que fez o scanner emitir
+        # VENDA sobre um P/L de 30,7x que era só denominador atípico. Sem esta
+        # conta não há como distinguir empresa cara de exercício contaminado.
+        "3.04.03": "perdas_nao_recorrentes",
         "3.11": "lucro_liquido",
         "3.99.01.01": "lpa_on",
     },
@@ -112,6 +117,9 @@ DESCRICOES = {
     "caixa": (
         "caixa e equivalentes de caixa",
     ),
+    "perdas_nao_recorrentes": (
+        "perdas pela nao recuperabilidade de ativos",
+    ),
 }
 
 
@@ -133,7 +141,9 @@ CAMPOS = ["ativo_total", "ativo_circulante", "passivo_circulante",
           # Crédito: alavancagem, cobertura de juros e Altman Z''. Sem estes
           # o laudo de emissor dependia do Yahoo, que não responde do Render.
           "caixa", "divida_curto_prazo", "divida_longo_prazo",
-          "despesa_financeira", "lucros_acumulados"]
+          "despesa_financeira", "lucros_acumulados",
+          # Item não recorrente: separa "empresa cara" de "ano atípico".
+          "perdas_nao_recorrentes"]
 
 
 def baixar_zip(ano):

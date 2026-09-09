@@ -45,6 +45,8 @@ COLUNAS_OBRIGATORIAS = (
     "ativo_total", "ativo_circulante", "passivo_circulante", "ebit",
     "caixa", "divida_curto_prazo", "divida_longo_prazo",
     "despesa_financeira", "lucros_acumulados",
+    # Sem esta, um exercício de impairment é indistinguível de empresa cara.
+    "perdas_nao_recorrentes",
 )
 # Coluna declarada mas vazia em toda a base é o mesmo que coluna ausente.
 PREENCHIMENTO_MINIMO = {

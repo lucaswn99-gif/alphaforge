@@ -470,3 +470,47 @@ def compor_score_quant(scores):
         return None, None
     melhor = max(validos, key=validos.get)
     return validos[melhor], melhor
+
+
+# --------------------------------------------------------------------------- #
+# Itens não recorrentes
+# --------------------------------------------------------------------------- #
+# Impairment acima desta fração do EBIT torna o exercício atípico: o lucro
+# daquele ano deixa de descrever a capacidade de geração da empresa, e P/L,
+# ROE e margem calculados sobre ele descrevem o evento, não o negócio.
+#
+# O caso que motivou isto: Vale, exercício 2025. R$ 25,1 bi de perda por não
+# recuperabilidade sobre EBIT de R$ 31,9 bi derrubaram o lucro para R$ 11,8 bi.
+# O motor leu tudo certo — patrimônio, receita, lucro — e emitiu VENDA com
+# score 25 sobre um P/L de 30,7x que era só denominador atípico. Ler certo e
+# concluir errado é um defeito do modelo, não do dado.
+LIMIAR_NAO_RECORRENTE = 0.20
+ALIQUOTA_NOMINAL = 0.34   # IRPJ + CSLL: usada só para a estimativa indicativa
+
+
+def exercicio_contaminado(perdas, ebit):
+    """{contaminado, perdas, proporcao_ebit}. Nunca levanta.
+
+    `perdas` vem negativa na DFP; o sinal não importa para a materialidade.
+    """
+    p, e = _num(perdas), _num(ebit)
+    if p is None or e is None or e <= 0:
+        return {"contaminado": False, "perdas": p, "proporcao_ebit": None}
+    proporcao = abs(p) / e
+    return {"contaminado": proporcao >= LIMIAR_NAO_RECORRENTE,
+            "perdas": abs(p), "proporcao_ebit": proporcao}
+
+
+def lucro_recorrente(lucro, perdas, aliquota=ALIQUOTA_NOMINAL):
+    """Lucro somando de volta o impairment, líquido do efeito fiscal nominal.
+
+    É ESTIMATIVA, e a tela diz isso. O efeito fiscal real depende de quanto da
+    perda foi dedutível, o que só as notas explicativas informam — por isso o
+    número serve para dimensionar, não para substituir o lucro publicado. Ele
+    não entra em nenhum score: só acompanha o alerta, para você ver a ordem de
+    grandeza do que o evento tirou.
+    """
+    base, p = _num(lucro), _num(perdas)
+    if base is None or p is None:
+        return None
+    return base + abs(p) * (1.0 - aliquota)
