@@ -528,7 +528,10 @@ async function iniciarTickerTape() {
       const preco = d.ativo === 'IBOV'
         ? Number(d.preco).toLocaleString('pt-BR', { maximumFractionDigits: 0 })
         : Number(d.preco).toFixed(2);
-      html += `<div class="ticker-item"><b style="color:#e8efea">${esc(d.ativo)}</b>
+      // Sem cor inline aqui: estilo inline vence regra de classe, e era isso
+      // que deixava o código do papel branco sobre a faixa branca. A cor sai
+      // do CSS (.ticker-item b), que é onde o tema da faixa mora.
+      html += `<div class="ticker-item"><b>${esc(d.ativo)}</b>
                  <span class="ml-2">${prefixo} ${preco}</span>
                  <span class="ml-2 font-bold ${cor}">${sinal} ${Math.abs(d.variacao).toFixed(2)}%</span></div>`;
     });
