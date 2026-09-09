@@ -49,26 +49,57 @@ CABECALHOS = {
     "Accept": "application/rss+xml, application/xml, text/xml, */*",
 }
 
-# (chave, veículo, url, categoria). Categoria organiza a tela.
+# (chave, veículo, (endereços candidatos...), categoria).
+#
+# Cada fonte aceita VÁRIOS endereços porque endereço de RSS muda sem aviso e eu
+# não consigo testá-los daqui. A primeira que devolver XML legível vence; as
+# demais nem são chamadas. Foi assim que três fontes caíram na primeira
+# execução — BCB devolvendo HTML, IBGE com 403 e Notícias Agrícolas com 404 —
+# e um endereço único não dá para onde correr.
 FONTES = [
     # --- macro oficial: a fonte primária, sem intermediário ---
-    ("bcb", "Banco Central", "https://www.bcb.gov.br/rss/noticias", "Macro"),
-    ("fed", "Federal Reserve",
-     "https://www.federalreserve.gov/feeds/press_monetary.xml", "Macro"),
-    ("fed_all", "Fed (todos os comunicados)",
-     "https://www.federalreserve.gov/feeds/press_all.xml", "Macro"),
-    ("ibge", "IBGE", "https://agenciadenoticias.ibge.gov.br/agencia-noticias/rss.html",
-     "Macro"),
+    ("bcb", "Banco Central", (
+        "https://www.bcb.gov.br/api/feed/sitebcb/noticias",
+        "https://www.bcb.gov.br/api/feed/sitebcb/notasimprensa",
+        "https://www.bcb.gov.br/rss/noticias",
+    ), "Macro"),
+    ("fed", "Federal Reserve", (
+        "https://www.federalreserve.gov/feeds/press_monetary.xml",
+    ), "Macro"),
+    ("fed_all", "Fed (comunicados)", (
+        "https://www.federalreserve.gov/feeds/press_all.xml",
+    ), "Macro"),
+    ("ibge", "IBGE", (
+        "https://agenciadenoticias.ibge.gov.br/agencia-noticias/2012-agencia-de-noticias/noticias.rss",
+        "https://agenciadenoticias.ibge.gov.br/rss/economia.xml",
+        "https://agenciadenoticias.ibge.gov.br/agencia-noticias/rss.html",
+    ), "Macro"),
+    ("poder360", "Poder360", (
+        "https://www.poder360.com.br/economia/feed/",
+        "https://www.poder360.com.br/feed/",
+    ), "Macro"),
     # --- mercado ---
-    ("infomoney", "InfoMoney", "https://www.infomoney.com.br/feed/", "Mercado"),
-    ("moneytimes", "Money Times", "https://www.moneytimes.com.br/feed/", "Mercado"),
-    ("seudinheiro", "Seu Dinheiro", "https://www.seudinheiro.com/feed/", "Mercado"),
-    ("agenciabrasil", "Agência Brasil",
-     "https://agenciabrasil.ebc.com.br/rss/economia/feed.xml", "Mercado"),
+    ("infomoney", "InfoMoney", ("https://www.infomoney.com.br/feed/",), "Mercado"),
+    ("moneytimes", "Money Times", ("https://www.moneytimes.com.br/feed/",), "Mercado"),
+    ("seudinheiro", "Seu Dinheiro", ("https://www.seudinheiro.com/feed/",), "Mercado"),
+    ("agenciabrasil", "Agência Brasil", (
+        "https://agenciabrasil.ebc.com.br/rss/economia/feed.xml",
+    ), "Mercado"),
+    ("exame", "Exame", (
+        "https://exame.com/invest/feed/",
+        "https://exame.com/feed/",
+    ), "Mercado"),
     # --- commodities e agro ---
-    ("noticiasagricolas", "Notícias Agrícolas",
-     "https://www.noticiasagricolas.com.br/rss/noticias.xml", "Commodities"),
-    ("canalrural", "Canal Rural", "https://www.canalrural.com.br/feed/", "Commodities"),
+    ("investing_comm", "Investing (commodities)", (
+        "https://br.investing.com/rss/commodities.rss",
+        "https://br.investing.com/rss/news_11.rss",
+    ), "Commodities"),
+    ("noticiasagricolas", "Notícias Agrícolas", (
+        "https://www.noticiasagricolas.com.br/rss/noticias/todas.xml",
+        "https://www.noticiasagricolas.com.br/feed",
+        "https://www.noticiasagricolas.com.br/rss/noticias.xml",
+    ), "Commodities"),
+    ("canalrural", "Canal Rural", ("https://www.canalrural.com.br/feed/",), "Commodities"),
 ]
 
 CATEGORIAS = ("Macro", "Mercado", "Commodities")
@@ -126,45 +157,57 @@ def _itens_do_xml(corpo):
     return itens
 
 
-def ler_fonte(chave, veiculo, url, categoria):
-    """Uma fonte. Devolve (itens, diagnóstico) — o diagnóstico sempre existe."""
-    diagnostico = {"chave": chave, "veiculo": veiculo, "url": url,
+def ler_fonte(chave, veiculo, urls, categoria):
+    """Uma fonte, com seus endereços candidatos.
+
+    Tenta um a um e para no primeiro que devolver XML legível. Devolve
+    (itens, diagnóstico) — o diagnóstico sempre existe e diz qual endereço
+    respondeu, ou o motivo de cada um ter falhado.
+    """
+    if isinstance(urls, str):
+        urls = (urls,)
+    diagnostico = {"chave": chave, "veiculo": veiculo, "url": None,
                    "categoria": categoria, "ok": False, "itens": 0, "motivo": None}
-    try:
-        resposta = requests.get(url, headers=CABECALHOS, timeout=TIMEOUT)
-    except Exception as exc:  # noqa: BLE001
-        diagnostico["motivo"] = f"{type(exc).__name__}"
-        return [], diagnostico
+    motivos = []
 
-    if resposta.status_code != 200:
-        diagnostico["motivo"] = f"HTTP {resposta.status_code}"
-        return [], diagnostico
-
-    try:
-        itens = _itens_do_xml(resposta.content)
-    except ET.ParseError as exc:
-        diagnostico["motivo"] = f"XML inválido: {exc}"
-        return [], diagnostico
-
-    manchetes = []
-    for item in itens[:MAX_POR_FONTE]:
-        titulo = _texto(item.findtext("title") or
-                        item.findtext("{http://www.w3.org/2005/Atom}title"))
-        if not titulo:
+    for url in urls:
+        try:
+            resposta = requests.get(url, headers=CABECALHOS, timeout=TIMEOUT)
+        except Exception as exc:  # noqa: BLE001
+            motivos.append(f"{url}: {type(exc).__name__}")
             continue
-        manchetes.append({
-            "titulo": titulo,          # manchete apenas — nunca o corpo da matéria
-            "link": _link(item),
-            "veiculo": veiculo,
-            "categoria": categoria,
-            "quando": _quando(item),
-        })
 
-    diagnostico["ok"] = bool(manchetes)
-    diagnostico["itens"] = len(manchetes)
-    if not manchetes:
-        diagnostico["motivo"] = "feed respondeu sem itens legíveis"
-    return manchetes, diagnostico
+        if resposta.status_code != 200:
+            motivos.append(f"{url}: HTTP {resposta.status_code}")
+            continue
+
+        try:
+            itens = _itens_do_xml(resposta.content)
+        except ET.ParseError:
+            motivos.append(f"{url}: não é XML")
+            continue
+
+        manchetes = []
+        for item in itens[:MAX_POR_FONTE]:
+            titulo = _texto(item.findtext("title") or
+                            item.findtext("{http://www.w3.org/2005/Atom}title"))
+            if not titulo:
+                continue
+            manchetes.append({
+                "titulo": titulo,      # manchete apenas — nunca o corpo da matéria
+                "link": _link(item),
+                "veiculo": veiculo,
+                "categoria": categoria,
+                "quando": _quando(item),
+            })
+
+        if manchetes:
+            diagnostico.update(ok=True, itens=len(manchetes), url=url)
+            return manchetes, diagnostico
+        motivos.append(f"{url}: sem itens legíveis")
+
+    diagnostico["motivo"] = " | ".join(motivos) or "nenhum endereço configurado"
+    return [], diagnostico
 
 
 def coletar(forcar=False):
@@ -236,12 +279,28 @@ if __name__ == "__main__":
     for fonte in FONTES:
         itens, diagnostico = ler_fonte(*fonte)
         marca = "OK " if diagnostico["ok"] else "FALHOU"
-        print(f"{marca:7} {diagnostico['veiculo']:<28} "
-              f"{diagnostico['itens']:>2} itens  {diagnostico['motivo'] or ''}")
-        if itens:
-            print(f"        ultima: {itens[0]['titulo'][:90]}")
-        (vivos if diagnostico["ok"] else mortos).append(diagnostico["chave"])
+        print(f"{marca:7} {diagnostico['veiculo']:<26} {diagnostico['itens']:>2} itens")
+        if diagnostico["ok"]:
+            print(f"        endereco: {diagnostico['url']}")
+            print(f"        ultima:   {itens[0]['titulo'][:88]}")
+            vivos.append(diagnostico["chave"])
+        else:
+            # Cada endereco candidato com o motivo proprio: e isso que diz se o
+            # feed mudou de lugar ou se o site esta bloqueando.
+            for parte in (diagnostico["motivo"] or "").split(" | "):
+                print(f"        {parte}")
+            mortos.append(diagnostico["chave"])
+
+    por_categoria = {}
+    for chave, _, _, categoria in FONTES:
+        if chave in vivos:
+            por_categoria[categoria] = por_categoria.get(categoria, 0) + 1
 
     print(f"\n{len(vivos)} de {len(FONTES)} fontes responderam")
+    print("por categoria: " + ", ".join(f"{c}: {n}" for c, n in sorted(por_categoria.items())))
     if mortos:
         print("sem resposta: " + ", ".join(mortos))
+    # Categoria sem nenhuma fonte viva deixa um painel vazio na tela.
+    vazias = [c for c in CATEGORIAS if not por_categoria.get(c)]
+    if vazias:
+        print("SEM COBERTURA: " + ", ".join(vazias))

@@ -158,7 +158,7 @@ class TestNoticias(unittest.TestCase):
 
     def test_le_manchete_link_e_horario(self):
         noticias.requests.get = lambda *a, **k: self._Resposta(self.RSS)
-        itens, diag = noticias.ler_fonte("x", "Veículo", "http://x", "Macro")
+        itens, diag = noticias.ler_fonte("x", "Veículo", ("http://x",), "Macro")
         self.assertTrue(diag["ok"])
         self.assertEqual(len(itens), 2)
         self.assertEqual(itens[0]["titulo"], "Copom mantém a Selic em 14%")
@@ -168,7 +168,7 @@ class TestNoticias(unittest.TestCase):
     def test_nao_guarda_o_texto_da_materia(self):
         """O painel é índice, não republicação: só manchete, veículo e link."""
         noticias.requests.get = lambda *a, **k: self._Resposta(self.RSS)
-        itens, _ = noticias.ler_fonte("x", "Veículo", "http://x", "Macro")
+        itens, _ = noticias.ler_fonte("x", "Veículo", ("http://x",), "Macro")
         for item in itens:
             self.assertEqual(set(item), {"titulo", "link", "veiculo", "categoria", "quando"})
 
@@ -177,19 +177,64 @@ class TestNoticias(unittest.TestCase):
             raise RuntimeError("timeout")
 
         noticias.requests.get = explode
-        itens, diag = noticias.ler_fonte("x", "Veículo", "http://x", "Macro")
+        itens, diag = noticias.ler_fonte("x", "Veículo", ("http://x",), "Macro")
         self.assertEqual(itens, [])
         self.assertFalse(diag["ok"])
         self.assertIn("RuntimeError", diag["motivo"])
 
-    def test_http_de_erro_e_reportado(self):
+    def test_http_de_erro_e_reportado_com_o_endereco(self):
+        """O motivo carrega QUAL endereço falhou: com candidatos múltiplos,
+        'HTTP 404' sozinho não diz qual deles morreu."""
         noticias.requests.get = lambda *a, **k: self._Resposta("", status=404)
-        _, diag = noticias.ler_fonte("x", "Veículo", "http://x", "Macro")
-        self.assertEqual(diag["motivo"], "HTTP 404")
+        _, diag = noticias.ler_fonte("x", "Veículo", ("http://x",), "Macro")
+        self.assertEqual(diag["motivo"], "http://x: HTTP 404")
+
+    def test_cai_para_o_endereco_seguinte(self):
+        """O defeito real: BCB devolvendo HTML, IBGE com 403 e Notícias
+        Agrícolas com 404 derrubaram três painéis porque cada fonte tinha um
+        endereço só."""
+        chamadas = []
+
+        def responder(url, *a, **k):
+            chamadas.append(url)
+            if url.endswith("/velho"):
+                return self._Resposta("<html>não é feed</html>", status=200)
+            if url.endswith("/bloqueado"):
+                return self._Resposta("", status=403)
+            return self._Resposta(self.RSS)
+
+        noticias.requests.get = responder
+        itens, diag = noticias.ler_fonte(
+            "x", "Veículo", ("http://a/velho", "http://b/bloqueado", "http://c/bom"), "Macro")
+        self.assertTrue(diag["ok"])
+        self.assertEqual(diag["url"], "http://c/bom")
+        self.assertEqual(len(itens), 2)
+        self.assertEqual(len(chamadas), 3)
+
+    def test_para_no_primeiro_que_funciona(self):
+        """Endereço bom no começo não pode disparar chamada aos demais."""
+        chamadas = []
+
+        def responder(url, *a, **k):
+            chamadas.append(url)
+            return self._Resposta(self.RSS)
+
+        noticias.requests.get = responder
+        _, diag = noticias.ler_fonte("x", "V", ("http://a", "http://b"), "Macro")
+        self.assertEqual(chamadas, ["http://a"])
+        self.assertEqual(diag["url"], "http://a")
+
+    def test_toda_categoria_tem_mais_de_uma_fonte(self):
+        """Uma fonte por categoria significa painel vazio quando ela cai."""
+        contagem = {}
+        for _, _, _, categoria in noticias.FONTES:
+            contagem[categoria] = contagem.get(categoria, 0) + 1
+        for categoria in noticias.CATEGORIAS:
+            self.assertGreaterEqual(contagem.get(categoria, 0), 2, categoria)
 
     def test_xml_quebrado_nao_derruba(self):
         noticias.requests.get = lambda *a, **k: self._Resposta("<rss><item>")
-        itens, diag = noticias.ler_fonte("x", "Veículo", "http://x", "Macro")
+        itens, diag = noticias.ler_fonte("x", "Veículo", ("http://x",), "Macro")
         self.assertEqual(itens, [])
         self.assertFalse(diag["ok"])
 
@@ -220,7 +265,7 @@ class TestNoticias(unittest.TestCase):
                '<title>Bolsa &amp; d&#243;lar &lt;b&gt;hoje&lt;/b&gt;</title>'
                '<link>http://x</link></item></channel></rss>')
         noticias.requests.get = lambda *a, **k: self._Resposta(rss)
-        itens, _ = noticias.ler_fonte("x", "V", "http://x", "Macro")
+        itens, _ = noticias.ler_fonte("x", "V", ("http://x",), "Macro")
         self.assertEqual(itens[0]["titulo"], "Bolsa & dólar hoje")
 
 

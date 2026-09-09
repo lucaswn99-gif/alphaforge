@@ -12,3 +12,7 @@ fundos_log.txt
 
 # cache local da carteira do IBOV (regenerado a cada 12h)
 modules/cache_ibov.json
+
+# Preview enviado pelo Claude para conferencia visual — nao faz parte do servico
+Claude outputs/
+preview_terminal.html

@@ -256,6 +256,12 @@ def gravar(registros, banco=BANCO):
     conexao = sqlite3.connect(banco)
     cursor = conexao.cursor()
     colunas = ", ".join(f"{campo} REAL" for campo in CAMPOS)
+    # A base é reconstruída inteira a cada execução, e o CREATE IF NOT EXISTS
+    # não altera o esquema de uma tabela que já existe. Sem este DROP, adicionar
+    # um campo em CAMPOS fazia a coleta inteira morrer no INSERT com
+    # "table fundamentos has no column named caixa" — que foi exatamente o que
+    # aconteceu ao incluir os campos de crédito.
+    cursor.execute("DROP TABLE IF EXISTS fundamentos")
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS fundamentos (
             cnpj TEXT NOT NULL,
