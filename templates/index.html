@@ -4,6 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AlphaForge Terminal</title>
+  <!-- Instalável como app: Chrome no Android oferece "Instalar" a partir daqui. -->
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#050806">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="AlphaForge">
+  <link rel="apple-touch-icon" href="/static/icone-192.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icone-192.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -74,6 +83,22 @@
     .campo:focus { outline: none; border-color: var(--verde-esc); }
 
     .sobe { color: var(--verde); } .desce { color: var(--vermelho); }
+
+    /* No celular a tabela de 8 colunas não cabe, e rolar na horizontal para ver
+       o veredito é pior que não ver a coluna. Some o que é contexto (DY, P/L,
+       score) e fica o que decide: papel, preço, variação e veredito. Tudo
+       continua na consulta detalhada, a um toque. */
+    @media (max-width: 640px) {
+      .so-desktop { display: none !important; }
+      .aba { padding: 9px 12px; font-size: 11px; letter-spacing: .04em; }
+      main { padding: 12px !important; }
+      .painel { border-radius: 4px; }
+      h1 { font-size: 15px; }
+    }
+    /* Área segura do Android/iOS (barra de gestos) quando roda como app. */
+    @media (display-mode: standalone) {
+      body { padding-bottom: env(safe-area-inset-bottom); }
+    }
   </style>
 </head>
 <body class="min-h-screen flex flex-col">
@@ -116,6 +141,7 @@
 <nav class="flex border-b overflow-x-auto px-3" style="border-color: var(--borda); background: var(--painel-alt);">
   <button onclick="alternarAba('mercado')"        id="btn-tab-mercado"        class="aba aba-ativa">Mercado</button>
   <button onclick="alternarAba('renda-variavel')" id="btn-tab-renda-variavel" class="aba">Renda Variável</button>
+  <button onclick="alternarAba('quant')"          id="btn-tab-quant"           class="aba">Quantitativo</button>
   <button onclick="alternarAba('fundos')"         id="btn-tab-fundos"         class="aba">FIIs &amp; ETFs</button>
   <button onclick="alternarAba('renda-fixa')"     id="btn-tab-renda-fixa"     class="aba">Crédito</button>
   <button onclick="alternarAba('allocation')"     id="btn-tab-allocation"     class="aba">Alocação</button>
@@ -213,9 +239,9 @@
               <th class="p-2">Papel</th>
               <th class="p-2 text-right">Preço</th>
               <th class="p-2 text-right">Dia</th>
-              <th class="p-2 text-right">P/L</th>
-              <th class="p-2 text-right">ROE</th>
-              <th class="p-2 text-right">DY</th>
+              <th class="p-2 text-right so-desktop">P/L</th>
+              <th class="p-2 text-right so-desktop">ROE</th>
+              <th class="p-2 text-right so-desktop">DY</th>
               <th class="p-2 text-center">Score</th>
               <th class="p-2 text-center">Veredito</th>
             </tr>
@@ -292,6 +318,53 @@
           <tbody id="tabelaETFs" class="divide-y" style="border-color: var(--borda)"></tbody>
         </table></div>
       </div>
+    </div>
+  </section>
+
+
+  <!-- ================= ABA: QUANTITATIVO ================= -->
+  <section id="tab-quant" class="hidden space-y-5">
+    <div class="painel p-4">
+      <div class="flex justify-between items-start gap-3 flex-wrap">
+        <div>
+          <h2 class="rotulo">Motor multicritério</h2>
+          <p class="text-[11px] mt-1" style="color: var(--suave)">
+            Três estratégias sobre o mesmo universo · <b>score_quant</b> é o melhor segmento do papel, não a média
+          </p>
+        </div>
+        <div class="flex gap-2 flex-wrap items-center">
+          <select id="segmentoQuant" onchange="carregarQuant()" class="campo text-[11px] py-1.5">
+            <option value="todos">Todos os segmentos</option>
+            <option value="momentum">Momentum &amp; Tendência</option>
+            <option value="bazin">Dividendos &amp; Valor (Bazin)</option>
+            <option value="greenblatt">Magic Formula (Greenblatt)</option>
+          </select>
+          <label class="flex items-center gap-1.5 text-[11px]" style="color: var(--suave)">
+            <input type="checkbox" id="apenasAprovados" onchange="carregarQuant()"> só aprovados
+          </label>
+          <button onclick="carregarQuant()" id="btnQuant" class="btn">Rodar motor</button>
+          <button onclick="carregarQuant(true)" class="btn-fantasma" title="Ignora o cache de 15 min">↻</button>
+        </div>
+      </div>
+    </div>
+
+    <p id="quantAviso" class="hidden text-xs rounded px-4 py-3 border"></p>
+
+    <div id="painelQuant" class="hidden painel p-4">
+      <div class="flex justify-between items-center mb-3 gap-3 flex-wrap">
+        <p id="quantCobertura" class="text-[10px]" style="color: var(--suave)"></p>
+        <input type="text" id="filtroQuant" onkeyup="filtrarQuant()" placeholder="Filtrar papel…" class="campo text-xs w-48">
+      </div>
+      <div class="overflow-x-auto max-h-[600px] overflow-y-auto">
+        <table class="w-full text-xs">
+          <thead class="sticky top-0" style="background: var(--painel-alt)">
+            <tr id="quantCabecalho" class="rotulo text-left"></tr>
+          </thead>
+          <tbody id="quantCorpo" class="divide-y" style="border-color: var(--borda)"></tbody>
+        </table>
+      </div>
+      <div id="quantRessalvas" class="text-[10px] mt-3 pt-2 border-t space-y-1"
+           style="color: var(--ambar); border-color: var(--borda)"></div>
     </div>
   </section>
 
@@ -464,7 +537,7 @@ function atualizarRelogio() {
 }
 
 // ===================== navegação =========================
-const ABAS = ['mercado', 'renda-variavel', 'fundos', 'renda-fixa', 'allocation'];
+const ABAS = ['mercado', 'renda-variavel', 'quant', 'fundos', 'renda-fixa', 'allocation'];
 const JA_CARREGADA = {};
 
 function alternarAba(aba) {
@@ -712,9 +785,9 @@ async function executarScanner(forcar = false) {
         </td>
         <td class="p-2 text-right mono">${num(i.preco)}</td>
         <td class="p-2 text-right">${pct(i.variacao_dia)}</td>
-        <td class="p-2 text-right mono">${num(i.pl, 2, 'x')}</td>
-        <td class="p-2 text-right mono">${num(i.roe, 1, '%')}</td>
-        <td class="p-2 text-right mono">${num(i.dy, 2, '%')}</td>
+        <td class="p-2 text-right mono so-desktop">${num(i.pl, 2, 'x')}</td>
+        <td class="p-2 text-right mono so-desktop">${num(i.roe, 1, '%')}</td>
+        <td class="p-2 text-right mono so-desktop">${num(i.dy, 2, '%')}</td>
         <td class="p-2 text-center font-bold mono">${i.score_geral}</td>
         <td class="p-2 text-center text-[11px] font-bold" ${cor}>${esc(i.veredito)}</td>
       </tr>`;
@@ -789,6 +862,150 @@ async function consultarAcao() {
   } catch (e) {
     mostrarAviso('acaoAviso', `Falha na consulta: ${esc(e.message || e)}`);
   } finally { btn.innerText = 'Analisar'; btn.disabled = false; }
+}
+
+
+// ===================== motor multicritério =========================
+// As colunas mudam com o segmento de propósito: mostrar EV/EBIT numa varredura
+// de momentum, ou IFR numa de dividendos, é ruído. Cada estratégia tem os
+// números que a sustentam.
+const COLUNAS_QUANT = {
+  todos: [
+    ['Papel', p => celulaPapel(p)],
+    ['Preço', p => `<span class="mono">${num(p.preco)}</span>`, 'right'],
+    ['Segmento', p => p.segmento_dominante
+        ? `<span class="text-[10px]" style="color:var(--verde)">${esc(p.segmento_dominante)}</span>`
+        : '<span style="color:#4a554e">—</span>', 'center'],
+    ['Momentum', p => num(p.scores.momentum, 0), 'right'],
+    ['Bazin', p => num(p.scores.bazin, 0), 'right'],
+    ['Greenblatt', p => num(p.scores.greenblatt, 0), 'right'],
+    ['score_quant', p => badgeScore(p.score_quant), 'center'],
+  ],
+  momentum: [
+    ['Papel', p => celulaPapel(p)],
+    ['Preço', p => `<span class="mono">${num(p.preco)}</span>`, 'right'],
+    ['EMA21', p => `<span class="mono">${num(p.momentum.ema21)}</span>`, 'right'],
+    ['EMA50', p => `<span class="mono">${num(p.momentum.ema50)}</span>`, 'right'],
+    ['IFR', p => `<span class="mono">${num(p.momentum.ifr, 1)}</span>`, 'right'],
+    ['ADTV', p => `<span class="mono">${milhoes(p.momentum.adtv)}</span>`, 'right'],
+    ['Compressão', p => p.momentum.compressao.comprimido
+        ? `<span style="color:var(--verde)" title="Bandas no ${Math.round(p.momentum.compressao.percentil)}º percentil, volume ${p.momentum.compressao.volume_relativo?.toFixed(2)}x">◆ sim</span>`
+        : '<span style="color:#4a554e">—</span>', 'center'],
+    ['Setup', p => selo(p.momentum), 'center'],
+    ['Score', p => badgeScore(p.scores.momentum), 'center'],
+  ],
+  bazin: [
+    ['Papel', p => celulaPapel(p)],
+    ['Preço', p => `<span class="mono">${num(p.preco)}</span>`, 'right'],
+    ['Teto Bazin', p => `<span class="mono">${num(p.bazin.preco_teto)}</span>`, 'right'],
+    ['Margem seg.', p => pct(p.bazin.margem_seguranca, 1), 'right'],
+    ['DY 12M', p => `<span class="mono sobe">${num(p.bazin.dy_12m, 2, '%')}</span>`, 'right'],
+    ['Payout', p => `<span class="mono">${num(p.bazin.payout, 0, '%')}</span>`, 'right'],
+    ['DL/EBIT', p => `<span class="mono">${num(p.bazin.dl_ebit, 2, 'x')}</span>`, 'right'],
+    ['Filtro', p => selo(p.bazin), 'center'],
+    ['Score', p => badgeScore(p.scores.bazin), 'center'],
+  ],
+  greenblatt: [
+    ['#', p => `<span class="mono" style="color:var(--verde)">${p.greenblatt.rank ?? '—'}</span>`],
+    ['Papel', p => celulaPapel(p)],
+    ['Preço', p => `<span class="mono">${num(p.preco)}</span>`, 'right'],
+    ['EV/EBIT', p => `<span class="mono">${num(p.greenblatt.ev_ebit, 2, 'x')}</span>`, 'right'],
+    ['ROIC', p => `<span class="mono">${num(p.greenblatt.roic, 1, '%')}</span>`, 'right'],
+    ['Pos. EV/EBIT', p => `<span class="mono" style="color:var(--suave)">${p.greenblatt.posicao_ev_ebit ?? '—'}</span>`, 'right'],
+    ['Pos. ROIC', p => `<span class="mono" style="color:var(--suave)">${p.greenblatt.posicao_roic ?? '—'}</span>`, 'right'],
+    ['Score', p => badgeScore(p.scores.greenblatt), 'center'],
+  ],
+};
+
+function milhoes(v) {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '<span style="color:#4a554e">—</span>';
+  return (Number(v) / 1e6).toFixed(1) + ' mi';
+}
+
+function celulaPapel(p) {
+  const ex = p.exercicio_cvm ? `DFP ${p.exercicio_cvm}` : 'sem balanço na base';
+  return `<div class="flex items-center gap-2">${tile(p.identidade)}
+    <div><div class="font-bold text-[12px]" style="color:var(--verde)">${esc(p.ticker)}</div>
+    <div class="text-[9px]" style="color:#4a554e">${esc(ex)}</div></div></div>`;
+}
+
+// "Não apurado" nunca vira "reprovado": a diferença entre o dado faltar e o
+// critério falhar é a diferença entre não saber e saber que não.
+function selo(seg) {
+  if (!seg) return '—';
+  if ((seg.criterios_nao_apurados || []).length) {
+    return `<span class="px-1.5 py-0.5 rounded text-[9px] font-bold" style="background:#1a2320;color:#78877f"
+      title="Sem dado para: ${esc((seg.criterios_nao_apurados || []).join(', '))}">PARCIAL</span>`;
+  }
+  const reprovou = Object.entries(seg.criterios || {}).filter(([, v]) => v === false).map(([k]) => k);
+  return seg.aprovado
+    ? '<span class="px-1.5 py-0.5 rounded text-[9px] font-bold" style="background:var(--verde);color:#04120b">PASSA</span>'
+    : `<span class="px-1.5 py-0.5 rounded text-[9px] font-bold" style="background:#3a0d14;color:var(--vermelho)"
+        title="Reprovou em: ${esc(reprovou.join(', '))}">FORA</span>`;
+}
+
+function badgeScore(v) {
+  if (v === null || v === undefined) return '<span style="color:#4a554e">—</span>';
+  const n = Number(v);
+  const cor = n >= 70 ? 'background:var(--verde);color:#04120b'
+            : (n >= 45 ? 'background:#3a2c08;color:var(--ambar)' : 'background:#1a2320;color:#78877f');
+  return `<span class="px-2 py-0.5 rounded mono text-[11px] font-bold" style="${cor}">${n.toFixed(0)}</span>`;
+}
+
+async function carregarQuant(forcar = false) {
+  const btn = document.getElementById('btnQuant');
+  const segmento = document.getElementById('segmentoQuant').value;
+  const aprovados = document.getElementById('apenasAprovados').checked;
+  btn.innerText = 'Rodando…'; btn.disabled = true;
+  mostrarAviso('quantAviso', '');
+  try {
+    const url = `/api/quant/scanner?segmento=${segmento}`
+      + `&apenas_aprovados=${aprovados ? 'true' : 'false'}&forcar=${forcar ? 'true' : 'false'}`;
+    const res = await fetch(url);
+    if (!res.ok) { mostrarAviso('quantAviso', `O servidor respondeu ${res.status}.`); return; }
+    const d = await res.json();
+    if (d.erro) { mostrarAviso('quantAviso', esc(d.erro)); return; }
+
+    const papeis = d.papeis || [];
+    const colunas = COLUNAS_QUANT[segmento] || COLUNAS_QUANT.todos;
+    document.getElementById('painelQuant').classList.remove('hidden');
+
+    document.getElementById('quantCabecalho').innerHTML = colunas
+      .map(([titulo, , alinhamento]) => `<th class="p-2 text-${alinhamento || 'left'}">${esc(titulo)}</th>`).join('');
+
+    document.getElementById('quantCorpo').innerHTML = papeis.map(p => `
+      <tr class="linha quant-row cursor-pointer" data-ticker="${esc(p.ticker)}"
+          onclick="selecionarAtivo('${esc(p.ticker)}')">
+        ${colunas.map(([, render, alinhamento]) =>
+          `<td class="p-2 text-${alinhamento || 'left'}">${render(p)}</td>`).join('')}
+      </tr>`).join('') || '<tr><td class="p-3 text-[11px]" style="color:#4a554e">Nenhum papel passou nos filtros.</td></tr>';
+
+    const ap = d.aprovados || {};
+    document.getElementById('quantCobertura').innerText =
+      `${d.exibidos} de ${d.total} papéis · momentum aprovou ${ap.momentum ?? 0} · `
+      + `Bazin aprovou ${ap.bazin ?? 0} · Greenblatt ranqueou ${d.universo_greenblatt ?? 0} elegíveis`
+      + (d.cache ? ` · cache de ${Math.floor((d.idade_segundos || 0) / 60)} min` : ' · coleta ao vivo');
+
+    // As ressalvas de modelagem ficam na tela, não só no código: quem lê o
+    // número precisa saber que a alavancagem é sobre EBIT, não EBITDA.
+    document.getElementById('quantRessalvas').innerHTML =
+      (d.ressalvas || []).map(r => `<div>⚠ ${esc(r)}</div>`).join('');
+
+    if ((d.falhas || []).length) {
+      mostrarAviso('quantAviso',
+        `<b>${d.falhas.length} papéis fora:</b> `
+        + d.falhas.slice(0, 15).map(f => `${esc(f.ticker)} (${esc(f.motivo)})`).join(', '), 'alerta');
+    }
+  } catch (e) {
+    mostrarAviso('quantAviso', `Falha ao rodar o motor: ${esc(e.message || e)}`);
+  } finally { btn.innerText = 'Rodar motor'; btn.disabled = false; }
+}
+
+function filtrarQuant() {
+  const q = document.getElementById('filtroQuant').value.toLowerCase();
+  document.querySelectorAll('.quant-row').forEach(r => {
+    r.style.display = r.getAttribute('data-ticker').toLowerCase().includes(q) ? '' : 'none';
+  });
 }
 
 // ===================== FIIs e ETFs =========================
@@ -997,7 +1214,20 @@ async function otimizarPortfolio() {
 }
 
 // ===================== inicialização =========================
+// Registra o service worker: é ele que permite instalar como app e faz a
+// casca abrir instantânea. Falhar aqui não pode derrubar a página — em http
+// sem TLS (ou num navegador antigo) o registro simplesmente não acontece.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  // Atalho do ícone do app (/?aba=fundos) cai direto na aba certa.
+  const abaPedida = new URLSearchParams(location.search).get('aba');
+  if (abaPedida && ABAS.includes(abaPedida)) alternarAba(abaPedida);
+
   atualizarRelogio();
   setInterval(atualizarRelogio, 30000);
 

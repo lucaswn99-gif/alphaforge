@@ -14,9 +14,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI  # noqa: E402
-from fastapi.responses import HTMLResponse  # noqa: E402
+from fastapi.responses import FileResponse, HTMLResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from routers import equity, fixed_income, mercado, wealth  # noqa: E402
+from routers import equity, fixed_income, mercado, quantitativo, wealth  # noqa: E402
 
 # O router `trading` está fora da aplicação de propósito. Ele dependia do
 # MetaTrader 5 (Windows-only, inerte no servidor) e expunha /executar-ordem,
@@ -27,15 +28,33 @@ from routers import equity, fixed_income, mercado, wealth  # noqa: E402
 app = FastAPI(
     title="Alphaforge Analytics",
     description="Terminal Institucional Quantamental.",
-    version="3.1.0",
+    version="3.3.0",
 )
 
 app.include_router(fixed_income.router)
 app.include_router(equity.router)
 app.include_router(wealth.router)
 app.include_router(mercado.router)
+app.include_router(quantitativo.router)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ESTATICOS = os.path.join(BASE_DIR, "static")
+if os.path.isdir(ESTATICOS):
+    app.mount("/static", StaticFiles(directory=ESTATICOS), name="static")
+
+
+@app.get("/sw.js")
+def serviço_worker():
+    """O service worker precisa ser servido da RAIZ.
+
+    Um SW só controla o escopo a partir da própria pasta: servido de
+    /static/sw.js ele controlaria apenas /static, e o app instalado não abriria
+    offline. Por isso o arquivo mora em static/ e é publicado aqui em /."""
+    caminho = os.path.join(ESTATICOS, "sw.js")
+    if not os.path.exists(caminho):
+        return {"erro": "service worker não encontrado"}
+    return FileResponse(caminho, media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache"})
 HTML_PATH = os.path.join(BASE_DIR, "templates", "index.html")
 
 

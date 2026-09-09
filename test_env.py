@@ -17,7 +17,8 @@ class TestImportacaoDoServico(unittest.TestCase):
                      "modules.cadastro_b3", "modules.credit_engine",
                      "modules.credito_cvm", "modules.identidade",
                      "modules.mercado", "modules.noticias",
-                     "routers.mercado", "api",
+                     "routers.mercado", "routers.quantitativo",
+                     "modules.quant", "api",
                      "atualizar_fundos_cvm", "verificar_fundos"):
             with self.subTest(modulo=nome):
                 self.assertIsNotNone(importlib.import_module(nome))
