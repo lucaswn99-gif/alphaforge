@@ -28,8 +28,7 @@ _yf.Ticker = _Ticker
 sys.modules.setdefault("yfinance", _yf)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from modules import credit_engine, taxas  # noqa: E402
-from routers import fixed_income  # noqa: E402
+from modules import credit_engine, credito_score, taxas  # noqa: E402
 
 
 # Empresa saudável: giro positivo, alavancagem baixa, juros bem cobertos.
@@ -152,79 +151,6 @@ class TestLaudoBancario(unittest.TestCase):
         self.assertEqual(laudo["historico_lucratividade"], "Não informado")
 
 
-class TestNormalizacaoDaExtracao(unittest.TestCase):
-    def test_escala_em_milhares_e_aplicada(self):
-        campos, meta = fixed_income.normalizar_extracao(
-            {"unidade": "milhares", "ativo_total": 1_500, "ebitda": 300})
-        self.assertEqual(campos["ativo_total"], 1_500_000.0)
-        self.assertEqual(meta["fator_aplicado"], 1_000.0)
-
-    def test_indices_sao_invariantes_a_escala(self):
-        """Escala errada não pode mudar veredito: os índices são razões."""
-        bruto = {"ativo_total": 200, "ativo_circulante": 50, "passivo_total": 80,
-                 "passivo_circulante": 30, "patrimonio_liquido": 120,
-                 "lucros_retidos": 40, "ebitda": 45, "divida_bruta": 70,
-                 "caixa_e_equivalentes": 10, "despesa_financeira": -9}
-
-        def laudo_para(unidade):
-            campos, meta = fixed_income.normalizar_extracao(dict(bruto, unidade=unidade))
-            return credit_engine.auditar_credito_corporativo(
-                "X", meta["divida_liquida"], campos["ebitda"], campos["despesa_financeira"],
-                {k: campos[k] for k in ("ativo_circulante", "passivo_circulante", "ativo_total",
-                                        "lucros_retidos", "ebitda", "patrimonio_liquido",
-                                        "passivo_total")})
-
-        em_unidades = laudo_para("unidades")
-        em_milhares = laudo_para("milhares")
-        self.assertEqual(em_unidades["altman_z_score"], em_milhares["altman_z_score"])
-        self.assertEqual(em_unidades["alavancagem_dl_ebitda"], em_milhares["alavancagem_dl_ebitda"])
-        self.assertEqual(em_unidades["status"], em_milhares["status"])
-
-    def test_ebit_substitui_ebitda_e_fica_declarado(self):
-        campos, meta = fixed_income.normalizar_extracao(
-            {"unidade": "unidades", "ebitda": None, "ebit": 1_000})
-        self.assertEqual(campos["ebitda"], 1_000.0)
-        self.assertTrue(meta["ebitda_e_na_verdade_ebit"])
-
-    def test_divida_liquida_desconta_caixa(self):
-        _, meta = fixed_income.normalizar_extracao(
-            {"unidade": "unidades", "divida_bruta": 100, "caixa_e_equivalentes": 30})
-        self.assertEqual(meta["divida_liquida"], 70.0)
-
-    def test_campo_nulo_permanece_nulo(self):
-        campos, _ = fixed_income.normalizar_extracao({"unidade": "unidades", "ativo_total": None})
-        self.assertIsNone(campos["ativo_total"])
-
-    def test_texto_nao_numerico_vira_none(self):
-        campos, _ = fixed_income.normalizar_extracao(
-            {"unidade": "unidades", "ativo_total": "não informado"})
-        self.assertIsNone(campos["ativo_total"])
-
-
-class TestLaudoIndisponivel(unittest.TestCase):
-    def test_indices_vem_nulos_e_nao_zerados(self):
-        """0.0 na tela é lido como medição. Ausente tem que ser null."""
-        laudo = fixed_income.laudo_indisponivel("ACME", "Documento ilegível")
-        self.assertIsNone(laudo["alavancagem_dl_ebitda"])
-        self.assertIsNone(laudo["altman_z_score"])
-        self.assertTrue(laudo["status"].startswith("INCONCLUSIVO"))
-
-
-class TestParecer(unittest.TestCase):
-    def test_parecer_registra_o_que_faltou(self):
-        laudo = credit_engine.auditar_credito_corporativo(
-            "X", None, None, None, dict(BALANCO_SAUDAVEL, ativo_total=None))
-        texto = fixed_income.montar_parecer(laudo, {"ebitda_e_na_verdade_ebit": False})
-        self.assertIn("inconclusivo", texto.lower())
-        self.assertIn("ativo_total", texto)
-
-    def test_parecer_declara_uso_de_ebit(self):
-        laudo = credit_engine.auditar_credito_corporativo(
-            "X", 60_000, 45_000, 9_000, BALANCO_SAUDAVEL)
-        texto = fixed_income.montar_parecer(laudo, {"ebitda_e_na_verdade_ebit": True})
-        self.assertIn("EBIT", texto)
-
-
 class TestSelic(unittest.TestCase):
     def setUp(self):
         self.original = taxas.requests.get
@@ -276,3 +202,116 @@ class TestSelic(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# Emissor de perfil aprovável, em R$ mil — o mesmo do botão "Exemplo" da tela.
+EMISSOR_BOM = {
+    "nome_emissor": "Companhia Exemplo S.A.",
+    "ativo_total": 1_000_000.0, "ativo_circulante": 400_000.0, "caixa": 80_000.0,
+    "passivo_circulante": 250_000.0, "divida_bruta": 300_000.0,
+    "patrimonio_liquido": 450_000.0, "lucros_retidos": 200_000.0,
+    "ebitda": 180_000.0, "despesa_financeira": 40_000.0,
+}
+
+
+class TestCalculadoraDeCredito(unittest.TestCase):
+    """A aba de crédito virou calculadora de entrada manual: o emissor de CRI,
+    CRA ou debênture não publica DFP, e o analista digita o prospecto.
+
+    O que estes testes protegem: campo em branco NUNCA vira número, e o score
+    sempre vem acompanhado do porquê de cada critério."""
+
+    def test_emissor_solido_aprova_com_todos_os_criterios(self):
+        r = credito_score.avaliar(EMISSOR_BOM)
+        self.assertEqual(r["veredito"], "APROVADO")
+        self.assertEqual(r["criterios_apurados"], 5)
+        self.assertEqual(r["vetos"], [])
+        self.assertGreaterEqual(r["score"], 75)
+
+    def test_divida_liquida_desconta_o_caixa(self):
+        """Dívida bruta chamada de líquida reprova emissor que tem caixa."""
+        r = credito_score.avaliar(EMISSOR_BOM)
+        self.assertAlmostEqual(r["calculados"]["divida_liquida"], 220_000.0)
+        self.assertAlmostEqual(r["calculados"]["alavancagem"], round(220_000 / 180_000, 2))
+
+    def test_sem_caixa_nao_ha_alavancagem(self):
+        dados = dict(EMISSOR_BOM); dados["caixa"] = None
+        r = credito_score.avaliar(dados)
+        self.assertIsNone(r["calculados"]["alavancagem"])
+        criterio = next(c for c in r["criterios"] if c["chave"] == "alavancagem")
+        self.assertEqual(criterio["situacao"], "nao_apurado")
+
+    def test_passivo_total_sai_por_identidade_contabil(self):
+        """Ativo menos patrimônio é identidade, não estimativa."""
+        r = credito_score.avaliar(EMISSOR_BOM)
+        self.assertAlmostEqual(r["calculados"]["passivo_total"], 550_000.0)
+
+    def test_alavancagem_acima_do_teto_veta(self):
+        dados = dict(EMISSOR_BOM); dados["ebitda"] = 40_000.0
+        r = credito_score.avaliar(dados)
+        self.assertEqual(r["veredito"], "REPROVADO")
+        self.assertTrue(any("Alavancagem" in v for v in r["vetos"]))
+
+    def test_cobertura_baixa_veta(self):
+        dados = dict(EMISSOR_BOM); dados["despesa_financeira"] = 150_000.0
+        r = credito_score.avaliar(dados)
+        self.assertEqual(r["veredito"], "REPROVADO")
+        self.assertTrue(any("Cobertura" in v for v in r["vetos"]))
+
+    def test_ebitda_negativo_veta(self):
+        dados = dict(EMISSOR_BOM); dados["ebitda"] = -10_000.0
+        r = credito_score.avaliar(dados)
+        self.assertEqual(r["veredito"], "REPROVADO")
+        self.assertTrue(any("EBITDA" in v for v in r["vetos"]))
+
+    def test_poucos_criterios_e_inconclusivo_e_nunca_aprovado(self):
+        """Ausência de veto não é aprovação: sem os dados que faltam, o laudo
+        não afirma nada sobre o emissor."""
+        r = credito_score.avaliar({"ebitda": 100_000.0, "divida_bruta": 50_000.0,
+                                   "caixa": 20_000.0})
+        self.assertEqual(r["veredito"], "INCONCLUSIVO")
+        self.assertLessEqual(r["score"], 55)
+
+    def test_todo_criterio_carrega_a_explicacao(self):
+        """Score sem o porquê não serve para decidir nem para explicar depois."""
+        for dados in (EMISSOR_BOM, {"ebitda": 1.0}):
+            for c in credito_score.avaliar(dados)["criterios"]:
+                self.assertTrue(c["explicacao"], c["rotulo"])
+                self.assertIn(c["situacao"], ("aprovado", "reprovado", "nao_apurado"))
+                self.assertTrue(c["referencia"])
+
+    def test_score_e_normalizado_pela_cobertura(self):
+        """Um critério não apurado reduz o denominador, não vira zero: o papel
+        não pode ser punido por um dado que o analista não tinha."""
+        parcial = dict(EMISSOR_BOM)
+        parcial["ativo_circulante"] = None
+        parcial["passivo_circulante"] = None
+        r = credito_score.avaliar(parcial)
+        self.assertLess(r["criterios_apurados"], 5)
+        self.assertIsNotNone(r["score"])
+        self.assertLessEqual(r["score"], 100)
+
+    def test_entrada_vazia_nao_levanta(self):
+        r = credito_score.avaliar({})
+        self.assertEqual(r["veredito"], "INCONCLUSIVO")
+        self.assertEqual(r["criterios_apurados"], 0)
+
+    def test_texto_no_lugar_de_numero_vira_nao_apurado(self):
+        dados = dict(EMISSOR_BOM); dados["ebitda"] = "n/d"
+        r = credito_score.avaliar(dados)
+        self.assertIsNone(r["calculados"]["alavancagem"])
+
+    def test_escala_nao_muda_os_indices(self):
+        """Digitar em mil ou em unidade tem que dar o mesmo score: os índices
+        são razões, e razão é invariante a escala."""
+        em_unidades = {k: (v * 1000 if isinstance(v, (int, float)) else v)
+                       for k, v in EMISSOR_BOM.items()}
+        a = credito_score.avaliar(EMISSOR_BOM)
+        b = credito_score.avaliar(em_unidades)
+        self.assertEqual(a["score"], b["score"])
+        self.assertEqual(a["veredito"], b["veredito"])
+        self.assertAlmostEqual(a["calculados"]["altman_z"], b["calculados"]["altman_z"])
+
+    def test_determinismo(self):
+        self.assertEqual(credito_score.avaliar(EMISSOR_BOM),
+                         credito_score.avaliar(EMISSOR_BOM))

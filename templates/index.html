@@ -408,52 +408,128 @@
 
   <!-- ================= ABA: CRÉDITO ================= -->
   <section id="tab-renda-fixa" class="hidden space-y-5">
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-      <div class="painel p-4">
-        <h2 class="rotulo mb-1">Emissor listado</h2>
-        <p class="text-[11px] mb-3" style="color: var(--suave)">
-          Índices calculados do balanço entregue à CVM. Sem chave de API e sem PDF.
-        </p>
-        <div class="flex gap-2 flex-wrap">
-          <input type="text" id="tickerCredito" value="PETR4" class="campo uppercase flex-1 min-w-[140px]">
-          <button onclick="auditarTicker()" id="btnAuditarTicker" class="btn">Auditar</button>
-        </div>
+    <div class="painel p-4">
+      <h2 class="rotulo">Calculadora de crédito de emissor</h2>
+      <p class="text-[11px] mt-1" style="color: var(--suave)">
+        Digite o balanço do emissor — prospecto de CRI, CRA, debênture, ou demonstração de
+        companhia fechada. Campo em branco entra como <b>não apurado</b>: nada é estimado.
+      </p>
+    </div>
+
+    <div class="painel p-4">
+      <div class="flex gap-2 flex-wrap items-end mb-4">
+        <label class="flex-1 min-w-[220px]">
+          <span class="text-[10px]" style="color: var(--suave)">Emissor</span>
+          <input type="text" id="c_nome_emissor" class="campo w-full mt-1" placeholder="Razão social do emissor">
+        </label>
+        <label>
+          <span class="text-[10px]" style="color: var(--suave)">Valores em</span>
+          <select id="c_unidade" class="campo mt-1">
+            <option value="1">unidade (R$)</option>
+            <option value="1000" selected>mil (R$ mil)</option>
+            <option value="1000000">milhão (R$ mi)</option>
+          </select>
+        </label>
+        <button onclick="calcularCredito()" id="btnCalcular" class="btn">Calcular score</button>
+        <button onclick="limparCredito()" class="btn-fantasma">Limpar</button>
+        <button onclick="exemploCredito()" class="btn-fantasma" title="Preenche com um caso de exemplo">Exemplo</button>
       </div>
 
-      <div class="painel p-4">
-        <h2 class="rotulo mb-1">Prospecto em PDF</h2>
-        <p class="text-[11px] mb-3" style="color: var(--suave)">
-          Para emissor fechado, que não publica DFP. Extrai os campos do documento; os índices são calculados aqui.
-        </p>
-        <input type="file" id="pdfFileInput" accept="application/pdf"
-               class="block w-full text-[11px] file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:font-bold cursor-pointer"
-               style="color: var(--suave)">
-        <button onclick="auditarPDF()" id="btnAuditarPDF" class="btn w-full mt-3">Processar documento</button>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div>
+        <p class="rotulo mb-2">Ativo</p>
+        <div class="space-y-2">
+          <label class="block">
+            <span class="text-[10px]" style="color: var(--suave)">Ativo total</span>
+            <input type="number" step="any" id="c_ativo_total" class="campo mono w-full mt-1" placeholder="0">
+          </label>
+          <label class="block">
+            <span class="text-[10px]" style="color: var(--suave)">Ativo circulante</span>
+            <input type="number" step="any" id="c_ativo_circulante" class="campo mono w-full mt-1" placeholder="0">
+          </label>
+          <label class="block">
+            <span class="text-[10px]" style="color: var(--suave)">Caixa e equivalentes</span>
+            <input type="number" step="any" id="c_caixa" class="campo mono w-full mt-1" placeholder="0">
+          </label>
+        </div>
       </div>
+      <div>
+        <p class="rotulo mb-2">Passivo</p>
+        <div class="space-y-2">
+          <label class="block">
+            <span class="text-[10px]" style="color: var(--suave)">Passivo circulante</span>
+            <input type="number" step="any" id="c_passivo_circulante" class="campo mono w-full mt-1" placeholder="0">
+          </label>
+          <label class="block">
+            <span class="text-[10px]" style="color: var(--suave)">Passivo total (opcional)</span>
+            <input type="number" step="any" id="c_passivo_total" class="campo mono w-full mt-1" placeholder="0">
+          </label>
+          <label class="block">
+            <span class="text-[10px]" style="color: var(--suave)">Dívida bruta (CP + LP)</span>
+            <input type="number" step="any" id="c_divida_bruta" class="campo mono w-full mt-1" placeholder="0">
+          </label>
+        </div>
+      </div>
+      <div>
+        <p class="rotulo mb-2">Patrimônio</p>
+        <div class="space-y-2">
+          <label class="block">
+            <span class="text-[10px]" style="color: var(--suave)">Patrimônio líquido</span>
+            <input type="number" step="any" id="c_patrimonio_liquido" class="campo mono w-full mt-1" placeholder="0">
+          </label>
+          <label class="block">
+            <span class="text-[10px]" style="color: var(--suave)">Lucros/reservas retidos</span>
+            <input type="number" step="any" id="c_lucros_retidos" class="campo mono w-full mt-1" placeholder="0">
+          </label>
+        </div>
+      </div>
+      <div>
+        <p class="rotulo mb-2">Resultado</p>
+        <div class="space-y-2">
+          <label class="block">
+            <span class="text-[10px]" style="color: var(--suave)">EBITDA anual</span>
+            <input type="number" step="any" id="c_ebitda" class="campo mono w-full mt-1" placeholder="0">
+          </label>
+          <label class="block">
+            <span class="text-[10px]" style="color: var(--suave)">Despesa financeira anual</span>
+            <input type="number" step="any" id="c_despesa_financeira" class="campo mono w-full mt-1" placeholder="0">
+          </label>
+        </div>
+      </div>
+      </div>
+      <p class="text-[10px] mt-4 pt-2 border-t" style="color: var(--suave); border-color: var(--borda)">
+        <b>Passivo total</b> é opcional: se ficar em branco, sai de ativo total menos patrimônio
+        líquido, que é identidade contábil e não estimativa. <b>Dívida líquida</b> exige dívida
+        bruta E caixa — dívida bruta chamada de líquida reprova emissor que tem caixa.
+      </p>
     </div>
 
     <p id="creditoAviso" class="hidden text-xs rounded px-4 py-3 border"></p>
 
-    <div id="painelResultadoCredito" class="hidden painel p-5 space-y-4" style="border-top: 3px solid var(--verde)">
-      <div class="flex justify-between items-start gap-3 flex-wrap">
-        <div class="flex items-center gap-3">
-          <div id="creditoTile"></div>
-          <h3 class="text-base font-bold" id="emissorLaudo">Emissor</h3>
+    <div id="painelResultadoCredito" class="hidden space-y-4">
+      <div class="painel p-5">
+        <div class="flex justify-between items-start gap-4 flex-wrap">
+          <div class="flex-1 min-w-[240px]">
+            <h3 class="text-base font-bold" id="emissorLaudo">Emissor</h3>
+            <p class="text-xs mt-2" style="color: var(--suave)" id="resumoCredito"></p>
+          </div>
+          <div class="text-right">
+            <span id="badgeStatusCredito" class="px-3 py-1.5 rounded text-[11px] font-bold uppercase tracking-wider">—</span>
+            <p class="text-4xl font-bold mono mt-2" id="scoreCredito">—</p>
+            <p class="text-[10px]" style="color: var(--suave)" id="coberturaCredito"></p>
+          </div>
         </div>
-        <span id="badgeStatusCredito" class="px-3 py-1.5 rounded text-[11px] font-bold uppercase tracking-wider">—</span>
       </div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
-          <span class="rotulo block mb-1">Dív. líq. / EBIT</span><p class="text-lg font-bold mono" id="alavancagemValor">—</p></div>
-        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
-          <span class="rotulo block mb-1">Cobertura de juros</span><p class="text-lg font-bold mono" id="icjValor">—</p></div>
-        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
-          <span class="rotulo block mb-1">Altman Z''</span><p class="text-lg font-bold mono" id="zScoreValor">—</p></div>
-        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
-          <span class="rotulo block mb-1">Classificação</span><p class="text-xs font-semibold mt-1" style="color: var(--verde)" id="classificacaoZValor">—</p></div>
+
+      <div class="painel p-4">
+        <h3 class="rotulo mb-3">Critérios</h3>
+        <div id="criteriosCredito" class="space-y-2"></div>
+        <p class="text-[10px] mt-4 pt-2 border-t" style="color: var(--ambar); border-color: var(--borda)">
+          Triagem de crédito sobre indicadores de balanço. Não avalia garantias, covenants,
+          subordinação, concentração de recebíveis nem risco do estruturador — que num CRI ou
+          CRA costumam pesar mais que o balanço do emissor.
+        </p>
       </div>
-      <p class="text-xs p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda); color: var(--suave)" id="parecerCredito"></p>
-      <p class="text-[10px] pt-2 border-t" style="color: var(--suave); border-color: var(--borda)" id="origemCredito"></p>
     </div>
   </section>
 
@@ -1197,78 +1273,121 @@ async function carregarFundos() {
 }
 
 // ===================== crédito =========================
-function pintarLaudo(d) {
-  document.getElementById('painelResultadoCredito').classList.remove('hidden');
-  document.getElementById('emissorLaudo').innerText = d.emissor || d.ticker_analisado || 'Emissor';
-  document.getElementById('creditoTile').innerHTML = d.identidade ? tile(d.identidade) : '';
+const CAMPOS_CREDITO = ['ativo_total', 'ativo_circulante', 'caixa', 'passivo_circulante',
+  'passivo_total', 'divida_bruta', 'patrimonio_liquido', 'lucros_retidos',
+  'ebitda', 'despesa_financeira'];
 
-  // Índice não calculado vira "—", nunca 0x. Zero na tela é lido como medição,
-  // e era assim que um laudo sem dado parecia um laudo.
-  document.getElementById('alavancagemValor').innerHTML = num(d.alavancagem_dl_ebitda, 2, 'x');
-  document.getElementById('icjValor').innerHTML = num(d.cobertura_juros_icj, 2, 'x');
-  document.getElementById('zScoreValor').innerHTML = num(d.altman_z_score, 2);
-  document.getElementById('classificacaoZValor').innerText = d.classificacao_z || '—';
-  document.getElementById('parecerCredito').innerText = d.parecer || '';
+// Exemplo real de perfil aprovável, para você ver o formato esperado antes de
+// digitar o prospecto inteiro. Valores em R$ mil.
+const EXEMPLO_CREDITO = {
+  nome_emissor: 'Companhia Exemplo S.A.', ativo_total: 1000000, ativo_circulante: 400000,
+  caixa: 80000, passivo_circulante: 250000, divida_bruta: 300000,
+  patrimonio_liquido: 450000, lucros_retidos: 200000,
+  ebitda: 180000, despesa_financeira: 40000,
+};
 
-  const status = d.veredito || d.status || '';
-  const badge = document.getElementById('badgeStatusCredito');
-  badge.innerText = status || '—';
-  badge.setAttribute('style', status.startsWith('APROVADO') ? 'background:#0b3a24;color:var(--verde)'
-    : (status.startsWith('REPROVADO') ? 'background:#3a0d14;color:var(--vermelho)'
-    : 'background:#3a2c08;color:var(--ambar)'));
+function limparCredito() {
+  document.getElementById('c_nome_emissor').value = '';
+  CAMPOS_CREDITO.forEach(c => { document.getElementById('c_' + c).value = ''; });
+  document.getElementById('painelResultadoCredito').classList.add('hidden');
+  mostrarAviso('creditoAviso', '');
+}
 
-  const partes = [];
-  if (d.origem_dados) partes.push(`Origem: ${d.origem_dados}`);
-  if (d.exercicio) partes.push(`exercício ${d.exercicio}`);
-  if (d.periodo) partes.push(`competência ${d.periodo}`);
-  if (d.proxy_ebitda) partes.push(d.proxy_ebitda);
-  document.getElementById('origemCredito').innerText = partes.join(' · ');
+function exemploCredito() {
+  document.getElementById('c_nome_emissor').value = EXEMPLO_CREDITO.nome_emissor;
+  CAMPOS_CREDITO.forEach(c => {
+    document.getElementById('c_' + c).value = EXEMPLO_CREDITO[c] ?? '';
+  });
+  document.getElementById('c_unidade').value = '1000';
+  calcularCredito();
+}
 
-  const vetos = Array.isArray(d.motivos_veto) ? d.motivos_veto : [];
-  const faltantes = [...(d.campos_faltantes || []), ...(d.campos_ausentes || [])];
-  if (vetos.length) {
-    mostrarAviso('creditoAviso', `<b>Motivos do veto:</b><br>${vetos.map(esc).join('<br>')}`);
-  } else if (faltantes.length) {
-    mostrarAviso('creditoAviso',
-      `<b>Laudo inconclusivo.</b> Não localizados: ${faltantes.map(esc).join(', ')}. `
-      + `Sem esses campos os índices não são calculáveis — e ausência de veto não é aprovação.`, 'alerta');
-  } else {
-    mostrarAviso('creditoAviso', '');
+async function calcularCredito() {
+  const btn = document.getElementById('btnCalcular');
+  const escala = Number(document.getElementById('c_unidade').value) || 1;
+
+  // Campo em branco vira null, não zero. Zero é uma afirmação — "esta empresa
+  // não tem caixa" — e não é o que um campo vazio quer dizer.
+  const corpo = { nome_emissor: document.getElementById('c_nome_emissor').value || null };
+  let preenchidos = 0;
+  CAMPOS_CREDITO.forEach(c => {
+    const bruto = document.getElementById('c_' + c).value;
+    if (bruto === '' || bruto === null) { corpo[c] = null; return; }
+    corpo[c] = Number(bruto) * escala;
+    preenchidos += 1;
+  });
+
+  if (preenchidos < 3) {
+    mostrarAviso('creditoAviso', 'Preencha ao menos os campos de EBITDA, dívida bruta e caixa — '
+      + 'sem eles não há alavancagem, e sem alavancagem não há laudo de crédito.', 'alerta');
+    return;
   }
-}
 
-async function auditarTicker() {
-  const ticker = document.getElementById('tickerCredito').value.trim();
-  const btn = document.getElementById('btnAuditarTicker');
-  if (!ticker) { mostrarAviso('creditoAviso', 'Informe um ticker.', 'alerta'); return; }
-  btn.innerText = 'Auditando…'; btn.disabled = true;
+  btn.innerText = 'Calculando…'; btn.disabled = true;
   mostrarAviso('creditoAviso', '');
   try {
-    const res = await fetch(`/renda-fixa/auditar-ticker?ticker=${encodeURIComponent(ticker)}`);
-    if (!res.ok) { mostrarAviso('creditoAviso', `O servidor respondeu ${res.status}.`); return; }
-    const d = await res.json();
-    if (d.erro) { mostrarAviso('creditoAviso', esc(d.erro)); return; }
-    pintarLaudo(d);
-  } catch (e) {
-    mostrarAviso('creditoAviso', `Falha ao auditar: ${esc(e.message || e)}`);
-  } finally { btn.innerText = 'Auditar'; btn.disabled = false; }
-}
-
-async function auditarPDF() {
-  const entrada = document.getElementById('pdfFileInput');
-  const btn = document.getElementById('btnAuditarPDF');
-  if (!entrada.files[0]) { mostrarAviso('creditoAviso', 'Selecione um PDF antes de processar.', 'alerta'); return; }
-  btn.innerText = 'Auditando…'; btn.disabled = true;
-  mostrarAviso('creditoAviso', '');
-  try {
-    const fd = new FormData();
-    fd.append('file', entrada.files[0]);
-    const res = await fetch('/renda-fixa/auditar-pdf', { method: 'POST', body: fd });
+    const res = await fetch('/renda-fixa/calcular', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
     if (!res.ok) { mostrarAviso('creditoAviso', `O servidor respondeu ${res.status}.`); return; }
     pintarLaudo(await res.json());
   } catch (e) {
-    mostrarAviso('creditoAviso', `Falha ao auditar o PDF: ${esc(e.message || e)}`);
-  } finally { btn.innerText = 'Processar documento'; btn.disabled = false; }
+    mostrarAviso('creditoAviso', `Falha ao calcular: ${esc(e.message || e)}`);
+  } finally { btn.innerText = 'Calcular score'; btn.disabled = false; }
+}
+
+const ESTILO_VEREDITO = {
+  'APROVADO':               'background:var(--verde);color:#04120b',
+  'APROVADO COM RESSALVA':  'background:#3a2c08;color:var(--ambar)',
+  'ATENÇÃO':                'background:#3a2c08;color:var(--ambar)',
+  'REPROVADO':              'background:#3a0d14;color:var(--vermelho)',
+  'INCONCLUSIVO':           'background:#1a2320;color:#78877f',
+};
+
+function pintarLaudo(d) {
+  document.getElementById('painelResultadoCredito').classList.remove('hidden');
+  document.getElementById('emissorLaudo').innerText = d.emissor || 'Emissor';
+  document.getElementById('resumoCredito').innerText = d.resumo || '';
+
+  const badge = document.getElementById('badgeStatusCredito');
+  badge.innerText = d.veredito || '—';
+  badge.setAttribute('style', ESTILO_VEREDITO[d.veredito] || ESTILO_VEREDITO['INCONCLUSIVO']);
+
+  const score = document.getElementById('scoreCredito');
+  score.innerText = d.score === null || d.score === undefined ? '—' : d.score;
+  score.style.color = d.score === null ? '#4a554e'
+    : (d.score >= 75 ? 'var(--verde)' : (d.score >= 55 ? 'var(--ambar)' : 'var(--vermelho)'));
+
+  // A cobertura fica à vista: score de 80 sobre três critérios não é o mesmo
+  // que score de 80 sobre cinco, e a tela não pode deixar isso implícito.
+  document.getElementById('coberturaCredito').innerText =
+    `${d.criterios_apurados} de ${d.criterios_totais} critérios apurados`;
+
+  const marca = { aprovado: ['✓', 'var(--verde)'], reprovado: ['✕', 'var(--vermelho)'],
+                  nao_apurado: ['—', '#78877f'] };
+
+  document.getElementById('criteriosCredito').innerHTML = (d.criterios || []).map(c => {
+    const [icone, cor] = marca[c.situacao] || marca.nao_apurado;
+    const valor = c.valor === null || c.valor === undefined ? '—' : Number(c.valor).toFixed(2);
+    const peso = c.pontos === null ? '' :
+      `<span class="mono text-[10px]" style="color:#4a554e">${c.pontos}/${c.peso} pts</span>`;
+    return `
+      <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda);
+           border-left: 3px solid ${cor}">
+        <div class="flex justify-between items-center gap-3 flex-wrap">
+          <span class="text-[12px] font-semibold">
+            <span style="color:${cor}">${icone}</span> ${esc(c.rotulo)}</span>
+          <span class="flex items-center gap-3">
+            <span class="mono text-sm font-bold" style="color:${cor}">${valor}</span>
+            <span class="text-[10px]" style="color: var(--suave)">ref: ${esc(c.referencia)}</span>
+            ${peso}
+          </span>
+        </div>
+        <p class="text-[11px] mt-1.5" style="color: var(--suave)">${esc(c.explicacao)}</p>
+      </div>`;
+  }).join('');
 }
 
 // ===================== alocação =========================
@@ -1360,8 +1479,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('tickerAcao').addEventListener('keydown', e => {
     if (e.key === 'Enter') consultarAcao();
   });
-  document.getElementById('tickerCredito').addEventListener('keydown', e => {
-    if (e.key === 'Enter') auditarTicker();
+  // Enter em qualquer campo da calculadora calcula: quem digita dez números
+  // seguidos não quer tirar a mão do teclado para clicar.
+  document.querySelectorAll('#tab-renda-fixa input').forEach(campo => {
+    campo.addEventListener('keydown', e => { if (e.key === 'Enter') calcularCredito(); });
   });
 });
 </script>
