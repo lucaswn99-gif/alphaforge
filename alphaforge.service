@@ -1,0 +1,47 @@
+# Unit do systemd para o Alphaforge.
+#
+#     sudo cp alphaforge.service /etc/systemd/system/
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now alphaforge
+#
+# Por que isto existe: o serviço estava rodando solto (nohup/uvicorn direto),
+# sem supervisão. Processo assim NÃO volta depois de um reboot, e o droplet
+# ficaria fora do ar até alguém perceber. Sob systemd ele sobe no boot,
+# reinicia sozinho se cair, e o log vai para o journal.
+
+[Unit]
+Description=Alphaforge Terminal (FastAPI/Uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/alphaforge
+
+# --host 127.0.0.1, não 0.0.0.0: quem fala com a internet é o Nginx, que tem o
+# certificado. Escutando em 0.0.0.0 a porta 8000 responde HTTP puro direto,
+# sem TLS, contornando o Nginx — e um terminal de assessoria não pode servir
+# dado de cliente em texto claro.
+ExecStart=/root/alphaforge/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8000
+
+Restart=always
+RestartSec=5
+# Se cair 5 vezes em 60s é defeito, não instabilidade: parar e deixar visível
+# no status é melhor que mascarar num laço de reinício.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alphaforge
+
+# Endurecimento básico. O serviço só precisa ler o código e gravar em
+# /root/alphaforge; nada além disso.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target

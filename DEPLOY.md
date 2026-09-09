@@ -87,3 +87,29 @@ subiu sem as colunas de crédito.
 
 Deve devolver `status: ok` e a versão. Se a versão não for a que você acabou de
 subir, o pull não aconteceu.
+
+## Instalar o serviço no systemd (uma vez)
+
+Descoberto em 09/09/2026: o Uvicorn rodava **solto**, sem unit — o que
+significa que o serviço não voltaria depois de um reboot. O arquivo
+`alphaforge.service` neste repositório resolve isso.
+
+    cp /root/alphaforge/alphaforge.service /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now alphaforge
+    systemctl status alphaforge --no-pager
+
+A unit também troca `--host 0.0.0.0` por `--host 127.0.0.1`. Com `0.0.0.0` a
+porta 8000 responde HTTP puro direto da internet, sem TLS, contornando o Nginx
+e o certificado. Depois de instalar, confirme que a porta não está mais aberta:
+
+    ss -ltnp | grep 8000        # deve mostrar 127.0.0.1:8000, não 0.0.0.0:8000
+
+Configuração do droplet, para o `deploy.sh` e o workflow:
+
+| | |
+|---|---|
+| `DROPLET_DIR` | `/root/alphaforge` |
+| `DROPLET_SERVICE` | `alphaforge` |
+| `DROPLET_USER` | `root` |
+| venv | `/root/alphaforge/venv` |

@@ -8,7 +8,7 @@
 # nova não responder ao health check, ele volta para o commit anterior sozinho.
 set -euo pipefail
 
-PASTA="${ALPHAFORGE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+PASTA="${ALPHAFORGE_DIR:-/root/alphaforge}"
 SERVICO="${ALPHAFORGE_SERVICE:-alphaforge}"
 SAUDE="${ALPHAFORGE_HEALTH:-http://127.0.0.1:8000/health}"
 ESPERA="${ALPHAFORGE_WAIT:-20}"
