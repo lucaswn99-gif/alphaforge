@@ -44,16 +44,26 @@ CONTAS = {
     "BPA": {
         "1": "ativo_total",
         "1.01": "ativo_circulante",
+        "1.01.01": "caixa",
     },
     "BPP": {
         "2.01": "passivo_circulante",
         "2.02": "passivo_nao_circulante",
         "2.03": "patrimonio_liquido",
+        # Dívida onerosa. Mapeada SÓ por código, de propósito: a descrição
+        # "Empréstimos e Financiamentos" aparece nas duas contas, e registrar
+        # a descrição faria as duas caírem no mesmo campo — a de curto prazo
+        # sobrescreveria a de longo, ou o contrário, conforme a ordem do
+        # arquivo. Por código não há ambiguidade.
+        "2.01.04": "divida_curto_prazo",
+        "2.02.01": "divida_longo_prazo",
+        "2.03.05": "lucros_acumulados",
     },
     "DRE": {
         "3.01": "receita_liquida",
         "3.05": "ebit",
         "3.06": "resultado_financeiro",
+        "3.06.02": "despesa_financeira",
         "3.11": "lucro_liquido",
         "3.99.01.01": "lpa_on",
     },
@@ -94,6 +104,14 @@ DESCRICOES = {
         "resultado antes do resultado financeiro e dos tributos",
     ),
     "resultado_financeiro": ("resultado financeiro",),
+    "lucros_acumulados": (
+        "lucros/prejuizos acumulados",
+        "lucros ou prejuizos acumulados",
+        "reservas de lucros",
+    ),
+    "caixa": (
+        "caixa e equivalentes de caixa",
+    ),
 }
 
 
@@ -111,7 +129,11 @@ for _campo, _textos in DESCRICOES.items():
 
 CAMPOS = ["ativo_total", "ativo_circulante", "passivo_circulante",
           "passivo_nao_circulante", "patrimonio_liquido", "receita_liquida",
-          "ebit", "resultado_financeiro", "lucro_liquido", "lpa_on"]
+          "ebit", "resultado_financeiro", "lucro_liquido", "lpa_on",
+          # Crédito: alavancagem, cobertura de juros e Altman Z''. Sem estes
+          # o laudo de emissor dependia do Yahoo, que não responde do Render.
+          "caixa", "divida_curto_prazo", "divida_longo_prazo",
+          "despesa_financeira", "lucros_acumulados"]
 
 
 def baixar_zip(ano):

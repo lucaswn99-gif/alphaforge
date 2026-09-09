@@ -24,7 +24,7 @@ import requests
 from fastapi import APIRouter, File, Query, UploadFile
 from pypdf import PdfReader
 
-from modules import credit_engine
+from modules import credit_engine, credito_cvm
 
 router = APIRouter(prefix="/renda-fixa", tags=["Renda Fixa & Crédito"])
 
@@ -285,9 +285,32 @@ def montar_parecer(laudo, meta):
 
 @router.get("/auditar-ticker")
 def auditar_ticker(ticker: str = Query(..., description="Código na B3, ex.: VALE3")):
-    """Mesmo laudo, para empresa listada, direto do balanço publicado.
+    """Laudo de emissor listado, sem chave de API e sem PDF.
 
-    Não depende do Gemini nem de PDF: os campos vêm do balanço e os índices do
-    mesmo motor. Serve como conferência do caminho do PDF.
+    Ordem das fontes, e por quê:
+
+      1. Balanço entregue à CVM (DFP). É auditado, é o mesmo número dos dois
+         lados da tela e responde de qualquer IP — no Render é o único que
+         responde.
+      2. Balanço do Yahoo, só se a base da CVM não cobrir a companhia. O
+         `balance_sheet` sai por endpoint diferente do `quoteSummary` e às
+         vezes sobrevive; quando não sobrevive, o laudo sai INCONCLUSIVO em
+         vez de sair errado.
+
+    O Gemini nunca calculou índice aqui — ele extraía campo de PDF. Com o campo
+    já estruturado na DFP, não há o que extrair, e o laudo deixa de depender de
+    chave nenhuma.
     """
-    return credit_engine.auditar_ticker_b3(ticker)
+    laudo = credito_cvm.laudo_por_ticker(ticker)
+    if laudo.get("veredito") != "INCONCLUSIVO" or laudo.get("erro"):
+        return laudo
+
+    reserva = credit_engine.auditar_ticker_b3(ticker)
+    reserva["veredito"] = credito_cvm.veredito_do_status(reserva.get("status"))
+    if reserva.get("erro") or reserva["veredito"] == "INCONCLUSIVO":
+        # A CVM é a fonte de referência: se as duas falharem, o motivo que
+        # interessa reportar é o dela.
+        return {**laudo, "tentativa_reserva": reserva.get("erro") or "Yahoo também inconclusivo"}
+    reserva["origem_dados"] = "Balanço publicado (Yahoo) — companhia fora da base da CVM"
+    reserva["identidade"] = laudo.get("identidade")
+    return reserva

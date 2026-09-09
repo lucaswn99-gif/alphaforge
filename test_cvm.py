@@ -493,3 +493,100 @@ class TestColetaFiiEntreArquivos(unittest.TestCase):
         corpo = self._linhas(6) + "123;2026-07-01;100;92\n"
         registros, _ = self._rodar({"a.csv": self.CAB_COMPLETO + corpo})
         self.assertEqual(len(registros), 6)
+
+
+class TestCreditoPelaCvm(unittest.TestCase):
+    """O laudo de emissor deixou de depender de chave de LLM e do Yahoo.
+
+    O Gemini nunca calculou índice: ele extraía campo de PDF. Com o campo já
+    estruturado na DFP não há o que extrair, e a conta é conta.
+    """
+
+    BALANCO = {
+        "ano": 2025, "denom_cia": "COMPANHIA EXEMPLO S.A.",
+        "ativo_total": 200e9, "ativo_circulante": 60e9,
+        "passivo_circulante": 30e9, "passivo_nao_circulante": 70e9,
+        "patrimonio_liquido": 100e9, "lucros_acumulados": 40e9,
+        "ebit": 30e9, "receita_liquida": 120e9, "lucro_liquido": 20e9,
+        "divida_curto_prazo": 10e9, "divida_longo_prazo": 40e9,
+        "caixa": 15e9, "despesa_financeira": -6e9, "resultado_financeiro": -5e9,
+    }
+
+    def setUp(self):
+        from modules import credito_cvm
+        self.credito = credito_cvm
+        self.orig_multiplos = credito_cvm.fundamentos_cvm.multiplos_do_ticker
+        self.orig_balanco = credito_cvm.fundamentos_cvm.balanco_por_cnpj
+
+    def tearDown(self):
+        self.credito.fundamentos_cvm.multiplos_do_ticker = self.orig_multiplos
+        self.credito.fundamentos_cvm.balanco_por_cnpj = self.orig_balanco
+
+    def _montar(self, balanco):
+        self.credito.fundamentos_cvm.multiplos_do_ticker = \
+            lambda t, **k: {"cnpj": "00000000000191", "disponivel": True}
+        self.credito.fundamentos_cvm.balanco_por_cnpj = lambda c, b=None: dict(balanco)
+
+    def test_indices_saem_do_balanco(self):
+        self._montar(self.BALANCO)
+        laudo = self.credito.laudo_por_ticker("WEGE3")
+        # dívida líquida = (10 + 40) - 15 = 35 bi; sobre EBIT de 30 bi
+        self.assertAlmostEqual(laudo["alavancagem_dl_ebitda"], 1.17, places=2)
+        self.assertAlmostEqual(laudo["cobertura_juros_icj"], 5.0, places=2)
+        self.assertIsNotNone(laudo["altman_z_score"])
+        self.assertEqual(laudo["veredito"], "APROVADO")
+        self.assertEqual(laudo["exercicio"], 2025)
+
+    def test_despesa_financeira_negativa_nao_inverte_a_cobertura(self):
+        """A DFP publica a despesa com sinal negativo. Usá-la como está daria
+        cobertura negativa e um veto que não existe."""
+        self._montar(self.BALANCO)
+        self.assertGreater(self.credito.laudo_por_ticker("WEGE3")["cobertura_juros_icj"], 0)
+
+    def test_resultado_financeiro_positivo_nao_vira_despesa(self):
+        """Empresa que ganha no financeiro não tem 'despesa' igual a esse ganho
+        — usar isso inverteria a leitura da cobertura."""
+        balanco = dict(self.BALANCO)
+        balanco["despesa_financeira"] = None
+        balanco["resultado_financeiro"] = 4e9
+        self._montar(balanco)
+        self.assertIsNone(self.credito.laudo_por_ticker("WEGE3")["cobertura_juros_icj"])
+
+    def test_sem_caixa_nao_ha_divida_liquida(self):
+        balanco = dict(self.BALANCO); balanco["caixa"] = None
+        self._montar(balanco)
+        laudo = self.credito.laudo_por_ticker("WEGE3")
+        self.assertIsNone(laudo["alavancagem_dl_ebitda"])
+        self.assertEqual(laudo["veredito"], "INCONCLUSIVO")
+        self.assertIn("dívida líquida", laudo["campos_ausentes"])
+
+    def test_alavancagem_alta_reprova(self):
+        balanco = dict(self.BALANCO); balanco["ebit"] = 5e9
+        self._montar(balanco)
+        laudo = self.credito.laudo_por_ticker("WEGE3")
+        self.assertEqual(laudo["veredito"], "REPROVADO")
+        self.assertTrue(any("Dívida Líquida/EBITDA" in m for m in laudo["motivos_veto"]))
+
+    def test_banco_nao_recebe_veredito_corporativo(self):
+        """Alavancagem sobre EBITDA não descreve banco: o passivo dele é o
+        negócio, não a dívida."""
+        laudo = self.credito.laudo_por_ticker("ITUB4")
+        self.assertEqual(laudo["veredito"], "NÃO APLICÁVEL")
+        self.assertIn("prudenciais", laudo["parecer"])
+
+    def test_companhia_fora_da_base_e_inconclusiva_e_nao_zerada(self):
+        self.credito.fundamentos_cvm.multiplos_do_ticker = lambda t, **k: {"cnpj": None}
+        laudo = self.credito.laudo_por_ticker("XPTO3")
+        self.assertEqual(laudo["veredito"], "INCONCLUSIVO")
+        self.assertEqual(laudo["indices"], {})
+
+    def test_base_antiga_sem_as_colunas_novas_nao_quebra(self):
+        """Quem ainda não rodou o coletor atualizado tem a base sem dívida e
+        caixa. Isso tem que sair INCONCLUSIVO, não estourar."""
+        antigo = {k: v for k, v in self.BALANCO.items()
+                  if k not in ("divida_curto_prazo", "divida_longo_prazo",
+                               "caixa", "despesa_financeira", "lucros_acumulados")}
+        self._montar(antigo)
+        laudo = self.credito.laudo_por_ticker("WEGE3")
+        self.assertEqual(laudo["veredito"], "INCONCLUSIVO")
+        self.assertIsNone(laudo["alavancagem_dl_ebitda"])

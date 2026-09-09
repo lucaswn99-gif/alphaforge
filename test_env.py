@@ -15,6 +15,9 @@ class TestImportacaoDoServico(unittest.TestCase):
         for nome in ("modules.composicao_ibov", "modules.taxas",
                      "modules.fundamentos_cvm", "modules.fundamentos_fii",
                      "modules.cadastro_b3", "modules.credit_engine",
+                     "modules.credito_cvm", "modules.identidade",
+                     "modules.mercado", "modules.noticias",
+                     "routers.mercado", "api",
                      "atualizar_fundos_cvm", "verificar_fundos"):
             with self.subTest(modulo=nome):
                 self.assertIsNotNone(importlib.import_module(nome))

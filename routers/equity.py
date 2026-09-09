@@ -21,7 +21,7 @@ import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, Query
 
-from modules import composicao_ibov, fundamentos_cvm
+from modules import composicao_ibov, fundamentos_cvm, identidade
 
 router = APIRouter(prefix="/renda-variavel", tags=["Renda Variável & Ações"])
 
@@ -990,6 +990,16 @@ def coletar_bloco(mapa):
                 continue
 
             tendencia = "ALTA" if preco > sma50 else "BAIXA"
+            # Variação do dia sai da mesma série que já foi baixada — as
+            # maiores altas e baixas do pregão não custam requisição nenhuma.
+            variacao_dia = None
+            if len(close) >= 2:
+                try:
+                    anterior = float(close.iloc[-2])
+                    if anterior > 0:
+                        variacao_dia = (preco - anterior) / anterior * 100.0
+                except (TypeError, ValueError):
+                    variacao_dia = None
             rsi_val = calcular_rsi_wilder(close)
             anual = serie_anual(close)
             destruicao = houve_destruicao_de_capital(anual)
@@ -1028,6 +1038,8 @@ def coletar_bloco(mapa):
                 "exercicio_cvm": exercicio_cvm,
                 "divergencias": divergencias or None,
                 "preco": round(preco, 2),
+                "variacao_dia": _arred(variacao_dia),
+                "identidade": identidade.identidade(codigo),
                 "pl": _arred(info["pl"]),
                 "pvp": _arred(info["pvp"]),
                 "roe": _arred(info["roe"]),

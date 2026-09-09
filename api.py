@@ -16,7 +16,7 @@ load_dotenv()
 from fastapi import FastAPI  # noqa: E402
 from fastapi.responses import HTMLResponse  # noqa: E402
 
-from routers import equity, fixed_income, wealth  # noqa: E402
+from routers import equity, fixed_income, mercado, wealth  # noqa: E402
 
 # O router `trading` está fora da aplicação de propósito. Ele dependia do
 # MetaTrader 5 (Windows-only, inerte no servidor) e expunha /executar-ordem,
@@ -27,12 +27,13 @@ from routers import equity, fixed_income, wealth  # noqa: E402
 app = FastAPI(
     title="Alphaforge Analytics",
     description="Terminal Institucional Quantamental.",
-    version="3.0.0",
+    version="3.1.0",
 )
 
 app.include_router(fixed_income.router)
 app.include_router(equity.router)
 app.include_router(wealth.router)
+app.include_router(mercado.router)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(BASE_DIR, "templates", "index.html")
