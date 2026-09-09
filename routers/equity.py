@@ -108,8 +108,28 @@ PONTOS_TENDENCIA_ALTA = 6
 PONTOS_TENDENCIA_BAIXA = -4
 FAIXAS_RSI = [(30, 8), (40, 5), (60, 0), (70, -2), (float("inf"), -6)]
 
-# Cortes do veredito. COMPRA FORTE exige fundamento quase cheio E técnico a
-# favor — é para sair em poucos papéis por varredura, não em dezenas.
+# Cortes de classificação.
+#
+# VOCABULÁRIO: o motor NÃO diz comprar nem vender, e isso é decisão de projeto,
+# não timidez. Cinco múltiplos de um exercício não sustentam recomendação — e
+# num terminal operado por assessor certificado, uma tela que imprime "COMPRA"
+# ao lado do ticker é recomendação, por mais que o rodapé diga o contrário.
+#
+# O caso que fechou a questão: PRIO3, score 28, rotulado VENDA. P/L de 22x,
+# ROE de 8,7% e DY zero — números corretos. Só que a PRIO não distribui porque
+# reinveste em aquisição e produção: é empresa de crescimento medida com régua
+# de valor. O filtro reprovar está certo; a palavra "VENDA" é que afirmava algo
+# que o filtro não sabe.
+#
+# Agora ele diz o que de fato mede: se o papel PASSA nos critérios de valor.
+DESTAQUE = "DESTAQUE"            # topo do filtro, poucos por varredura
+APROVADO = "APROVADO NO FILTRO"
+NEUTRO = "NEUTRO"
+REPROVADO = "REPROVADO NO FILTRO"
+ALERTA_RISCO = "ALERTA DE RISCO"  # prejuízo ou destruição de capital
+SEM_DADOS = "SEM DADOS FUNDAMENTALISTAS"
+REVISAR = "REVISAR — EXERCÍCIO ATÍPICO"
+
 CORTE_COMPRA_FORTE = 70
 CORTE_COMPRA = 55
 CORTE_VENDA = 40
@@ -899,14 +919,29 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
 
     score = int(round(max(0.0, min(100.0, score))))
 
+    # Perfil de reinvestimento: um filtro de valor reprova empresa que não
+    # distribui e negocia a múltiplo alto — e às vezes está reprovando
+    # crescimento, não deterioração. PRIO3 é o caso: DY zero e P/L de 22x
+    # porque o caixa vai para aquisição e produção, com margem de 14% de pé.
+    # O filtro segue reprovando (ele mede valor, e isso é o que ele deve
+    # medir); o que muda é que a tela diz POR QUE, em vez de deixar você achar
+    # que a empresa é ruim.
+    if (dy is not None and dy < 1.0 and pl is not None and pl > 15
+            and margem_liq is not None and margem_liq > 8
+            and roe is not None and roe > 0):
+        alertas_risco.append(
+            "Perfil de reinvestimento: sem distribuição e múltiplo alto, com "
+            "margem positiva. Um filtro de valor reprova esse perfil por "
+            "construção — avalie por crescimento, não por múltiplo.")
+
     if score >= CORTE_COMPRA_FORTE:
-        veredito = "COMPRA FORTE"
+        veredito = DESTAQUE
     elif score >= CORTE_COMPRA:
-        veredito = "COMPRA"
+        veredito = APROVADO
     elif score <= CORTE_VENDA:
-        veredito = "VENDA"
+        veredito = REPROVADO
     else:
-        veredito = "NEUTRO"
+        veredito = NEUTRO
 
     fundamentos_avaliados = sum(
         1 for indicador in (pl, pvp, roe, dy, margem_liq) if indicador is not None
@@ -928,17 +963,17 @@ def calcular_score_quantamental(pl, pvp, roe, dy, margem_liq, tendencia_grafica,
 
     if em_prejuizo or destruicao_historica:
         score = min(score, 35)
-        veredito = "VENDA / ALTO RISCO"
+        veredito = ALERTA_RISCO
     elif fundamentos_avaliados == 0:
         score = min(score, 55)
-        veredito = "SEM DADOS FUNDAMENTALISTAS"
+        veredito = SEM_DADOS
     elif fundamentos_avaliados < MINIMO_INDICADORES:
         score = min(score, 55)
         veredito = f"DADOS PARCIAIS ({fundamentos_avaliados}/{TOTAL_INDICADORES})"
-    elif atipico and veredito in ("VENDA", "NEUTRO"):
+    elif atipico and veredito in (REPROVADO, NEUTRO):
         # Não vira compra — vira pedido de leitura humana, que é o que o caso
         # merece. O score fica onde está; só o rótulo deixa de afirmar venda.
-        veredito = "REVISAR — EXERCÍCIO ATÍPICO"
+        veredito = REVISAR
 
     return score, veredito, pontos_positivos, alertas_risco
 

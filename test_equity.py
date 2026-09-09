@@ -213,14 +213,14 @@ class TestRoe(unittest.TestCase):
         base = dict(pl=8.0, pvp=1.2, dy=7.0, margem_liq=15.0,
                     tendencia_grafica="ALTA", rsi_val=45.0)
         _, veredito, _, alertas = equity.calcular_score_quantamental(roe=None, **base)
-        self.assertNotEqual(veredito, "VENDA / ALTO RISCO")
+        self.assertNotEqual(veredito, equity.ALERTA_RISCO)
         self.assertTrue(any("Sem dado na fonte" in a and "ROE" in a for a in alertas))
 
     def test_roe_zero_de_verdade_ainda_e_prejuizo(self):
         base = dict(pl=8.0, pvp=1.2, dy=7.0, margem_liq=15.0,
                     tendencia_grafica="ALTA", rsi_val=45.0)
         _, veredito, _, _ = equity.calcular_score_quantamental(roe=0.0, **base)
-        self.assertEqual(veredito, "VENDA / ALTO RISCO")
+        self.assertEqual(veredito, equity.ALERTA_RISCO)
 
     def test_roe_alto_pontua_mais_que_roe_nao_apurado(self):
         base = dict(pl=8.0, pvp=1.2, dy=6.0, margem_liq=15.0,
@@ -311,8 +311,8 @@ class TestMotorUnico(unittest.TestCase):
     def test_value_trap_derruba_o_veredito(self):
         _, sem, _, _ = equity.calcular_score_quantamental(**self.ENTRADAS, destruicao_historica=False)
         score, com, _, alertas = equity.calcular_score_quantamental(**self.ENTRADAS, destruicao_historica=True)
-        self.assertIn("COMPRA", sem)
-        self.assertEqual(com, "VENDA / ALTO RISCO")
+        self.assertIn(equity.APROVADO, sem)
+        self.assertEqual(com, equity.ALERTA_RISCO)
         self.assertLessEqual(score, 35)
         self.assertTrue(any("Value Trap" in a for a in alertas))
 
@@ -532,7 +532,7 @@ class TestFundamentosOpcionais(unittest.TestCase):
         equity.yf.Ticker = Bloqueado
         resposta = equity.executar_scanner(forcar=True)
         for linha in resposta["oportunidades"]:
-            self.assertEqual(linha["veredito"], "SEM DADOS FUNDAMENTALISTAS")
+            self.assertEqual(linha["veredito"], equity.SEM_DADOS)
             self.assertLessEqual(linha["score_geral"], 55)
 
     def test_mistura_de_papeis_com_e_sem_fundamentos(self):
@@ -579,7 +579,7 @@ class TestMotorComIndicadoresAusentes(unittest.TestCase):
             pl=None, pvp=None, roe=None, dy=None, margem_liq=None,
             tendencia_grafica="ALTA", rsi_val=50.0,
         )
-        self.assertEqual(veredito, "SEM DADOS FUNDAMENTALISTAS")
+        self.assertEqual(veredito, equity.SEM_DADOS)
         self.assertLessEqual(score, 55, "preço puro não pode alcançar faixa de COMPRA")
         self.assertTrue(any("Sem dado na fonte" in a for a in alertas))
 
@@ -642,7 +642,7 @@ class TestMotorComIndicadoresAusentes(unittest.TestCase):
             pl=8.0, pvp=1.0, roe=20.0, dy=None, margem_liq=None,
             tendencia_grafica="ALTA", rsi_val=45.0,
         )
-        self.assertIn("COMPRA", veredito)
+        self.assertIn("APROVADO", veredito)
 
     def test_prejuizo_vence_a_cobertura_rala(self):
         """Margem negativa é resultado apurado: o veto vale mesmo com 1 de 5."""
@@ -650,14 +650,14 @@ class TestMotorComIndicadoresAusentes(unittest.TestCase):
             pl=None, pvp=None, roe=None, dy=None, margem_liq=-12.0,
             tendencia_grafica="ALTA", rsi_val=50.0,
         )
-        self.assertEqual(veredito, "VENDA / ALTO RISCO")
+        self.assertEqual(veredito, equity.ALERTA_RISCO)
 
     def test_margem_ausente_nao_e_prejuizo(self):
         _, veredito, _, _ = equity.calcular_score_quantamental(
             pl=8.0, pvp=1.0, roe=None, dy=None, margem_liq=None,
             tendencia_grafica="ALTA", rsi_val=50.0,
         )
-        self.assertNotEqual(veredito, "VENDA / ALTO RISCO")
+        self.assertNotEqual(veredito, equity.ALERTA_RISCO)
 
 
 class TestCarimboDeColeta(unittest.TestCase):
@@ -894,7 +894,7 @@ class TestCascataUnica(unittest.TestCase):
                 tendencia_grafica="ALTA", rsi_val=73.4, destruicao_historica=False,
             )[1]
         self.assertEqual(_veredito(com["valores"]), _veredito(sem["valores"]))
-        self.assertIn("COMPRA", _veredito(com["valores"]))
+        self.assertIn("APROVADO", _veredito(com["valores"]))
 
     def test_sem_cvm_o_yahoo_assume(self):
         self._stub_cvm({"disponivel": False, "pl": None, "pvp": None,
@@ -929,12 +929,12 @@ class TestVereditoEmExercicioAtipico(unittest.TestCase):
 
     def test_sem_a_marcacao_o_motor_manda_vender(self):
         _, veredito, _, _ = equity.calcular_score_quantamental(**self.ENTRADAS)
-        self.assertIn(veredito, ("VENDA", "NEUTRO"))
+        self.assertIn(veredito, (equity.REPROVADO, equity.NEUTRO))
 
     def test_com_a_marcacao_vira_pedido_de_leitura_humana(self):
         _, veredito, _, alertas = equity.calcular_score_quantamental(
             **self.ENTRADAS, exercicio_atipico=self.ATIPICO)
-        self.assertEqual(veredito, "REVISAR — EXERCÍCIO ATÍPICO")
+        self.assertEqual(veredito, equity.REVISAR)
         self.assertTrue(any("atípico" in a for a in alertas))
         self.assertTrue(any("79%" in a for a in alertas))
 
@@ -943,7 +943,7 @@ class TestVereditoEmExercicioAtipico(unittest.TestCase):
         compra sobre um ano que ninguém leu."""
         score, veredito, _, _ = equity.calcular_score_quantamental(
             **self.ENTRADAS, exercicio_atipico=self.ATIPICO)
-        self.assertNotIn("COMPRA", veredito)
+        self.assertNotIn("APROVADO", veredito)
         self.assertLess(score, equity.CORTE_COMPRA)
 
     def test_prejuizo_continua_mandando(self):
@@ -951,12 +951,12 @@ class TestVereditoEmExercicioAtipico(unittest.TestCase):
         entradas = dict(self.ENTRADAS); entradas["roe"] = -8.0
         _, veredito, _, _ = equity.calcular_score_quantamental(
             **entradas, exercicio_atipico=self.ATIPICO)
-        self.assertEqual(veredito, "VENDA / ALTO RISCO")
+        self.assertEqual(veredito, equity.ALERTA_RISCO)
 
     def test_destruicao_de_capital_continua_mandando(self):
         _, veredito, _, _ = equity.calcular_score_quantamental(
             **self.ENTRADAS, destruicao_historica=True, exercicio_atipico=self.ATIPICO)
-        self.assertEqual(veredito, "VENDA / ALTO RISCO")
+        self.assertEqual(veredito, equity.ALERTA_RISCO)
 
     def test_exercicio_normal_nao_muda_nada(self):
         antes = equity.calcular_score_quantamental(**self.ENTRADAS)
@@ -972,5 +972,5 @@ class TestVereditoEmExercicioAtipico(unittest.TestCase):
                    tendencia_grafica="ALTA", rsi_val=52.0)
         _, veredito, _, alertas = equity.calcular_score_quantamental(
             **bom, exercicio_atipico=self.ATIPICO)
-        self.assertIn("COMPRA", veredito)
+        self.assertIn("APROVADO", veredito)
         self.assertTrue(any("atípico" in a for a in alertas))

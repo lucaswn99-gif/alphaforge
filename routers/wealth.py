@@ -111,10 +111,10 @@ def _recomendacao_fii(pvp):
     if pvp is None or pvp <= 0:
         return None, None
     if pvp < 1.0:
-        return "COMPRA", "Abaixo do valor patrimonial"
+        return "DESCONTO", "Negociando abaixo do valor patrimonial"
     if pvp <= 1.05:
         return "NEUTRO", "Próximo do valor patrimonial"
-    return "AGUARDAR", "Ágio sobre o valor patrimonial"
+    return "ÁGIO", "Negociando acima do valor patrimonial"
 
 
 def _montar_fiis(tickers, df_precos, fundamentos):
@@ -191,7 +191,7 @@ def _montar_etfs(df_precos):
             "ticker": ticker,
             "preco": round(preco, 2),
             "ponto_entrada": round(sma, 2),
-            "recomendacao": "COMPRA" if preco <= sma else "AGUARDAR",
+            "recomendacao": "ABAIXO DA MÉDIA" if preco <= sma else "ACIMA DA MÉDIA",
             "racional": f"Pullback na média de {SMA_ETF} pregões",
         })
     linhas.sort(key=lambda linha: linha["ticker"])

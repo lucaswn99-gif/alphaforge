@@ -130,10 +130,10 @@ class TestDividendYieldNoRadar(unittest.TestCase):
         )
         self.assertEqual([l["ticker"] for l in linhas], ["C11", "A11", "B11"])
 
-    def test_recomendacao_de_fii_segue_o_pvp(self):
-        self.assertEqual(wealth._recomendacao_fii(0.85)[0], "COMPRA")
+    def test_rotulo_de_fii_segue_o_pvp(self):
+        self.assertEqual(wealth._recomendacao_fii(0.85)[0], "DESCONTO")
         self.assertEqual(wealth._recomendacao_fii(1.02)[0], "NEUTRO")
-        self.assertEqual(wealth._recomendacao_fii(1.30)[0], "AGUARDAR")
+        self.assertEqual(wealth._recomendacao_fii(1.30)[0], "ÁGIO")
         self.assertIsNone(wealth._recomendacao_fii(None)[0])
 
 
@@ -313,16 +313,16 @@ class TestPvpPelaCvm(unittest.TestCase):
         self.assertEqual(r["competencia"], "2026-08-31")
         self.assertAlmostEqual(r["vp_por_cota"], 158.24)
 
-    def test_desconto_patrimonial_vira_compra(self):
+    def test_desconto_patrimonial_vira_rotulo_de_desconto(self):
         """HGLG a 147,75 com VP de 158,24 negocia a 0,93x — abaixo do
         patrimônio, que é o gatilho de entrada."""
         pvp = self.fundamentos_fii.pvp_do_fii("HGLG11", preco=147.75)["pvp"]
         recomendacao, _ = wealth._recomendacao_fii(pvp)
-        self.assertEqual(recomendacao, "COMPRA")
+        self.assertEqual(recomendacao, "DESCONTO")
 
-    def test_agio_vira_aguardar(self):
+    def test_agio_vira_rotulo_de_agio(self):
         pvp = self.fundamentos_fii.pvp_do_fii("XPML11", preco=140.0)["pvp"]
-        self.assertEqual(wealth._recomendacao_fii(pvp)[0], "AGUARDAR")
+        self.assertEqual(wealth._recomendacao_fii(pvp)[0], "ÁGIO")
 
     def test_fundo_fora_do_cadastro(self):
         r = self.fundamentos_fii.pvp_do_fii("ZZZZ11", preco=100.0)

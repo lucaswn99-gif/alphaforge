@@ -253,13 +253,16 @@
               <th class="p-2 text-right so-desktop">ROE</th>
               <th class="p-2 text-right so-desktop">DY</th>
               <th class="p-2 text-center">Score</th>
-              <th class="p-2 text-center">Veredito</th>
+              <th class="p-2 text-center">Filtro</th>
             </tr>
           </thead>
           <tbody id="tabelaScannerCorpo" class="divide-y" style="border-color: var(--borda)"></tbody>
         </table>
       </div>
       <p class="text-[10px] mt-3 pt-2 border-t" style="color: var(--ambar); border-color: var(--borda)">
+        <b>Este painel é uma triagem, não recomendação.</b> Ele classifica aderência a critérios de valor
+        sobre o balanço publicado — não avalia crescimento, governança, ciclo setorial nem posição competitiva.
+        Empresa que reinveste em vez de distribuir tende a ser reprovada por construção.<br>
         Cotações do Yahoo (ICE Data Services), <b>atrasadas 15 minutos</b> em relação à B3, sobre fechamentos diários.
         Somado ao cache de 15 min, o preço na tela pode ter até ~30 minutos. Não use como preço de execução nem como
         referência em material de cliente. Múltiplos refletem o último balanço publicado, não o dia.
@@ -335,21 +338,21 @@
       <div class="painel p-4">
         <h3 class="rotulo mb-3">FIIs de tijolo</h3>
         <div class="overflow-x-auto"><table class="w-full text-xs">
-          <thead><tr class="rotulo text-left"><th class="p-1.5">Fundo</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-right">DY</th><th class="p-1.5 text-center">Sinal</th></tr></thead>
+          <thead><tr class="rotulo text-left"><th class="p-1.5">Fundo</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-right">DY</th><th class="p-1.5 text-center">Preço x VP</th></tr></thead>
           <tbody id="tabelaTijolo" class="divide-y" style="border-color: var(--borda)"></tbody>
         </table></div>
       </div>
       <div class="painel p-4">
         <h3 class="rotulo mb-3">FIIs de papel</h3>
         <div class="overflow-x-auto"><table class="w-full text-xs">
-          <thead><tr class="rotulo text-left"><th class="p-1.5">Fundo</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-right">DY</th><th class="p-1.5 text-center">Sinal</th></tr></thead>
+          <thead><tr class="rotulo text-left"><th class="p-1.5">Fundo</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-right">DY</th><th class="p-1.5 text-center">Preço x VP</th></tr></thead>
           <tbody id="tabelaPapel" class="divide-y" style="border-color: var(--borda)"></tbody>
         </table></div>
       </div>
       <div class="painel p-4">
         <h3 class="rotulo mb-3">ETFs</h3>
         <div class="overflow-x-auto"><table class="w-full text-xs">
-          <thead><tr class="rotulo text-left"><th class="p-1.5">ETF</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-center">Sinal</th></tr></thead>
+          <thead><tr class="rotulo text-left"><th class="p-1.5">ETF</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-center">Preço x VP</th></tr></thead>
           <tbody id="tabelaETFs" class="divide-y" style="border-color: var(--borda)"></tbody>
         </table></div>
       </div>
@@ -791,10 +794,11 @@ async function executarScanner(forcar = false) {
     }
 
     corpo.innerHTML = itens.map(i => {
+      // O motor classifica aderência ao filtro; não diz comprar nem vender.
       const semDados = i.veredito.includes('SEM DADOS') || i.veredito.includes('PARCIAIS');
       const cor = semDados ? 'style="color:#4a554e"'
-                : (i.veredito.includes('COMPRA') ? 'class="sobe"'
-                : (i.veredito.includes('VENDA') ? 'class="desce"' : 'style="color:var(--ambar)"'));
+                : (i.veredito.includes('DESTAQUE') || i.veredito.includes('APROVADO') ? 'class="sobe"'
+                : (i.veredito.includes('ALERTA') ? 'class="desce"' : 'style="color:var(--ambar)"'));
       // De onde vieram os múltiplos daquela linha: balanço da CVM, quoteSummary
       // ou proventos. Sem isso não dá para saber o que sustenta o score.
       const origem = i.origem_fundamentos
@@ -891,8 +895,9 @@ async function consultarAcao() {
     const rec = d.recomendacao || 'NEUTRO';
     const badge = document.getElementById('badgeRecomendacao');
     badge.innerText = rec;
-    badge.setAttribute('style', rec.includes('COMPRA') ? 'background:var(--verde);color:#04120b'
-      : (rec.includes('VENDA') ? 'background:var(--vermelho);color:#fff'
+    badge.setAttribute('style',
+      (rec.includes('DESTAQUE') || rec.includes('APROVADO')) ? 'background:var(--verde);color:#04120b'
+      : (rec.includes('ALERTA') ? 'background:var(--vermelho);color:#fff'
       : 'background:var(--ambar);color:#1a1200'));
 
     document.getElementById('acaoOrigemMultiplos').innerText =
@@ -1125,9 +1130,11 @@ async function carregarFundos() {
     if (!res.ok) { mostrarAviso('fundosAviso', `O servidor respondeu ${res.status}.`); return; }
     const data = await res.json();
 
+    // Rótulos descrevem a POSIÇÃO do preço, não uma ação. Um fundo negociando
+    // com desconto sobre o VP não é ordem de compra: é um fato sobre o preço.
     const estilo = (rec) => {
-      if (rec === 'COMPRA')    return 'background:var(--verde);color:#04120b';
-      if (rec === 'AGUARDAR')  return 'background:var(--vermelho);color:#fff';
+      if (rec === 'DESCONTO' || rec === 'ABAIXO DA MÉDIA') return 'background:var(--verde);color:#04120b';
+      if (rec === 'ÁGIO' || rec === 'ACIMA DA MÉDIA')      return 'background:#3a2c08;color:var(--ambar)';
       if (rec === 'SEM DADOS') return 'background:#1a2320;color:#78877f';
       return 'background:var(--ambar);color:#1a1200';
     };
