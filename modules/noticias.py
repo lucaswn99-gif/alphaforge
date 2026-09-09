@@ -51,17 +51,30 @@ CABECALHOS = {
 
 # (chave, veículo, (endereços candidatos...), categoria).
 #
-# Cada fonte aceita VÁRIOS endereços porque endereço de RSS muda sem aviso e eu
-# não consigo testá-los daqui. A primeira que devolver XML legível vence; as
-# demais nem são chamadas. Foi assim que três fontes caíram na primeira
-# execução — BCB devolvendo HTML, IBGE com 403 e Notícias Agrícolas com 404 —
-# e um endereço único não dá para onde correr.
+# Cada fonte aceita VÁRIOS endereços porque endereço de RSS muda sem aviso. A
+# primeira que devolver XML legível vence; as demais nem são chamadas.
+#
+# TODOS OS ENDEREÇOS ABAIXO FORAM VERIFICADOS AO VIVO EM 09/09/2026 — abertos
+# no navegador, com contagem de itens e a manchete mais recente conferidas. Os
+# do BCB e do IBGE foram descobertos assim, depois que os endereços que eu
+# tinha inferido devolveram HTTP 400 e 403: adivinhar endereço de feed não
+# funciona, e o modo `--verificar` existe justamente para isso.
 FONTES = [
-    # --- macro oficial: a fonte primária, sem intermediário ---
+    # --- política monetária: a fonte primária, sem intermediário ---
+    # Comunicado e ata do Copom entram separados de propósito. Compartilhando
+    # uma fonte, o teto de itens por fonte faria a ata sumir na semana da
+    # decisão — que é exatamente a semana em que ela importa.
+    ("copom_com", "Copom (comunicados)", (
+        "https://www.bcb.gov.br/api/feed/sitebcb/sitefeeds/comunicadoscopom",
+    ), "Macro"),
+    ("copom_ata", "Copom (atas)", (
+        "https://www.bcb.gov.br/api/feed/sitebcb/sitefeeds/atascopom",
+    ), "Macro"),
+    ("bcb_focus", "BCB — Relatório Focus", (
+        "https://www.bcb.gov.br/api/feed/sitebcb/sitefeeds/focus",
+    ), "Macro"),
     ("bcb", "Banco Central", (
-        "https://www.bcb.gov.br/api/feed/sitebcb/noticias",
-        "https://www.bcb.gov.br/api/feed/sitebcb/notasimprensa",
-        "https://www.bcb.gov.br/rss/noticias",
+        "https://www.bcb.gov.br/api/feed/sitebcb/sitefeeds/noticias",
     ), "Macro"),
     ("fed", "Federal Reserve", (
         "https://www.federalreserve.gov/feeds/press_monetary.xml",
@@ -70,9 +83,8 @@ FONTES = [
         "https://www.federalreserve.gov/feeds/press_all.xml",
     ), "Macro"),
     ("ibge", "IBGE", (
-        "https://agenciadenoticias.ibge.gov.br/agencia-noticias/2012-agencia-de-noticias/noticias.rss",
-        "https://agenciadenoticias.ibge.gov.br/rss/economia.xml",
-        "https://agenciadenoticias.ibge.gov.br/agencia-noticias/rss.html",
+        "https://agenciadenoticias.ibge.gov.br/agencia-rss",
+        "https://2.agenciadenoticias.ibge.gov.br/?Itemid=6853&format=feed&type=rss",
     ), "Macro"),
     ("poder360", "Poder360", (
         "https://www.poder360.com.br/economia/feed/",
@@ -90,16 +102,17 @@ FONTES = [
         "https://exame.com/feed/",
     ), "Mercado"),
     # --- commodities e agro ---
+    # Notícias Agrícolas saiu: o site não publica mais RSS (nenhum link de
+    # descoberta no HTML, e os três endereços conhecidos devolvem 404).
     ("investing_comm", "Investing (commodities)", (
         "https://br.investing.com/rss/commodities.rss",
         "https://br.investing.com/rss/news_11.rss",
     ), "Commodities"),
-    ("noticiasagricolas", "Notícias Agrícolas", (
-        "https://www.noticiasagricolas.com.br/rss/noticias/todas.xml",
-        "https://www.noticiasagricolas.com.br/feed",
-        "https://www.noticiasagricolas.com.br/rss/noticias.xml",
-    ), "Commodities"),
     ("canalrural", "Canal Rural", ("https://www.canalrural.com.br/feed/",), "Commodities"),
+    ("moneytimes_comm", "Money Times (commodities)", (
+        "https://www.moneytimes.com.br/tag/commodities/feed/",
+        "https://www.moneytimes.com.br/feed/",
+    ), "Commodities"),
 ]
 
 CATEGORIAS = ("Macro", "Mercado", "Commodities")

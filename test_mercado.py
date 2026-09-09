@@ -224,6 +224,28 @@ class TestNoticias(unittest.TestCase):
         self.assertEqual(chamadas, ["http://a"])
         self.assertEqual(diag["url"], "http://a")
 
+    def test_enderecos_verificados_continuam_no_lugar(self):
+        """Trava os endereços que eu conferi ao vivo em 09/09/2026.
+
+        Os do BCB e do IBGE eu tinha INFERIDO antes, e os dois devolveram erro
+        (400 e 403). Estes vieram de abrir a página de feeds no navegador e ler
+        o href. Se alguém trocar por um palpite, este teste avisa.
+        """
+        por_chave = {c: u for c, _, u, _ in noticias.FONTES}
+        self.assertIn("https://www.bcb.gov.br/api/feed/sitebcb/sitefeeds/comunicadoscopom",
+                      por_chave["copom_com"])
+        self.assertIn("https://www.bcb.gov.br/api/feed/sitebcb/sitefeeds/atascopom",
+                      por_chave["copom_ata"])
+        self.assertIn("https://agenciadenoticias.ibge.gov.br/agencia-rss",
+                      por_chave["ibge"])
+
+    def test_copom_comunicado_e_ata_sao_fontes_separadas(self):
+        """Juntas, o teto de itens por fonte faria a ata sumir justamente na
+        semana da decisão."""
+        chaves = {c for c, _, _, _ in noticias.FONTES}
+        self.assertIn("copom_com", chaves)
+        self.assertIn("copom_ata", chaves)
+
     def test_toda_categoria_tem_mais_de_uma_fonte(self):
         """Uma fonte por categoria significa painel vazio quando ela cai."""
         contagem = {}
