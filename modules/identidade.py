@@ -184,3 +184,46 @@ def cobertura(tickers):
     com_logo = sum(1 for t in tickers or [] if identidade(t)["logo"])
     return {"total": total, "com_logo": com_logo,
             "sem_logo": [t for t in tickers or [] if not identidade(t)["logo"]]}
+
+
+# --------------------------------------------------------------------------- #
+# Classe de ativo — para o teto setorial do otimizador
+# --------------------------------------------------------------------------- #
+# ETF e FII não têm setor no sentido de uma companhia: o que importa para
+# concentração é a CLASSE. Um portfólio com 60% em FII de papel está
+# concentrado, mesmo que sejam quatro fundos diferentes.
+ETFS_CONHECIDOS = {
+    "BOVA", "IVVB", "SMAL", "HASH", "PIBB", "SPXI", "XINA", "EURP", "GOLD",
+    "BOVV", "IVVX", "NASD", "QBTC", "QETH", "DIVO", "FIND", "MATB", "ISUS",
+    "ACWI", "WRLD", "BDRX", "IMAB", "IRFM", "B5P2", "FIXA", "USDB",
+}
+
+
+def classe_do_ativo(ticker):
+    """'Ação', 'ETF', 'FII' ou 'Outros'. Nunca levanta."""
+    codigo = (ticker or "").upper().strip()
+    raiz = raiz_do_ticker(codigo)
+    if not raiz:
+        return "Outros"
+    if raiz in EMPRESAS:
+        return "Ação"
+    if raiz in ETFS_CONHECIDOS:
+        return "ETF"
+    # Sufixo 11 sem ser ETF conhecido e sem estar no cadastro de companhias:
+    # na B3 isso é, na prática, fundo imobiliário. Unit de companhia (BPAC11,
+    # KLBN11) cai no cadastro acima e não chega aqui.
+    if codigo.endswith("11"):
+        return "FII"
+    return "Outros"
+
+
+def grupo_de_concentracao(ticker):
+    """O rótulo que o teto setorial usa.
+
+    Ação entra pelo setor da companhia; ETF e FII entram pela classe. É a
+    divisão que responde à pergunta real: 'quanto disso é a mesma aposta?'
+    """
+    classe = classe_do_ativo(ticker)
+    if classe == "Ação":
+        return identidade(ticker)["setor"]
+    return classe

@@ -18,7 +18,7 @@ import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, Query
 
-from modules import fundamentos_fii, taxas
+from modules import fundamentos_fii, identidade, otimizador, taxas
 from routers.equity import (carimbo_de_coleta, dy_da_serie, fatiar_precos,
                             normalizar_dy)
 
@@ -236,18 +236,22 @@ def radar_fundos():
 def otimizar_markowitz(
     tickers: str,
     selic_aa: float = Query(None, description="Taxa livre de risco anual em %; vazio usa a meta Selic do BCB"),
-    simulacoes: int = Query(20000, ge=1000, le=100000),
+    objetivo: str = Query("sharpe", description="sharpe | minima_variancia | paridade_risco"),
+    teto_ativo: float = Query(0.25, ge=0.05, le=1.0, description="Peso máximo por ativo"),
+    teto_grupo: float = Query(0.40, ge=0.10, le=1.0, description="Peso máximo por setor ou classe"),
 ):
-    """Fronteira eficiente por simulação de Monte Carlo, maximizando Sharpe.
+    """Otimização com restrição de concentração, encolhimento e comparação com o CDI.
 
-    A taxa livre de risco é parâmetro: o Sharpe é sensível a ela, e um valor
-    fixo no código vira número errado sem ninguém perceber.
+    A versão anterior sorteava 20 mil vetores de peso e ficava com o melhor.
+    Isso não é otimização — é loteria em cinco dimensões, e produzia 50% num
+    único ativo porque nada impedia. Ver `modules/otimizador.py` para o
+    raciocínio completo.
+
+    Três objetivos: `sharpe` (máximo prêmio por unidade de risco),
+    `minima_variancia` (não usa retorno esperado, e por isso costuma ir melhor
+    fora da amostra) e `paridade_risco` (cada ativo contribui com a mesma
+    parcela do risco).
     """
-    try:
-        simulacoes = int(simulacoes)
-    except (TypeError, ValueError):
-        simulacoes = 20000
-
     lista = [t.strip().upper() for t in tickers.split(",") if t.strip()]
     lista = list(dict.fromkeys(lista))
     if len(lista) < 2:
@@ -301,38 +305,116 @@ def otimizar_markowitz(
     taxa_livre = float(selic_aa) / 100.0
     n = fechamentos.shape[1]
 
-    gerador = np.random.default_rng()
-    pesos = gerador.random((simulacoes, n))
-    pesos /= pesos.sum(axis=1, keepdims=True)
+    # Chamada direta (teste, script) recebe o objeto Query como default, que
+    # não é None e passaria batido — o mesmo defeito que já fez `bool(Query(False))`
+    # valer True neste projeto. Coerção explícita, sempre.
+    def _texto(valor, padrao):
+        return valor.strip().lower() if isinstance(valor, str) and valor.strip() else padrao
 
-    # Vetorizado: o laço em Python com 5.000 iterações era o gargalo, e agora
-    # cabem 20.000 simulações no mesmo tempo.
-    retorno_carteira = pesos @ retornos_medios.to_numpy()
-    variancia = np.einsum("ij,jk,ik->i", pesos, covariancia.to_numpy(), pesos)
-    volatilidade = np.sqrt(np.maximum(variancia, 0.0))
+    def _fracao(valor, padrao):
+        try:
+            numero = float(valor)
+        except (TypeError, ValueError):
+            return padrao
+        return numero if 0.0 < numero <= 1.0 else padrao
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        sharpe = np.where(volatilidade > 0,
-                          (retorno_carteira - taxa_livre) / volatilidade,
-                          -np.inf)
+    objetivo = _texto(objetivo, "sharpe")
+    teto_ativo = _fracao(teto_ativo, 0.25)
+    teto_grupo = _fracao(teto_grupo, 0.40)
 
-    melhor = int(np.argmax(sharpe))
-    otimos = pesos[melhor]
+    grupos = [identidade.grupo_de_concentracao(c.replace(".SA", ""))
+              for c in fechamentos.columns]
 
-    alocacao = [{"ativo": col.replace(".SA", ""), "peso_pct": round(float(p) * 100, 2)}
-                for col, p in zip(fechamentos.columns, otimos)]
+    resultado = otimizador.otimizar(
+        retornos_medios.to_numpy(), covariancia.to_numpy(), taxa_livre,
+        objetivo=objetivo, teto=teto_ativo, teto_grupo=teto_grupo, grupos=grupos,
+    )
+    pesos = resultado["pesos"]
+
+    alocacao = [{
+        "ativo": col.replace(".SA", ""),
+        "peso_pct": round(float(p) * 100, 2),
+        "grupo": g,
+        # Onde o RISCO está, que quase nunca é onde o peso está: um ativo com
+        # 20% de peso e 45% do risco é a informação que falta na maioria das
+        # telas de alocação.
+        "risco_pct": round(float(r) * 100, 2),
+    } for col, p, g, r in zip(fechamentos.columns, pesos, grupos,
+                              resultado["contribuicao_risco"])]
     alocacao.sort(key=lambda item: item["peso_pct"], reverse=True)
+
+    curva = otimizador.fronteira(
+        otimizador.encolher_retornos(retornos_medios.to_numpy()),
+        otimizador.encolher_covariancia(covariancia.to_numpy()),
+        teto=teto_ativo, teto_grupo=teto_grupo, grupos=grupos)
+
+    # Teto de grupo que FORÇA alocação, em vez de limitá-la: com poucos grupos
+    # o limite dos outros vira piso deste. Precisa ser dito antes que o
+    # usuário conclua que o otimizador gostou do ativo.
+    forcados = resultado["minimos_forcados_por_grupo"]
+    concentracao = []
+    if forcados:
+        detalhe = ", ".join(f"{g} ≥ {v:.0f}%" for g, v in forcados.items())
+        concentracao.append(
+            f"Só há {resultado['grupos_distintos']} grupos distintos nesta lista. "
+            f"Com teto de {resultado['teto_por_grupo'] * 100:.0f}% por grupo, o limite "
+            f"dos outros vira piso deste: {detalhe}. O peso não é escolha do "
+            "otimizador — é imposição da restrição. Acrescente ativos de outros "
+            "setores ou afrouxe o teto.")
+
+    # Peso pequeno com risco grande é o que a tabela de pesos esconde.
+    for linha in alocacao:
+        if linha["risco_pct"] >= 40.0 and linha["peso_pct"] <= 25.0:
+            concentracao.append(
+                f"{linha['ativo']} tem {linha['peso_pct']:.0f}% do peso mas "
+                f"{linha['risco_pct']:.0f}% do risco da carteira. Diversificação de "
+                "peso não é diversificação de risco.")
+
+    sharpe = resultado["sharpe"]
+    if not resultado["supera_cdi"]:
+        veredito = (
+            f"Esta carteira entrega Sharpe de {sharpe:.2f}. Com a taxa livre de risco "
+            f"em {float(selic_aa):.2f}% a.a., o prêmio pelo risco assumido é pequeno "
+            "demais para justificar a carteira: o CDI puro entrega retorno parecido "
+            "sem volatilidade. Otimizar a combinação não resolve — o problema é que "
+            "os ativos escolhidos não pagam o risco no cenário de juros atual.")
+    elif sharpe < 0.5:
+        veredito = (f"Sharpe de {sharpe:.2f}: a carteira supera o CDI, mas com margem "
+                    "modesta. Vale comparar com a alternativa de renda fixa antes de montar.")
+    else:
+        veredito = (f"Sharpe de {sharpe:.2f}: a combinação entrega prêmio relevante "
+                    "sobre a taxa livre de risco no período analisado.")
 
     return {
         **carimbo_de_coleta(),
-        "retorno_esperado_aa": round(float(retorno_carteira[melhor]) * 100, 2),
-        "volatilidade_aa": round(float(volatilidade[melhor]) * 100, 2),
-        "sharpe_ratio": round(float(sharpe[melhor]), 2),
+        "objetivo": resultado["objetivo"],
+        "retorno_esperado_aa": round(resultado["retorno_esperado"] * 100, 2),
+        "retorno_historico_bruto_aa": round(resultado["retorno_historico_bruto"] * 100, 2),
+        "volatilidade_aa": round(resultado["volatilidade"] * 100, 2),
+        "sharpe_ratio": round(sharpe, 2),
+        "supera_cdi": resultado["supera_cdi"],
+        "veredito": veredito,
         "taxa_livre_risco_aa": round(float(selic_aa), 2),
         "origem_taxa_livre_risco": origem_selic,
         "vigencia_taxa_livre_risco": data_selic,
-        "simulacoes": int(simulacoes),
+        "teto_por_ativo_pct": round(resultado["teto_por_ativo"] * 100, 1),
+        "teto_por_grupo_pct": round(resultado["teto_por_grupo"] * 100, 1),
+        "peso_por_grupo": resultado["peso_por_grupo"],
+        "encolhimento_aplicado": resultado["encolhimento_aplicado"],
         "pregoes_utilizados": int(len(fechamentos)),
         "ativos_sem_dados": ausentes,
         "alocacao_otima": alocacao,
+        "fronteira": curva,
+        "alertas_concentracao": concentracao,
+        "minimos_forcados_por_grupo": forcados,
+        "ressalvas": [
+            "Retornos esperados encolhidos 50% na direção da média do conjunto: "
+            "média histórica é estimador ruim, e otimizar sobre ela concentra a "
+            "carteira no ativo que mais subiu na janela.",
+            f"Teto de {resultado['teto_por_ativo'] * 100:.0f}% por ativo e "
+            f"{resultado['teto_por_grupo'] * 100:.0f}% por setor ou classe. Sem teto "
+            "de setor, quatro bancos a 25% viram 100% em bancos.",
+            "Fronteira e carteira usam as MESMAS restrições — comparar solução "
+            "restrita com fronteira irrestrita compararia coisas diferentes.",
+        ],
     }

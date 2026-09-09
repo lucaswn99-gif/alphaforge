@@ -27,6 +27,7 @@ sys.modules.setdefault("yfinance", _yf)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modules import taxas  # noqa: E402
+from modules import otimizador  # noqa: E402
 from routers import wealth  # noqa: E402
 
 
@@ -184,7 +185,7 @@ class TestExtrairFechamentos(unittest.TestCase):
         try:
             for layout in ("campo", "ticker"):
                 wealth.yf.download = faz_download(layout)
-                r = wealth.otimizar_markowitz("PETR4,VALE3", selic_aa=14.0, simulacoes=2000)
+                r = wealth.otimizar_markowitz("PETR4,VALE3", selic_aa=14.0)
                 self.assertNotIn("erro", r, f"layout {layout} falhou")
                 self.assertEqual(len(r["alocacao_otima"]), 2)
         finally:
@@ -217,21 +218,21 @@ class TestOtimizador(unittest.TestCase):
 
     def test_pesos_somam_cem(self):
         wealth.yf.download = self._download_simples()
-        r = wealth.otimizar_markowitz("PETR4,VALE3,ITUB4", simulacoes=2000)
+        r = wealth.otimizar_markowitz("PETR4,VALE3,ITUB4")
         self.assertNotIn("erro", r)
         total = sum(item["peso_pct"] for item in r["alocacao_otima"])
         self.assertAlmostEqual(total, 100.0, places=1)
 
     def test_selic_vem_do_bcb_quando_nao_informada(self):
         wealth.yf.download = self._download_simples()
-        r = wealth.otimizar_markowitz("PETR4,VALE3", simulacoes=2000)
+        r = wealth.otimizar_markowitz("PETR4,VALE3")
         self.assertEqual(r["taxa_livre_risco_aa"], 14.0)
         self.assertEqual(r["origem_taxa_livre_risco"], "bcb")
         self.assertEqual(r["vigencia_taxa_livre_risco"], "16/09/2026")
 
     def test_parametro_sobrescreve_a_selic(self):
         wealth.yf.download = self._download_simples()
-        r = wealth.otimizar_markowitz("PETR4,VALE3", selic_aa=9.5, simulacoes=2000)
+        r = wealth.otimizar_markowitz("PETR4,VALE3", selic_aa=9.5)
         self.assertEqual(r["taxa_livre_risco_aa"], 9.5)
         self.assertEqual(r["origem_taxa_livre_risco"], "parametro")
 
@@ -239,8 +240,8 @@ class TestOtimizador(unittest.TestCase):
         """Sharpe é sensível à taxa livre de risco — por isso ela não pode ser
         constante esquecida no código."""
         wealth.yf.download = self._download_simples()
-        baixa = wealth.otimizar_markowitz("PETR4,VALE3", selic_aa=2.0, simulacoes=3000)
-        alta = wealth.otimizar_markowitz("PETR4,VALE3", selic_aa=20.0, simulacoes=3000)
+        baixa = wealth.otimizar_markowitz("PETR4,VALE3", selic_aa=2.0)
+        alta = wealth.otimizar_markowitz("PETR4,VALE3", selic_aa=20.0)
         self.assertGreater(baixa["sharpe_ratio"], alta["sharpe_ratio"])
 
     def test_menos_de_dois_ativos_e_erro(self):
@@ -251,7 +252,7 @@ class TestOtimizador(unittest.TestCase):
         """Antes o ffill().dropna() aceitava qualquer interseção e a conta saía
         sobre um punhado de pregões."""
         wealth.yf.download = self._download_simples(dias=40)
-        r = wealth.otimizar_markowitz("PETR4,VALE3", simulacoes=2000)
+        r = wealth.otimizar_markowitz("PETR4,VALE3")
         self.assertIn("erro", r)
         self.assertIn("insuficiente", r["erro"])
 
@@ -355,3 +356,143 @@ class TestPvpPelaCvm(unittest.TestCase):
         self.assertIn("CVM", por_ticker["HGLG11"]["origem_fundamentos"])
         self.assertEqual(por_ticker["HGLG11"]["ponto_entrada"], 158.24,
                          "o ponto de entrada é o valor patrimonial da cota")
+
+
+class TestOtimizadorComRestricao(unittest.TestCase):
+    """O defeito relatado: 49,86% num único ativo, Sharpe 0,06, e a tela
+    chamando aquilo de 'alocação ótima'.
+
+    Eram três problemas somados — busca aleatória em vez de otimização, nenhum
+    teto de concentração, e retorno esperado tirado da média histórica crua,
+    que é quase pura variância amostral.
+    """
+
+    def _cenario(self):
+        """Seis ativos: três bancos, um ETF de cripto muito volátil e dois FIIs.
+        O ETF tem o MELHOR retorno histórico — é a armadilha que fazia o
+        otimizador antigo despejar metade da carteira nele."""
+        mu = np.array([0.22, 0.20, 0.19, 0.28, 0.14, 0.13])
+        vol = np.array([0.30, 0.29, 0.31, 0.60, 0.15, 0.14])
+        corr = np.full((6, 6), 0.30)
+        np.fill_diagonal(corr, 1.0)
+        grupos = ["Financeiro", "Financeiro", "Financeiro", "ETF", "FII", "FII"]
+        return mu, np.outer(vol, vol) * corr, grupos
+
+    def test_nenhum_ativo_passa_do_teto(self):
+        mu, sigma, grupos = self._cenario()
+        r = otimizador.otimizar(mu, sigma, 0.14, grupos=grupos, teto=0.25)
+        self.assertLessEqual(r["pesos"].max(), 0.25 + 1e-6)
+
+    def test_nenhum_setor_passa_do_teto(self):
+        """Quatro bancos a 25% cada viram 100% em bancos: teto por ativo
+        sozinho não é restrição de concentração."""
+        mu, sigma, grupos = self._cenario()
+        r = otimizador.otimizar(mu, sigma, 0.14, grupos=grupos,
+                                teto=0.25, teto_grupo=0.40)
+        for grupo, peso in r["peso_por_grupo"].items():
+            self.assertLessEqual(peso, 40.0 + 1e-6, grupo)
+
+    def test_pesos_somam_cem(self):
+        mu, sigma, grupos = self._cenario()
+        for objetivo in otimizador.OBJETIVOS:
+            r = otimizador.otimizar(mu, sigma, 0.14, objetivo=objetivo, grupos=grupos)
+            self.assertAlmostEqual(float(r["pesos"].sum()), 1.0, places=5, msg=objetivo)
+            self.assertTrue((r["pesos"] >= -1e-9).all(), objetivo)
+
+    def test_encolhimento_tira_a_carteira_do_ativo_que_mais_subiu(self):
+        """Sem encolher, o otimizador persegue o retorno histórico. Com
+        encolhimento, o peso do ETF de maior retorno e maior volatilidade cai."""
+        mu, sigma, grupos = self._cenario()
+        cru = otimizador.otimizar(mu, sigma, 0.14, grupos=grupos, encolher=False)
+        encolhido = otimizador.otimizar(mu, sigma, 0.14, grupos=grupos, encolher=True)
+        self.assertLessEqual(encolhido["pesos"][3], cru["pesos"][3] + 1e-9)
+
+    def test_e_deterministico(self):
+        """Busca aleatória devolvia carteira diferente a cada execução — com o
+        mesmo dado de entrada. Isso sozinho já invalidava o resultado."""
+        mu, sigma, grupos = self._cenario()
+        a = otimizador.otimizar(mu, sigma, 0.14, grupos=grupos)
+        b = otimizador.otimizar(mu, sigma, 0.14, grupos=grupos)
+        np.testing.assert_allclose(a["pesos"], b["pesos"])
+
+    def test_minima_variancia_tem_menos_risco_que_o_maximo_sharpe(self):
+        mu, sigma, grupos = self._cenario()
+        sharpe = otimizador.otimizar(mu, sigma, 0.14, "sharpe", grupos=grupos)
+        minima = otimizador.otimizar(mu, sigma, 0.14, "minima_variancia", grupos=grupos)
+        self.assertLessEqual(minima["volatilidade"], sharpe["volatilidade"] + 1e-6)
+
+    def test_paridade_de_risco_iguala_as_contribuicoes(self):
+        """Peso igual não é risco igual: o ativo de 60% de volatilidade tem
+        que entrar com peso menor que o de 14%.
+
+        Sem teto de grupo aqui de propósito — com três grupos e teto de 40%, a
+        restrição FORÇA 20% no ETF e o efeito da paridade fica escondido. É o
+        caso coberto pelo teste de mínimo forçado logo abaixo."""
+        mu, sigma, grupos = self._cenario()
+        r = otimizador.otimizar(mu, sigma, 0.14, "paridade_risco",
+                                grupos=grupos, teto_grupo=1.0, teto=0.35)
+        self.assertLess(r["pesos"][3], r["pesos"][4])
+        # E as contribuições de risco ficam próximas entre si, que é a definição.
+        rc = r["contribuicao_risco"]
+        self.assertLess(float(rc.max() - rc.min()), 0.12)
+
+    def test_teto_de_grupo_pode_forcar_alocacao_em_vez_de_limitar(self):
+        """O achado que motivou o alerta na tela.
+
+        Com três grupos e teto de 40%, os outros dois somam no máximo 80% — o
+        terceiro recebe 20% por imposição, mesmo sendo o pior ativo. Numa
+        carteira real isso empurrou 20% para um ETF de cripto que ficou com
+        47% do risco total. O peso não foi escolha do otimizador."""
+        forcados = otimizador.minimos_forcados(
+            ["Financeiro", "Financeiro", "ETF", "FII"], 0.40)
+        self.assertEqual(forcados, {"Financeiro": 20.0, "ETF": 20.0, "FII": 20.0})
+
+    def test_com_grupos_suficientes_nada_e_forcado(self):
+        self.assertEqual(otimizador.minimos_forcados(list("ABCDEF"), 0.40), {})
+
+    def test_risco_concentrado_aparece_mesmo_com_peso_diluido(self):
+        """O ativo volátil pode ter peso pequeno e risco enorme — e é isso que
+        a tabela de pesos sozinha esconde."""
+        mu, sigma, grupos = self._cenario()
+        r = otimizador.otimizar(mu, sigma, 0.14, grupos=grupos)
+        peso_etf = float(r["pesos"][3])
+        risco_etf = float(r["contribuicao_risco"][3])
+        self.assertLess(peso_etf, 0.25)
+        self.assertGreater(risco_etf, 2 * peso_etf)
+
+    def test_sharpe_fraco_e_denunciado(self):
+        """Com Selic a 14%, carteira que rende 15% com 25% de volatilidade não
+        é 'ótima' — é pior que CDI, e a tela precisa dizer isso."""
+        mu = np.array([0.155, 0.150])
+        sigma = np.array([[0.0625, 0.03], [0.03, 0.0576]])
+        r = otimizador.otimizar(mu, sigma, 0.14, grupos=["ETF", "FII"])
+        self.assertLess(r["sharpe"], otimizador.SHARPE_MINIMO_RELEVANTE)
+        self.assertFalse(r["supera_cdi"])
+
+    def test_projecao_respeita_as_duas_restricoes(self):
+        bruto = np.array([2.0, 1.5, 1.2, 0.1, 0.05, 0.02])
+        grupos = ["Financeiro"] * 3 + ["ETF", "FII", "FII"]
+        w = otimizador.projetar_com_grupos(bruto, 0.25, 0.0, grupos, 0.40)
+        self.assertAlmostEqual(float(w.sum()), 1.0, places=6)
+        self.assertLessEqual(w.max(), 0.25 + 1e-6)
+        self.assertLessEqual(w[:3].sum(), 0.40 + 1e-6)
+
+    def test_teto_impossivel_nao_trava(self):
+        """Dois grupos com teto de 30% somam 60%, não 100%. Em vez de falhar,
+        o teto sobe para o mínimo viável."""
+        w = otimizador.projetar_com_grupos(
+            np.array([1.0, 1.0, 1.0, 1.0]), 0.5, 0.0, ["A", "A", "B", "B"], 0.30)
+        self.assertAlmostEqual(float(w.sum()), 1.0, places=6)
+
+    def test_fronteira_e_monotona(self):
+        """Mais risco tem que vir com mais retorno: ponto dominado não é
+        fronteira eficiente."""
+        mu, sigma, grupos = self._cenario()
+        curva = otimizador.fronteira(otimizador.encolher_retornos(mu),
+                                     otimizador.encolher_covariancia(sigma),
+                                     grupos=grupos)
+        self.assertGreater(len(curva), 2)
+        vols = [p["volatilidade"] for p in curva]
+        rets = [p["retorno"] for p in curva]
+        self.assertEqual(vols, sorted(vols))
+        self.assertEqual(rets, sorted(rets))

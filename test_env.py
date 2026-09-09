@@ -15,7 +15,7 @@ class TestImportacaoDoServico(unittest.TestCase):
         for nome in ("modules.composicao_ibov", "modules.taxas",
                      "modules.fundamentos_cvm", "modules.fundamentos_fii",
                      "modules.cadastro_b3", "modules.credit_engine",
-                     "modules.credito_cvm", "modules.credito_score", "modules.identidade",
+                     "modules.credito_cvm", "modules.credito_score", "modules.identidade", "modules.otimizador",
                      "modules.mercado", "modules.noticias",
                      "routers.mercado", "routers.quantitativo",
                      "modules.quant", "api",

@@ -543,6 +543,31 @@
                class="campo mono uppercase flex-1 min-w-[240px]">
         <button onclick="otimizarPortfolio()" id="btnOtimizar" class="btn">Otimizar pesos</button>
       </div>
+      <div class="flex gap-3 flex-wrap items-end mt-3">
+        <label>
+          <span class="text-[10px]" style="color: var(--suave)">Objetivo</span>
+          <select id="objetivoPort" class="campo text-[11px] py-1.5 mt-1 block">
+            <option value="sharpe">Máximo Sharpe</option>
+            <option value="minima_variancia">Mínima variância</option>
+            <option value="paridade_risco">Paridade de risco</option>
+          </select>
+        </label>
+        <label>
+          <span class="text-[10px]" style="color: var(--suave)">Teto por ativo</span>
+          <select id="tetoAtivo" class="campo text-[11px] py-1.5 mt-1 block">
+            <option value="0.15">15%</option><option value="0.20">20%</option>
+            <option value="0.25" selected>25%</option><option value="0.35">35%</option>
+            <option value="1.0">sem teto</option>
+          </select>
+        </label>
+        <label>
+          <span class="text-[10px]" style="color: var(--suave)">Teto por setor/classe</span>
+          <select id="tetoGrupo" class="campo text-[11px] py-1.5 mt-1 block">
+            <option value="0.30">30%</option><option value="0.40" selected>40%</option>
+            <option value="0.50">50%</option><option value="1.0">sem teto</option>
+          </select>
+        </label>
+      </div>
     </div>
 
     <p id="portfolioAviso" class="hidden text-xs rounded px-4 py-3 border"></p>
@@ -555,9 +580,17 @@
       <div class="painel p-4"><span class="rotulo">Índice de Sharpe</span>
         <p class="text-2xl font-bold mono mt-1" id="portSharpe">0.0</p></div>
       <div class="painel p-4 md:col-span-3">
-        <h3 class="rotulo mb-3">Alocação ótima</h3>
+        <p id="portVeredito" class="text-xs mb-4 p-3 rounded"
+           style="background: var(--painel-alt); border: 1px solid var(--borda)"></p>
+        <div id="portConcentracao" class="space-y-2 mb-4"></div>
+        <div class="flex justify-between items-center mb-3">
+          <h3 class="rotulo">Alocação · peso e contribuição de risco</h3>
+          <span class="text-[10px]" style="color: var(--suave)" id="portGrupos"></span>
+        </div>
         <div id="listaPesos" class="space-y-3"></div>
-        <p class="text-[10px] mt-4 pt-2 border-t" style="color: var(--suave); border-color: var(--borda)" id="portTaxa"></p>
+        <div id="portRessalvas" class="text-[10px] mt-4 pt-2 border-t space-y-1"
+             style="color: var(--ambar); border-color: var(--borda)"></div>
+        <p class="text-[10px] mt-2" style="color: var(--suave)" id="portTaxa"></p>
       </div>
     </div>
   </section>
@@ -1400,7 +1433,11 @@ async function otimizarPortfolio() {
   painel.classList.add('hidden');
   mostrarAviso('portfolioAviso', '');
   try {
-    const res = await fetch(`/wealth/otimizar-portfolio?tickers=${encodeURIComponent(tickers)}`);
+    const objetivo = document.getElementById('objetivoPort').value;
+    const tetoA = document.getElementById('tetoAtivo').value;
+    const tetoG = document.getElementById('tetoGrupo').value;
+    const res = await fetch(`/wealth/otimizar-portfolio?tickers=${encodeURIComponent(tickers)}`
+      + `&objetivo=${objetivo}&teto_ativo=${tetoA}&teto_grupo=${tetoG}`);
     if (!res.ok) { mostrarAviso('portfolioAviso', `O servidor respondeu ${res.status}.`); return; }
     const data = await res.json();
 
@@ -1423,23 +1460,57 @@ async function otimizarPortfolio() {
     document.getElementById('portTaxa').innerText =
       `Taxa livre de risco: ${data.taxa_livre_risco_aa}% a.a. — ${fontes[data.origem_taxa_livre_risco] || '—'}`
       + `${data.vigencia_taxa_livre_risco ? ' (vigência ' + data.vigencia_taxa_livre_risco + ')' : ''}`
-      + ` · ${data.simulacoes} simulações sobre ${data.pregoes_utilizados} pregões`;
+      + ` · ${data.pregoes_utilizados} pregões · teto ${data.teto_por_ativo_pct}% por ativo`
+      + ` e ${data.teto_por_grupo_pct}% por grupo`;
 
     if (Array.isArray(data.ativos_sem_dados) && data.ativos_sem_dados.length) {
       mostrarAviso('portfolioAviso',
         `Ficaram de fora por falta de histórico: ${data.ativos_sem_dados.map(esc).join(', ')}.`, 'alerta');
     }
 
-    document.getElementById('listaPesos').innerHTML = (data.alocacao_otima || []).map(item => `
+    // O veredito contra o CDI vem primeiro: com Selic a 14%, "alocação ótima"
+    // sem essa comparação é a informação mais importante ficando de fora.
+    const vered = document.getElementById('portVeredito');
+    vered.innerText = data.veredito || '';
+    vered.style.color = data.supera_cdi ? 'var(--texto)' : 'var(--ambar)';
+    vered.style.borderColor = data.supera_cdi ? 'var(--borda)' : '#7a5a12';
+
+    document.getElementById('portConcentracao').innerHTML =
+      (data.alertas_concentracao || []).map(a =>
+        `<p class="text-[11px] p-2 rounded" style="background:#2a1f08;border-left:2px solid var(--ambar);color:#ffca6b">⚠ ${esc(a)}</p>`
+      ).join('');
+
+    const grupos = data.peso_por_grupo || {};
+    document.getElementById('portGrupos').innerText = Object.entries(grupos)
+      .map(([g, v]) => `${g} ${v.toFixed(0)}%`).join(' · ');
+
+    // Duas barras por ativo: peso e contribuição de risco. Mostrar só o peso
+    // esconde que um ativo de 20% pode carregar metade do risco da carteira.
+    document.getElementById('listaPesos').innerHTML = (data.alocacao_otima || []).map(item => {
+      const desproporcional = item.risco_pct > item.peso_pct * 1.6;
+      return `
       <div>
         <div class="flex justify-between text-[11px] font-bold mb-1">
-          <span>${esc(item.ativo)}</span>
+          <span>${esc(item.ativo)}
+            <span class="font-normal text-[9px]" style="color:#4a554e">${esc(item.grupo || '')}</span></span>
           <span class="mono" style="color: var(--verde)">${item.peso_pct}%</span>
         </div>
         <div class="w-full rounded-full h-1.5" style="background: var(--borda)">
           <div class="h-1.5 rounded-full" style="width: ${item.peso_pct}%; background: var(--verde)"></div>
         </div>
-      </div>`).join('');
+        <div class="flex justify-between text-[9px] mt-1" style="color: var(--suave)">
+          <span>risco</span>
+          <span class="mono" style="color:${desproporcional ? 'var(--ambar)' : 'var(--suave)'}">${item.risco_pct}%</span>
+        </div>
+        <div class="w-full rounded-full h-1" style="background: var(--borda)">
+          <div class="h-1 rounded-full" style="width: ${item.risco_pct}%;
+               background: ${desproporcional ? 'var(--ambar)' : '#3a4450'}"></div>
+        </div>
+      </div>`;
+    }).join('');
+
+    document.getElementById('portRessalvas').innerHTML =
+      (data.ressalvas || []).map(r => `<div>${esc(r)}</div>`).join('');
 
     painel.classList.remove('hidden');
   } catch (e) {
