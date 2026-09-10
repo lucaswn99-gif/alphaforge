@@ -133,6 +133,11 @@
         <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background: var(--verde)"></span>
         <span id="statusSessao">SESSÃO ATIVA</span>
       </span>
+      <button id="btnConta" onclick="AF.abrirLogin()"
+              class="mono text-[10px] font-semibold px-2.5 py-1 rounded transition-colors"
+              style="border: 1px solid var(--borda-viva); color: var(--suave); background: transparent">
+        ENTRAR
+      </button>
     </div>
   </div>
 
@@ -159,6 +164,26 @@
 </nav>
 
 <main class="flex-1 p-5 max-w-[1500px] w-full mx-auto space-y-5">
+
+  <!-- Aviso de primeira visita. Dispensável, mas o rodapé abaixo é permanente:
+       aviso que some para sempre no primeiro clique não avisa ninguém. -->
+  <div id="avisoLegal" class="hidden rounded border p-4"
+       style="border-color: var(--ambar); background: rgba(255,176,32,.06)">
+    <div class="flex items-start gap-3 flex-wrap">
+      <span class="mono text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded"
+            style="background: var(--ambar); color: #000">Aviso</span>
+      <p class="text-[12px] flex-1 min-w-[260px]" style="color: var(--claro)">
+        O AlphaForge é <b>ferramenta de informação e cálculo</b>. Não presta análise
+        nem consultoria de valores mobiliários e <b>não constitui recomendação de
+        investimento</b>. Filtros e notas são resultado de critérios quantitativos
+        aplicados igualmente a todos os ativos, sem considerar o seu perfil ou os
+        seus objetivos. As decisões são suas.
+        <a href="/termos" class="underline" style="color: var(--verde)">Termos</a> ·
+        <a href="/privacidade" class="underline" style="color: var(--verde)">Privacidade</a>
+      </p>
+      <button onclick="dispensarAviso()" class="btn text-[11px]">Entendi</button>
+    </div>
+  </div>
 
   <!-- ================= ABA: MERCADO ================= -->
   <section id="tab-mercado" class="space-y-5">
@@ -687,12 +712,45 @@
 
 </main>
 
-<footer class="border-t px-5 py-3 mono text-[10px]" style="border-color: var(--borda); color: var(--suave); background: #000;">
-  AlphaForge Terminal · fundamentos do balanço entregue à CVM · preços do Yahoo Finance com atraso de 15 min ·
-  manchetes com link para o veículo de origem · uso interno de análise, não é recomendação de investimento
+<footer class="border-t px-5 py-4 mono text-[10px] space-y-2" style="border-color: var(--borda); color: var(--suave); background: #000;">
+  <p style="color: var(--ambar)">
+    <b>Não é recomendação de investimento.</b> O AlphaForge é ferramenta de informação e cálculo.
+    Não presta análise de valores mobiliários (Res. CVM 20/2021) nem consultoria (Res. CVM 19/2021),
+    e não é credenciado para tanto. Filtros, notas e rankings são resultado determinístico de critérios
+    quantitativos aplicados igualmente a todos os ativos, sem juízo sobre o mérito do investimento e sem
+    considerar perfil, objetivos ou situação financeira de qualquer pessoa. Retorno esperado e projeções
+    decorrem das premissas que você informa — não são previsão. Rentabilidade passada não garante
+    rentabilidade futura. Derivativos podem gerar perda superior ao capital aplicado.
+    As decisões de investimento são de sua responsabilidade exclusiva.
+  </p>
+  <p>
+    Fundamentos do balanço entregue à CVM · preços do Yahoo Finance com atraso de até 15 min ·
+    manchetes com link para o veículo de origem · sem garantia de exatidão, completude ou atualidade
+  </p>
+  <p>
+    <a href="/termos" style="color: var(--verde)">Termos de uso</a> ·
+    <a href="/privacidade" style="color: var(--verde)">Política de privacidade</a>
+  </p>
 </footer>
 
 <script>
+// ===================== aviso legal =====================
+// A faixa some por dispositivo, guardada no navegador. O rodapé não some
+// nunca — é ele que cumpre o dever de informar; a faixa só garante que
+// ninguém use a ferramenta sem ter lido o aviso ao menos uma vez.
+const CHAVE_AVISO = 'alphaforge:aviso:v1';
+
+function prepararAviso() {
+  let visto = false;
+  try { visto = localStorage.getItem(CHAVE_AVISO) === '1'; } catch (e) { visto = false; }
+  if (!visto) document.getElementById('avisoLegal').classList.remove('hidden');
+}
+
+function dispensarAviso() {
+  try { localStorage.setItem(CHAVE_AVISO, '1'); } catch (e) { /* sem storage: reaparece */ }
+  document.getElementById('avisoLegal').classList.add('hidden');
+}
+
 // ===================== utilitários de exibição =========================
 // Escapar não é detalhe: um nome de empresa com aspas quebrava a linha
 // inteira da tabela. E campo ausente vira "—", nunca "null" e nunca 0 — zero
@@ -1841,6 +1899,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const abaPedida = new URLSearchParams(location.search).get('aba');
   if (abaPedida && ABAS.includes(abaPedida)) alternarAba(abaPedida);
 
+  prepararAviso();
   atualizarRelogio();
   setInterval(atualizarRelogio, 30000);
 
@@ -1865,5 +1924,490 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 </script>
+
+<!-- ===================== conta, plano e limites ======================= -->
+<style>
+  /* Posição e visibilidade do bloco de conta sem depender do Tailwind.
+     O terminal carrega o Tailwind de CDN; se ele demorar ou não vier, as
+     classes utilitárias não existem — e um modal que só é `hidden` por
+     Tailwind aparece inteiro no rodapé da página. Estas regras são escopadas
+     nos elementos daqui, então não competem com o resto da folha. */
+  #afModal.hidden, #afLogin.hidden, #afPaywall.hidden,
+  #afPerfil.hidden, #afPaywallEntrar.hidden, #afLoginErro.hidden,
+  #afFaixaCorte.hidden, #afPaywallPlanos.hidden { display: none !important; }
+  #afModal { position: fixed; inset: 0; z-index: 60; padding: 16px;
+             align-items: center; justify-content: center; }
+  #afModal.flex { display: flex; }
+  #afModal > div { width: 100%; max-width: 400px; }
+  #afFaixaCorte { margin-bottom: 1.25rem; }
+  #btnConta:hover { border-color: var(--verde) !important; color: var(--verde) !important; }
+  #afModal input:focus-visible, #afModal button:focus-visible,
+  #btnConta:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
+</style>
+<div id="afModal" class="hidden fixed inset-0 z-50 items-center justify-center p-4"
+     style="background: rgba(0,0,0,.72)" onclick="if(event.target===this)AF.fechar()">
+  <div class="w-full max-w-[400px] rounded-lg overflow-hidden"
+       style="background: var(--painel); border: 1px solid var(--borda-viva)">
+
+    <!-- entrar / criar conta -->
+    <div id="afLogin" class="hidden">
+      <div class="px-5 py-4" style="border-bottom: 1px solid var(--borda)">
+        <p class="rotulo" id="afLoginRotulo">Entrar</p>
+        <p class="text-[11px] mt-1.5" style="color: var(--suave)">
+          A conta leva sua cota diária entre aparelhos e guarda a assinatura.
+          Sem conta o terminal funciona igual, com a cota contada por conexão.
+        </p>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <div>
+          <label class="rotulo block mb-1" for="afEmail">E-mail</label>
+          <input id="afEmail" type="email" autocomplete="email" inputmode="email"
+                 class="w-full px-2.5 py-2 rounded text-sm mono"
+                 style="background: var(--painel-alt); border: 1px solid var(--borda); color: var(--texto)">
+        </div>
+        <div>
+          <label class="rotulo block mb-1" for="afSenha">Senha</label>
+          <input id="afSenha" type="password" autocomplete="current-password"
+                 class="w-full px-2.5 py-2 rounded text-sm mono"
+                 style="background: var(--painel-alt); border: 1px solid var(--borda); color: var(--texto)">
+          <p class="text-[10px] mt-1" style="color:#4a554e">Mínimo de 8 caracteres.</p>
+        </div>
+        <p id="afLoginErro" class="hidden text-[11px] px-2.5 py-2 rounded"
+           style="color: var(--vermelho); background: rgba(255,77,94,.08); border: 1px solid rgba(255,77,94,.25)"></p>
+        <button id="afLoginBtn" onclick="AF.enviarLogin()"
+                class="w-full py-2 rounded text-sm font-semibold transition-opacity"
+                style="background: var(--verde); color: #04120b">Entrar</button>
+        <button onclick="AF.alternarModo()" class="w-full text-[11px] py-1" style="color: var(--suave)">
+          <span id="afTrocaModo">Não tenho conta — criar uma</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- limite do plano -->
+    <div id="afPaywall" class="hidden">
+      <div class="px-5 py-4" style="border-bottom: 1px solid var(--borda); background: rgba(255,176,32,.05)">
+        <p class="rotulo" style="color: var(--ambar)">Limite do plano gratuito</p>
+        <p id="afPaywallMotivo" class="text-[13px] mt-1.5" style="color: var(--texto)"></p>
+        <p id="afPaywallDetalhe" class="text-[11px] mt-1.5 mono" style="color: var(--suave)"></p>
+      </div>
+      <div class="px-5 py-4 space-y-2.5">
+        <p class="text-[11px]" style="color: var(--suave)">
+          O Premium abre o ranking completo, os fatores por trás de cada nota,
+          a recomendação de estruturas e a otimização de carteira — sem limite diário.
+        </p>
+        <button onclick="AF.assinar()" class="w-full py-2 rounded text-sm font-semibold"
+                style="background: var(--ambar); color: #1a1200">Ver o Premium</button>
+        <div id="afPaywallPlanos" class="hidden space-y-2"></div>
+        <button id="afPaywallEntrar" onclick="AF.abrirLogin()" class="hidden w-full py-2 rounded text-[12px]"
+                style="border: 1px solid var(--borda-viva); color: var(--suave)">
+          Já tenho conta — entrar
+        </button>
+        <button onclick="AF.fechar()" class="w-full text-[11px] py-1" style="color:#4a554e">Continuar no gratuito</button>
+      </div>
+    </div>
+
+    <!-- conta ativa -->
+    <div id="afPerfil" class="hidden">
+      <div class="px-5 py-4" style="border-bottom: 1px solid var(--borda)">
+        <p class="rotulo">Conta</p>
+        <p id="afPerfilEmail" class="text-[13px] mt-1.5 mono" style="color: var(--texto)"></p>
+        <p id="afPerfilPlano" class="text-[11px] mt-1 mono"></p>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <div id="afPerfilCotas" class="space-y-1.5"></div>
+        <button onclick="AF.sair()" class="w-full py-2 rounded text-[12px]"
+                style="border: 1px solid var(--borda-viva); color: var(--suave)">Sair</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* Conta e plano.
+
+   Envolve window.fetch em vez de tocar nas funções de carregamento: 402 vira
+   aviso de limite, resposta cortada vira faixa. Se este bloco sumir, o
+   terminal volta a funcionar exatamente como antes. */
+const AF = (function () {
+  const RECURSOS = {
+    rv_auditoria:       'Auditoria de ação',
+    quant_papel:        'Ficha do radar',
+    opcoes_precificar:  'Cálculo de opções',
+    credito_calcular:   'Score de crédito',
+    opcoes_recomendar:  'Recomendação de estruturas',
+    wealth_otimizar:    'Otimização de carteira',
+  };
+  const LISTAS_CORTAVEIS = ['/renda-variavel/scanner', '/api/quant/scanner', '/wealth/fundos'];
+
+  let estado = { autenticado: false, plano: 'free', email: null, cotas: {} };
+  let modo = 'entrar';
+
+  const $ = (id) => document.getElementById(id);
+  const limpo = (t) => (typeof esc === 'function' ? esc(t) : String(t == null ? '' : t)
+    .replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])));
+
+  // ---------------------------------------------------------------- modal
+  function abrir(qual) {
+    ['afLogin', 'afPaywall', 'afPerfil'].forEach((p) => $(p).classList.add('hidden'));
+    if ($('afPaywallPlanos')) $('afPaywallPlanos').classList.add('hidden');
+    $(qual).classList.remove('hidden');
+    $('afModal').classList.remove('hidden');
+    $('afModal').classList.add('flex');
+  }
+  function fechar() {
+    $('afModal').classList.add('hidden');
+    $('afModal').classList.remove('flex');
+  }
+
+  function abrirLogin() {
+    if (estado.autenticado) return abrir('afPerfil');
+    // Sempre reabre em "entrar": quem fechou no meio de um cadastro e voltou
+    // depois quase sempre quer entrar, e um formulário que lembra o modo
+    // anterior faz o botão dizer "Criar conta" para quem já tem uma.
+    modo = 'entrar';
+    pintarModo();
+    abrir('afLogin');
+    setTimeout(() => $('afEmail').focus(), 40);
+  }
+
+  function pintarModo() {
+    const criando = modo === 'registrar';
+    $('afLoginRotulo').innerText = criando ? 'Criar conta' : 'Entrar';
+    $('afLoginBtn').innerText   = criando ? 'Criar conta' : 'Entrar';
+    $('afTrocaModo').innerText  = criando ? 'Já tenho conta — entrar' : 'Não tenho conta — criar uma';
+    $('afSenha').setAttribute('autocomplete', criando ? 'new-password' : 'current-password');
+    $('afLoginErro').classList.add('hidden');
+  }
+
+  function alternarModo() {
+    modo = modo === 'entrar' ? 'registrar' : 'entrar';
+    pintarModo();
+  }
+
+  // ----------------------------------------------------------------- api
+  async function enviarLogin() {
+    const email = $('afEmail').value.trim();
+    const senha = $('afSenha').value;
+    const btn = $('afLoginBtn');
+    const erro = $('afLoginErro');
+    if (!email || !senha) { return falhar('Preencha e-mail e senha.'); }
+
+    btn.disabled = true; btn.style.opacity = '.6';
+    const rotuloAnterior = btn.innerText;
+    btn.innerText = 'Enviando…';
+    try {
+      const res = await window.__afFetch(`/conta/${modo}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, senha }),
+      });
+      const corpo = await res.json();
+      if (!res.ok) {
+        const d = corpo.detail || {};
+        return falhar(d.motivo || 'Não foi possível continuar.');
+      }
+      aplicar(corpo);
+      $('afSenha').value = '';
+      fechar();
+    } catch (e) {
+      falhar('Falha de conexão.');
+    } finally {
+      btn.disabled = false; btn.style.opacity = '1'; btn.innerText = rotuloAnterior;
+    }
+
+    function falhar(msg) {
+      erro.innerText = msg;
+      erro.classList.remove('hidden');
+    }
+  }
+
+  async function sair() {
+    try { await window.__afFetch('/conta/sair', { method: 'POST' }); } catch (e) {}
+    estado = { autenticado: false, plano: 'free', email: null, cotas: {} };
+    pintar();
+    fechar();
+    carregar();
+  }
+
+  async function carregar() {
+    try {
+      const res = await window.__afFetch('/conta/eu');
+      if (res.ok) aplicar(await res.json());
+    } catch (e) { /* offline: segue como gratuito */ }
+    return estado;
+  }
+
+  function aplicar(dados) {
+    estado = {
+      autenticado: !!dados.autenticado,
+      plano: dados.plano || 'free',
+      email: dados.email || null,
+      cotas: dados.cotas || {},
+    };
+    pintar();
+  }
+
+  function pintar() {
+    const btn = $('btnConta');
+    if (!btn) return;
+    if (estado.autenticado) {
+      const premium = estado.plano === 'premium';
+      btn.innerHTML = `${premium ? 'PREMIUM' : 'FREE'} · ${limpo((estado.email || '').split('@')[0])}`;
+      btn.style.color = premium ? 'var(--ambar)' : 'var(--suave)';
+      btn.style.borderColor = premium ? 'var(--ambar)' : 'var(--borda-viva)';
+    } else {
+      btn.innerHTML = 'ENTRAR';
+      btn.style.color = 'var(--suave)';
+      btn.style.borderColor = 'var(--borda-viva)';
+    }
+    $('afPerfilEmail').innerText = estado.email || '';
+    const premium = estado.plano === 'premium';
+    $('afPerfilPlano').innerHTML = premium
+      ? '<span style="color: var(--ambar)">Plano Premium · sem limite diário</span>'
+      : '<span style="color: var(--suave)">Plano gratuito</span>';
+
+    const cotas = estado.cotas || {};
+    $('afPerfilCotas').innerHTML = premium ? '' : Object.keys(cotas).map((chave) => {
+      const c = cotas[chave];
+      if (!c || c.limite == null) return '';
+      const acabou = c.resta === 0;
+      return `<div class="flex items-center justify-between text-[11px]">
+        <span style="color: var(--suave)">${limpo(RECURSOS[chave] || chave)}</span>
+        <span class="mono" style="color: ${acabou ? 'var(--vermelho)' : 'var(--texto)'}">
+          ${c.resta} de ${c.limite} hoje</span>
+      </div>`;
+    }).join('');
+  }
+
+  // ------------------------------------------------------------- paywall
+  function mostrarPaywall(d) {
+    $('afPaywallMotivo').innerText = d.motivo || 'Este recurso é do plano Premium.';
+    const partes = [];
+    if (d.recurso && RECURSOS[d.recurso]) partes.push(RECURSOS[d.recurso]);
+    if (d.limite != null) partes.push(`${d.usado} de ${d.limite} usados`);
+    if (d.reinicia_em) {
+      try {
+        partes.push('renova ' + new Date(d.reinicia_em)
+          .toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }));
+      } catch (e) {}
+    }
+    $('afPaywallDetalhe').innerText = partes.join(' · ');
+    $('afPaywallEntrar').classList.toggle('hidden', !!d.autenticado);
+    abrir('afPaywall');
+  }
+
+  // ------------------------------------------------- Google Play Billing
+  /* O TWA compra pela Digital Goods API: o navegador abre a folha de
+     pagamento do Google e devolve um `purchaseToken`. Esse token não vale
+     nada sozinho — é o servidor que pergunta ao Google o que ele significa.
+     Fora do aplicativo Android, nada disto existe, e o botão diz a verdade em
+     vez de falhar. */
+
+  const PLAY = 'https://play.google.com/billing';
+  let produtos = null;
+
+  function temPlayBilling() {
+    return 'getDigitalGoodsService' in window && 'PaymentRequest' in window;
+  }
+
+  async function servicoPlay() {
+    try { return await window.getDigitalGoodsService(PLAY); }
+    catch (e) { return null; }
+  }
+
+  async function assinar() {
+    if (!estado.autenticado) {
+      $('afPaywallMotivo').innerText = 'Entre na sua conta antes de assinar.';
+      $('afPaywallDetalhe').innerText = 'A assinatura fica ligada à conta — é assim que ela te acompanha em outro aparelho.';
+      $('afPaywallEntrar').classList.remove('hidden');
+      return;
+    }
+    if (!temPlayBilling()) {
+      $('afPaywallMotivo').innerText = 'A assinatura abre pelo aplicativo Android.';
+      $('afPaywallDetalhe').innerText = 'Instale o AlphaForge pela Google Play para assinar. Sua conta é a mesma nos dois lugares.';
+      return;
+    }
+    await mostrarPlanos();
+  }
+
+  async function mostrarPlanos() {
+    const alvo = $('afPaywallPlanos');
+    alvo.innerHTML = '<p class="text-[11px]" style="color: var(--suave)">Consultando preços…</p>';
+    alvo.classList.remove('hidden');
+
+    try {
+      if (!produtos) {
+        const res = await window.__afFetch('/conta/assinatura/produtos');
+        produtos = (await res.json()).produtos || [];
+      }
+      const servico = await servicoPlay();
+      if (!servico) throw new Error('sem serviço');
+
+      const ids = produtos.map((p) => p.id);
+      const detalhes = await servico.getDetails(ids);
+      if (!detalhes.length) throw new Error('nenhum produto');
+
+      alvo.innerHTML = detalhes.map((d) => `
+        <button onclick="AF.comprar('${limpo(d.itemId)}')"
+                class="w-full flex items-center justify-between px-3 py-2.5 rounded text-left"
+                style="border: 1px solid var(--borda-viva); background: var(--painel-alt)">
+          <span class="text-[12px]" style="color: var(--texto)">${limpo(d.title || d.itemId)}</span>
+          <span class="mono text-[12px] font-semibold" style="color: var(--ambar)">
+            ${limpo((d.price && d.price.value) ? formatarPreco(d.price) : '')}</span>
+        </button>`).join('');
+    } catch (e) {
+      alvo.innerHTML = '<p class="text-[11px]" style="color: var(--vermelho)">'
+        + 'Não consegui consultar os planos na Google Play agora.</p>';
+    }
+  }
+
+  function formatarPreco(preco) {
+    try {
+      return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: preco.currency })
+        .format(Number(preco.value));
+    } catch (e) { return `${preco.currency} ${preco.value}`; }
+  }
+
+  async function comprar(sku) {
+    const alvo = $('afPaywallPlanos');
+    try {
+      const pedido = new PaymentRequest(
+        [{ supportedMethods: PLAY, data: { sku } }],
+        { total: { label: 'Assinatura', amount: { currency: 'BRL', value: '0' } } });
+
+      const resposta = await pedido.show();
+      const token = resposta.details && resposta.details.purchaseToken;
+      if (!token) { await resposta.complete('fail'); return; }
+
+      alvo.innerHTML = '<p class="text-[11px]" style="color: var(--suave)">Confirmando com o servidor…</p>';
+
+      // O acesso só é liberado depois que o NOSSO servidor confirmar com o
+      // Google. Liberar na hora que a folha fecha seria confiar no cliente.
+      const res = await window.__afFetch('/conta/assinatura/play/confirmar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+
+      if (!res.ok) {
+        const d = (await res.json()).detail || {};
+        await resposta.complete('fail');
+        alvo.innerHTML = `<p class="text-[11px]" style="color: var(--vermelho)">${
+          limpo(d.motivo || 'Não foi possível confirmar a compra.')}</p>`;
+        return;
+      }
+
+      await resposta.complete('success');
+      aplicar(await res.json());
+      fechar();
+      alvo.classList.add('hidden');
+      if ($('afFaixaCorte')) $('afFaixaCorte').classList.add('hidden');
+    } catch (e) {
+      // Fechar a folha de pagamento é uma escolha do usuário, não um erro.
+      const cancelou = e && (e.name === 'AbortError' || /cancel/i.test(e.message || ''));
+      if (!cancelou) {
+        alvo.innerHTML = `<p class="text-[11px]" style="color: var(--vermelho)">${
+          limpo('Falha ao abrir o pagamento: ' + (e.message || e))}</p>`;
+      } else {
+        alvo.classList.add('hidden');
+      }
+    }
+  }
+
+  async function restaurarCompras() {
+    /* Rede caindo entre pagar e confirmar deixaria o usuário pagando sem
+       acesso. Toda abertura do app relista as compras do Play e reenvia o que
+       o servidor ainda não conhece — o conserto é automático e silencioso. */
+    if (!temPlayBilling() || !estado.autenticado || estado.plano === 'premium') return;
+    try {
+      const servico = await servicoPlay();
+      if (!servico || !servico.listPurchases) return;
+      const compras = await servico.listPurchases();
+      for (const compra of compras) {
+        const res = await window.__afFetch('/conta/assinatura/play/confirmar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: compra.purchaseToken }),
+        });
+        if (res.ok) { aplicar(await res.json()); return; }
+      }
+    } catch (e) { /* sem compra pendente, ou fora do app: segue como está */ }
+  }
+
+  // ---------------------------------------------------- faixa de corte
+  function faixaDeCorte(corpo) {
+    let faixa = $('afFaixaCorte');
+    if (!faixa) {
+      faixa = document.createElement('div');
+      faixa.id = 'afFaixaCorte';
+      faixa.className = 'rounded border px-3 py-2 flex items-center gap-3 flex-wrap';
+      faixa.style.cssText = 'border-color: var(--ambar); background: rgba(255,176,32,.06)';
+      const main = document.querySelector('main');
+      if (main) main.insertBefore(faixa, main.firstChild);
+    }
+    faixa.innerHTML = `
+      <span class="mono text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
+            style="background: var(--ambar); color:#1a1200">Gratuito</span>
+      <span class="text-[11px] flex-1 min-w-[200px]" style="color: var(--texto)">
+        ${limpo(corpo.motivo_corte || '')}
+        <span class="mono" style="color: var(--suave)">
+          ${corpo.exibidos} de ${corpo.total_disponivel} · ${corpo.ocultos} ocultos</span>
+      </span>
+      <button onclick="AF.assinarDireto()" class="mono text-[10px] font-semibold px-2 py-1 rounded"
+              style="background: var(--ambar); color:#1a1200">Ver tudo</button>`;
+    faixa.classList.remove('hidden');
+  }
+
+  function assinarDireto() {
+    mostrarPaywall({ motivo: 'A lista completa é do plano Premium.',
+                     autenticado: estado.autenticado });
+  }
+
+  // ------------------------------------------------- intercepta o fetch
+  const original = window.fetch.bind(window);
+  window.__afFetch = original;
+
+  window.fetch = async function (entrada, init) {
+    const resposta = await original(entrada, init);
+    const url = typeof entrada === 'string' ? entrada
+      : (entrada && entrada.url) ? entrada.url : '';
+
+    if (url.indexOf('/conta/') !== -1) return resposta;
+
+    if (resposta.status === 402) {
+      try { mostrarPaywall((await resposta.clone().json()).detail || {}); } catch (e) {}
+      carregar();
+      return resposta;
+    }
+
+    // Só as listas que o servidor pode cortar são inspecionadas: clonar e
+    // reprocessar toda resposta pagaria o parse duas vezes à toa.
+    if (resposta.ok && LISTAS_CORTAVEIS.some((p) => url.indexOf(p) !== -1)) {
+      try {
+        const corpo = await resposta.clone().json();
+        if (corpo && corpo.truncado) faixaDeCorte(corpo);
+        else if ($('afFaixaCorte')) $('afFaixaCorte').classList.add('hidden');
+      } catch (e) {}
+    }
+    return resposta;
+  };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    carregar().then(restaurarCompras);
+    ['afEmail', 'afSenha'].forEach((id) => {
+      const campo = $(id);
+      if (campo) campo.addEventListener('keydown', (e) => { if (e.key === 'Enter') enviarLogin(); });
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') fechar(); });
+  });
+
+  return { abrirLogin, alternarModo, enviarLogin, sair, fechar,
+           assinar, assinarDireto, comprar, restaurarCompras,
+           mostrarPaywall, carregar, temPlayBilling,
+           get estado() { return estado; } };
+})();
+</script>
+
 </body>
 </html>

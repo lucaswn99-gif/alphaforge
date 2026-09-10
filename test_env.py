@@ -17,6 +17,7 @@ class TestImportacaoDoServico(unittest.TestCase):
                      "modules.cadastro_b3", "modules.credit_engine",
                      "modules.credito_cvm", "modules.credito_score", "modules.identidade", "modules.otimizador", "modules.opcoes",
                      "modules.estruturas", "routers.opcoes",
+                     "modules.legal", "routers.legal",
                      "modules.mercado", "modules.noticias",
                      "routers.mercado", "routers.quantitativo",
                      "modules.quant", "api",

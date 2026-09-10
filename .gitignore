@@ -19,3 +19,17 @@ preview_terminal.html
 
 # Arquivo gravado por engano; pode apagar da pasta.
 modules/opcoes_tmp_ignore.py
+
+# Chave de assinatura do app Android. Perder = nunca mais atualizar o app.
+*.keystore
+*.jks
+# Artefatos do Bubblewrap
+/twa/
+*.aab
+*.apk
+
+# Banco de contas, sessoes e cotas. Contem hash de senha de usuario real:
+# nunca versionar, nunca copiar para fora do servidor.
+contas.db
+contas.db-wal
+contas.db-shm

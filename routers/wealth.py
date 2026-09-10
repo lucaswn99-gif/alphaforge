@@ -16,9 +16,9 @@ import concurrent.futures
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-from modules import fundamentos_fii, identidade, otimizador, taxas
+from modules import fundamentos_fii, identidade, otimizador, planos, taxas
 from routers.equity import (carimbo_de_coleta, dy_da_serie, fatiar_precos,
                             normalizar_dy)
 
@@ -199,7 +199,7 @@ def _montar_etfs(df_precos):
 
 
 @router.get("/fundos")
-def radar_fundos():
+def radar_fundos(ctx: planos.Contexto = Depends(planos.acesso())):
     """FIIs por desconto patrimonial e ETFs por pullback na média de 20."""
     todos_fiis = FIIS_TIJOLO + FIIS_PAPEL
     df_fiis = _baixar_precos(todos_fiis)
@@ -221,7 +221,7 @@ def radar_fundos():
     papel = _montar_fiis(FIIS_PAPEL, df_fiis, fundamentos)
     etfs = _montar_etfs(df_etfs)
 
-    return {
+    return planos.cortar_fundos({
         **carimbo_de_coleta(),
         "tijolo": tijolo,
         "papel": papel,
@@ -229,7 +229,7 @@ def radar_fundos():
         "com_fundamentos": sum(1 for l in tijolo + papel if l["fundamentos_disponiveis"]),
         "com_pvp": sum(1 for l in tijolo + papel if l["pvp"] is not None),
         "total_fiis": len(tijolo) + len(papel),
-    }
+    }, ctx)
 
 
 @router.get("/otimizar-portfolio")
@@ -239,6 +239,7 @@ def otimizar_markowitz(
     objetivo: str = Query("sharpe", description="sharpe | minima_variancia | paridade_risco"),
     teto_ativo: float = Query(0.25, ge=0.05, le=1.0, description="Peso máximo por ativo"),
     teto_grupo: float = Query(0.40, ge=0.10, le=1.0, description="Peso máximo por setor ou classe"),
+    ctx: planos.Contexto = Depends(planos.acesso("wealth_otimizar")),
 ):
     """Otimização com restrição de concentração, encolhimento e comparação com o CDI.
 

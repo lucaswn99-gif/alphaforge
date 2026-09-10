@@ -19,10 +19,10 @@ em /renda-fixa/parametros: score cujos cortes ninguém vê não é auditável.
 
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from modules import credito_score
+from modules import credito_score, planos
 
 router = APIRouter(prefix="/renda-fixa", tags=["Crédito"])
 
@@ -48,7 +48,8 @@ class DadosEmissor(BaseModel):
 
 
 @router.post("/calcular")
-def calcular(dados: DadosEmissor):
+def calcular(dados: DadosEmissor,
+             ctx: planos.Contexto = Depends(planos.acesso("credito_calcular"))):
     """Score de crédito a partir dos dados digitados, com o porquê de cada
     critério — aprovado, reprovado ou não apurado, e o que aquilo significa."""
     return credito_score.avaliar(dados.model_dump())

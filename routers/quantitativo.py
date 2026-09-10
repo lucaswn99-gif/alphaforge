@@ -19,9 +19,9 @@ import time
 
 import pandas as pd
 import yfinance as yf
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-from modules import cadastro_b3, fundamentos_cvm, identidade, quant
+from modules import cadastro_b3, fundamentos_cvm, identidade, planos, quant
 from routers.equity import (calcular_rsi_wilder, carimbo_de_coleta, fatiar_precos,
                             flag, montar_universo, resolver_universo)
 
@@ -217,7 +217,8 @@ def montar(forcar=False):
 def get_scanner(segmento: str = Query("todos"),
                 apenas_aprovados: bool = Query(False),
                 minimo_score: float = Query(0.0),
-                forcar: bool = Query(False)):
+                forcar: bool = Query(False),
+                ctx: planos.Contexto = Depends(planos.acesso())):
     """Motor multicritério. `segmento` = momentum | bazin | greenblatt | todos."""
     dados = montar(forcar=flag(forcar))
     if "erro" in dados:
@@ -242,11 +243,13 @@ def get_scanner(segmento: str = Query("todos"),
     if corte > 0:
         papeis = [p for p in papeis if (p.get("score_quant") or 0) >= corte]
 
-    return {**dados, "papeis": papeis, "exibidos": len(papeis), "segmento": alvo}
+    return planos.cortar_quant(
+        {**dados, "papeis": papeis, "exibidos": len(papeis), "segmento": alvo}, ctx)
 
 
 @router.get("/papel/{ticker}")
-def get_papel(ticker: str):
+def get_papel(ticker: str,
+              ctx: planos.Contexto = Depends(planos.acesso("quant_papel"))):
     """Um papel nos três segmentos, com todos os componentes abertos."""
     codigo = (ticker or "").upper().strip()
     dados = montar()

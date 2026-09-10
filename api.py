@@ -17,8 +17,9 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.responses import FileResponse, HTMLResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from routers import (equity, fixed_income, mercado, opcoes, quantitativo,  # noqa: E402
-                     wealth)
+from modules import contas  # noqa: E402
+from routers import (conta, equity, fixed_income, legal, mercado,  # noqa: E402
+                     opcoes, quantitativo, wealth)
 
 # O router `trading` está fora da aplicação de propósito. Ele dependia do
 # MetaTrader 5 (Windows-only, inerte no servidor) e expunha /executar-ordem,
@@ -29,7 +30,7 @@ from routers import (equity, fixed_income, mercado, opcoes, quantitativo,  # noq
 app = FastAPI(
     title="Alphaforge Analytics",
     description="Terminal Institucional Quantamental.",
-    version="3.4.0",
+    version="3.5.0",
 )
 
 app.include_router(fixed_income.router)
@@ -38,6 +39,20 @@ app.include_router(wealth.router)
 app.include_router(mercado.router)
 app.include_router(quantitativo.router)
 app.include_router(opcoes.router)
+app.include_router(legal.router)
+app.include_router(conta.router)
+
+
+@app.on_event("startup")
+def preparar_contas():
+    """Cria o esquema e varre sessões vencidas. Falhar aqui não pode
+    impedir a API de subir: sem banco de contas, todo mundo é gratuito."""
+    try:
+        contas.iniciar()
+        contas.limpar_expirados()
+    except Exception as erro:  # noqa: BLE001
+        print(f"[contas] esquema indisponível: {erro}")
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ESTATICOS = os.path.join(BASE_DIR, "static")

@@ -8,10 +8,10 @@ carimbo, o número parece objetivo quando é opinião com casas decimais.
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from modules import estruturas, opcoes, taxas
+from modules import estruturas, opcoes, planos, taxas
 
 router = APIRouter(prefix="/api/opcoes", tags=["opções"])
 
@@ -48,6 +48,7 @@ def precificar(
     premio_mercado: float = Query(None, description="prêmio de tela, para extrair a implícita"),
     taxa_aa: float = Query(None, description="taxa livre de risco em %; vazio usa a Selic"),
     dividendo_aa: float = Query(0.0, description="dividend yield anual em %"),
+    ctx: planos.Contexto = Depends(planos.acesso("opcoes_precificar")),
 ):
     """Prêmio, gregas e volatilidade implícita de uma opção.
 
@@ -117,7 +118,8 @@ class Estrutura(BaseModel):
 
 
 @router.post("/avaliar")
-def avaliar(dados: Estrutura):
+def avaliar(dados: Estrutura,
+            ctx: planos.Contexto = Depends(planos.acesso("opcoes_precificar"))):
     """Payoff, extremos, breakevens, gregas e resultado esperado de qualquer
     combinação de pernas — inclusive uma que você inventar."""
     taxa, origem_taxa, vigencia = _taxa_livre(dados.taxa_aa)
@@ -164,7 +166,8 @@ class Contexto(BaseModel):
 
 
 @router.post("/recomendar")
-def recomendar(dados: Contexto):
+def recomendar(dados: Contexto,
+               ctx: planos.Contexto = Depends(planos.acesso("opcoes_recomendar"))):
     """Estruturas ordenadas por aderência ao seu cenário, já avaliadas.
 
     Devolve também as REJEITADAS com o motivo: saber por que uma estrutura não

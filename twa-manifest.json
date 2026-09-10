@@ -1,0 +1,55 @@
+{
+  "packageId": "br.api.alphaforge.twa",
+  "host": "alphaforge.api.br",
+  "name": "AlphaForge Terminal",
+  "launcherName": "AlphaForge",
+  "display": "standalone",
+  "orientation": "any",
+  "themeColor": "#050806",
+  "themeColorDark": "#050806",
+  "navigationColor": "#050806",
+  "navigationColorDark": "#050806",
+  "navigationDividerColor": "#050806",
+  "navigationDividerColorDark": "#050806",
+  "backgroundColor": "#050806",
+  "enableNotifications": false,
+  "startUrl": "/?origem=app",
+  "iconUrl": "https://alphaforge.api.br/static/icone-512.png",
+  "maskableIconUrl": "https://alphaforge.api.br/static/icone-maskable-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./alphaforge.keystore",
+    "alias": "alphaforge"
+  },
+  "appVersionName": "1",
+  "appVersionCode": 1,
+  "shortcuts": [
+    {
+      "name": "Scanner de ações",
+      "shortName": "Scanner",
+      "url": "/?aba=renda-variavel",
+      "chosenIconUrl": "https://alphaforge.api.br/static/icone-96.png"
+    },
+    {
+      "name": "Radar de fundos",
+      "shortName": "Fundos",
+      "url": "/?aba=fundos",
+      "chosenIconUrl": "https://alphaforge.api.br/static/icone-96.png"
+    }
+  ],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://alphaforge.api.br/static/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": true
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://alphaforge.api.br/",
+  "minSdkVersion": 21,
+  "playBilling": {
+    "enabled": true
+  }
+}
