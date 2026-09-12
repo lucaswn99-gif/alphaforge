@@ -306,3 +306,23 @@ def notificacao_play(corpo: dict, request: Request):
 
     return {"ok": True, "tipo": tipo, "estado": leitura["estado"],
             "conta_encontrada": bool(dono)}
+
+from fastapi import HTTPException
+
+# Rota temporária para te dar o Premium na nuvem
+@router.get("/forcar-premium-admin")
+def forcar_premium(senha_secreta: str):
+    # Uma senha simples só para ninguém curioso acessar o link
+    if senha_secreta != "abrete_sesamo":
+        raise HTTPException(status_code=403, detail="Acesso negado.")
+    
+    # Tenta puxar a sua conta (você já deve ter criado ela no site oficial)
+    from modules import contas
+    u = contas.autenticar("lucaswn99@gmail.com", "Marley17?")
+    
+    if not u:
+        return {"erro": "Você precisa criar a conta lucaswn99@gmail.com no site oficial primeiro!"}
+    
+    # Libera o Premium
+    contas.definir_plano(u["id"], "premium")
+    return {"status": "SUCESSO", "mensagem": "Bem-vindo de volta, chefe! Seu Premium está ativo."}
