@@ -330,6 +330,33 @@
       </p>
     </div>
 
+    <!-- Raio-X 10 Anos: 4 números que resumem a década sem exigir que o
+         usuário leia o gráfico linha a linha. Fica ENTRE o gráfico e o
+         veredito de propósito — é o resumo numérico do que o gráfico acabou
+         de mostrar visualmente. -->
+    <div id="painelRaioX" class="hidden painel p-4">
+      <h2 class="rotulo mb-3">Raio-X 10 Anos</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+          <p class="text-[10px]" style="color: var(--suave)">Máxima (fech.)</p>
+          <p class="text-lg font-bold mono mt-1" style="color: var(--verde)" id="raioXMaxima">—</p>
+        </div>
+        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+          <p class="text-[10px]" style="color: var(--suave)">Mínima (fech.)</p>
+          <p class="text-lg font-bold mono mt-1" style="color: var(--vermelho)" id="raioXMinima">—</p>
+        </div>
+        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+          <p class="text-[10px]" style="color: var(--suave)">Média histórica (fech.)</p>
+          <p class="text-lg font-bold mono mt-1" id="raioXMedia">—</p>
+        </div>
+        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+          <p class="text-[10px]" style="color: var(--suave)">Retorno absoluto (10a)</p>
+          <p class="text-lg font-bold mono mt-1" id="raioXRetorno">—</p>
+        </div>
+      </div>
+      <p class="text-[10px] mt-3" style="color: var(--suave)" id="raioXRodape"></p>
+    </div>
+
     <div id="painelResultadoAcao" class="hidden painel p-5">
       <div class="flex justify-between items-start gap-4 flex-wrap">
         <div class="flex items-start gap-3">
@@ -1291,6 +1318,24 @@ async function consultarAcao() {
     document.getElementById('acaoPreco').innerText = `R$ ${Number(d.preco_atual ?? 0).toFixed(2)}`;
     document.getElementById('acaoCarimbo').innerText = d.coletado_em_legivel
       ? `coletado ${d.coletado_em_legivel} · atraso ${d.atraso_fonte_minutos ?? 15} min (Yahoo)` : '';
+
+    // Raio-X 10 Anos: mesmo JSON de /acao/{ticker}, campo raio_x_10_anos —
+    // sem requisição extra. "—" (via num()) quando o campo vier None: não
+    // apurado nunca vira zero na tela.
+    const rx = d.raio_x_10_anos;
+    if (rx && rx.pregoes_considerados > 0) {
+      document.getElementById('painelRaioX').classList.remove('hidden');
+      document.getElementById('raioXMaxima').innerHTML = 'R$ ' + num(rx.preco_maximo_fechamento);
+      document.getElementById('raioXMinima').innerHTML = 'R$ ' + num(rx.preco_minimo_fechamento);
+      document.getElementById('raioXMedia').innerHTML = 'R$ ' + num(rx.preco_medio_fechamento);
+      document.getElementById('raioXRetorno').innerHTML =
+        rx.retorno_absoluto_pct === null ? num(null) : pct(rx.retorno_absoluto_pct);
+      document.getElementById('raioXRodape').innerText =
+        `${rx.pregoes_considerados.toLocaleString('pt-BR')} pregões nos últimos 10 anos · `
+        + 'retorno compara o fechamento mais recente com a abertura do 1º pregão da série.';
+    } else {
+      document.getElementById('painelRaioX').classList.add('hidden');
+    }
 
     // O tile vem do mesmo módulo que alimenta a tabela — o papel tem a mesma
     // cara nos dois lugares.

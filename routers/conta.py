@@ -307,22 +307,36 @@ def notificacao_play(corpo: dict, request: Request):
     return {"ok": True, "tipo": tipo, "estado": leitura["estado"],
             "conta_encontrada": bool(dono)}
 
-from fastapi import HTTPException
+# Rota de administração: dá plano premium permanente a um e-mail já
+# cadastrado, sem passar pelo Play Billing.
+#
+# Inerte até `AF_ADMIN_SEGREDO` existir no ambiente (mesmo padrão de
+# `AF_WEBHOOK_SEGREDO`/`AF_PLAY_SEGREDO` acima) — sem segredo configurado no
+# servidor, a rota nunca libera nada. O segredo entra por HEADER, não pela
+# URL: um GET com `?segredo=...` fica gravado em log de acesso, histórico do
+# navegador e no Referer de qualquer link — um header não. `_igual` compara
+# em tempo constante para não vazar o segredo pelo tempo da comparação.
+#
+# Busca por e-mail (`buscar_usuario_por_email`), não por senha: esta rota é
+# "eu, dono do servidor, autorizo esta conta" — nunca uma forma de provar
+# quem é o dono da conta alvo, então não pede nem guarda a senha dela.
+class LiberarPremium(BaseModel):
+    email: str
 
-# Rota temporária para te dar o Premium na nuvem
-@router.get("/forcar-premium-admin")
-def forcar_premium(senha_secreta: str):
-    # Uma senha simples só para ninguém curioso acessar o link
-    if senha_secreta != "abrete_sesamo":
-        raise HTTPException(status_code=403, detail="Acesso negado.")
-    
-    # Tenta puxar a sua conta (você já deve ter criado ela no site oficial)
-    from modules import contas
-    u = contas.autenticar("lucaswn99@gmail.com", "Marley17?")
-    
-    if not u:
-        return {"erro": "Você precisa criar a conta lucaswn99@gmail.com no site oficial primeiro!"}
-    
-    # Libera o Premium
-    contas.definir_plano(u["id"], "premium")
-    return {"status": "SUCESSO", "mensagem": "Bem-vindo de volta, chefe! Seu Premium está ativo."}
+
+@router.post("/admin/liberar-premium")
+def liberar_premium_admin(corpo: LiberarPremium, request: Request):
+    segredo = os.environ.get("AF_ADMIN_SEGREDO", "")
+    if not segredo:
+        raise HTTPException(status_code=503, detail={
+            "erro": "admin_desligado",
+            "motivo": "AF_ADMIN_SEGREDO não configurado no servidor."})
+    if not _igual(request.headers.get("x-admin-segredo", ""), segredo):
+        raise HTTPException(status_code=401, detail={"erro": "segredo_invalido"})
+
+    usuario = contas.buscar_usuario_por_email(corpo.email)
+    if not usuario:
+        return {"erro": f"Nenhuma conta ativa com o e-mail {corpo.email}."}
+
+    contas.definir_plano(usuario["id"], "premium")
+    return {"status": "sucesso", "email": usuario["email"], "plano": "premium"}

@@ -361,6 +361,56 @@ def houve_destruicao_de_capital(anual):
     return float(np.mean(retornos[-3:])) < -30.0
 
 
+def _adicionar_sufixo_b3(ticker):
+    """Garante o sufixo .SA exigido pelo Yahoo para papéis listados na B3.
+
+    Idempotente e case-insensitive: aceita tanto "VALE3" quanto "vale3.sa"
+    sem duplicar o sufixo.
+    """
+    ticker = ticker.strip().upper()
+    return ticker if ticker.endswith(".SA") else f"{ticker}.SA"
+
+
+def raio_x_10_anos(abertura, fechamento):
+    """4 métricas de 10 anos de pregão: máxima, mínima, média e retorno absoluto.
+
+    `abertura` e `fechamento` são Series do pandas já sem NaN — tipicamente
+    `historico["Open"]`/`historico["Close"]` de
+    `yfinance.Ticker(...).history(period="10y")`. O retorno absoluto compara
+    o ÚLTIMO fechamento da série com a ABERTURA do PRIMEIRO pregão (não o
+    fechamento do primeiro pregão) — é essa a definição pedida, e ela difere
+    do retorno ano-a-ano de `serie_anual`, que é fechamento contra fechamento
+    dentro de cada ano civil.
+
+    "Não apurado" nunca vira zero: sem pregões, os 4 campos saem None em vez
+    de um número fabricado — e retorno_absoluto_pct também sai None se não
+    houver série de abertura (ex.: quando só o fechamento foi baixado).
+    """
+    if fechamento is None or len(fechamento) == 0:
+        return {
+            "preco_maximo_fechamento": None,
+            "preco_minimo_fechamento": None,
+            "preco_medio_fechamento": None,
+            "retorno_absoluto_pct": None,
+            "pregoes_considerados": 0,
+        }
+
+    retorno_pct = None
+    if abertura is not None and len(abertura) > 0:
+        abertura_inicial = float(abertura.iloc[0])
+        if abertura_inicial != 0:
+            fechamento_final = float(fechamento.iloc[-1])
+            retorno_pct = ((fechamento_final - abertura_inicial) / abertura_inicial) * 100.0
+
+    return {
+        "preco_maximo_fechamento": round(float(fechamento.max()), 2),
+        "preco_minimo_fechamento": round(float(fechamento.min()), 2),
+        "preco_medio_fechamento": round(float(fechamento.mean()), 2),
+        "retorno_absoluto_pct": round(retorno_pct, 2) if retorno_pct is not None else None,
+        "pregoes_considerados": int(len(fechamento)),
+    }
+
+
 ROE_MAXIMO_PLAUSIVEL = 200.0
 
 
@@ -1409,6 +1459,36 @@ def auditar_acao(ticker: str,
     return {"erro": ultimo_erro}
 
 
+@router.get("/raio-x-10-anos/{ticker}")
+def raio_x_dez_anos_rota(ticker: str):
+    """Rota isolada: só as 4 métricas de 10 anos, com download próprio do
+    Yahoo Finance.
+
+    Existe para atender ao pedido de uma função/rota autônoma que recebe o
+    ticker e devolve o raio-x pronto — mas o card do frontend NÃO chama esta
+    rota. Ele lê o campo `raio_x_10_anos` que `/acao/{ticker}` já devolve,
+    reaproveitando o histórico de 10 anos que aquela rota baixa de qualquer
+    forma para calcular RSI/SMA50/score. Usar as duas rotas juntas baixaria o
+    mesmo histórico duas vezes do Yahoo por consulta, sem necessidade.
+    """
+    simbolo = _adicionar_sufixo_b3(ticker)
+    ativo = yf.Ticker(simbolo)
+    historico = ativo.history(period="10y", interval="1d", auto_adjust=True)
+    if historico is None or historico.empty or "Close" not in historico.columns:
+        return {"erro": "Sem dados históricos disponíveis."}
+
+    abertura = historico["Open"].dropna()
+    fechamento = historico["Close"].dropna()
+    if fechamento.empty:
+        return {"erro": "Sem dados históricos disponíveis."}
+
+    return {
+        "ticker": ticker.upper().strip(),
+        "simbolo_yahoo": simbolo,
+        **raio_x_10_anos(abertura, fechamento),
+    }
+
+
 def _auditar_simbolo(ticker_clean, simbolo):
     ativo = yf.Ticker(simbolo)
     try:
@@ -1423,6 +1503,9 @@ def _auditar_simbolo(ticker_clean, simbolo):
     close = historico["Close"].dropna()
     if close.empty:
         return {"erro": "Sem dados históricos disponíveis."}
+
+    # Mesmo histórico já baixado acima — sem chamada extra ao Yahoo.
+    abertura = historico["Open"].dropna() if "Open" in historico.columns else None
 
     try:
         preco = float(info.get("currentPrice") or info.get("regularMarketPrice") or 0.0)
@@ -1517,6 +1600,7 @@ def _auditar_simbolo(ticker_clean, simbolo):
             "margem_liquida_pct": round(margem_liq, 2) if margem_liq is not None else None,
         },
         "historico_10_anos": dados_10_anos,
+        "raio_x_10_anos": raio_x_10_anos(abertura, close),
     }
 
 

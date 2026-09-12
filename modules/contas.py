@@ -215,6 +215,23 @@ def buscar_usuario(usuario_id):
     return dict(linha) if linha else None
 
 
+def buscar_usuario_por_email(email):
+    """Igual a `buscar_usuario`, mas por e-mail — sem exigir a senha.
+
+    Existe para uso administrativo (ex.: `definir_plano` a partir de um
+    e-mail conhecido), nunca para autenticação: quem precisa confirmar
+    identidade usa `autenticar`, que confere a senha.
+    """
+    iniciar()
+    email = normalizar_email(email)
+    if not email:
+        return None
+    with _conectar() as cx:
+        linha = cx.execute(
+            "SELECT * FROM usuarios WHERE email = ? AND ativo = 1", (email,)).fetchone()
+    return dict(linha) if linha else None
+
+
 def autenticar(email, senha):
     """Confere e-mail e senha. Devolve o usuário ou None.
 
