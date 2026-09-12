@@ -25,10 +25,14 @@ from modules import contas
 SCANNER_FREE_LINHAS = 5
 QUANT_FREE_LINHAS = 3
 FUNDOS_FREE_LINHAS = 4
+BARSI_FREE_LINHAS = 3
+GREENBLATT_FREE_LINHAS = 3
+BDR_FREE_LINHAS = 5
 
 # Consultas por dia no plano gratuito.
 LIMITES_FREE = {
     "rv_auditoria": 3,
+    "bogle_rebalanceamento": 3,
     "quant_papel": 3,
     "opcoes_precificar": 5,
     "credito_calcular": 2,
@@ -112,40 +116,54 @@ def _recusar(recurso, motivo, limite=None, usado=None, autenticado=False):
     })
 
 
+def cobrar(ctx: Contexto, recurso: str):
+    """Debita uma consulta da cota, ou levanta 402.
+
+    Existe separado da dependência para as rotas que precisam **validar antes
+    de cobrar**. Cobrar na dependência é cobrar antes de saber se o trabalho
+    vai acontecer: quem erra o formato do ticker recebe a mensagem de erro e
+    perde uma das três consultas do dia, sem que nada tenha sido calculado.
+    Uma cota gasta em mensagem de erro é cota roubada.
+    """
+    if ctx.premium:
+        return ctx
+
+    if recurso in BLOQUEADOS_FREE:
+        _recusar(recurso, BLOQUEADOS_FREE[recurso], autenticado=ctx.autenticado)
+
+    limite = LIMITES_FREE.get(recurso)
+    if limite is None:
+        return ctx
+
+    try:
+        usados = contas.consultar_uso(ctx.identidade, recurso)
+    except Exception:  # noqa: BLE001 — banco fora do ar não vira paywall
+        return ctx
+
+    if usados >= limite:
+        _recusar(recurso,
+                 f"Você usou as {limite} consultas gratuitas de hoje.",
+                 limite=limite, usado=usados, autenticado=ctx.autenticado)
+
+    try:
+        contas.registrar_uso(ctx.identidade, recurso)
+    except Exception:  # noqa: BLE001
+        pass
+    return ctx
+
+
 def acesso(recurso: Optional[str] = None):
     """Dependência de rota.
 
     Sem `recurso`, só identifica quem chama — para os endpoints que o gratuito
-    acessa com a resposta cortada. Com `recurso`, aplica bloqueio ou cota.
+    acessa com a resposta cortada. Com `recurso`, aplica bloqueio ou cota já
+    na entrada, que é o certo quando a rota não tem entrada para validar.
     """
     def dependencia(request: Request) -> Contexto:
         ctx = resolver_contexto(request)
-
-        if recurso is None or ctx.premium:
+        if recurso is None:
             return ctx
-
-        if recurso in BLOQUEADOS_FREE:
-            _recusar(recurso, BLOQUEADOS_FREE[recurso], autenticado=ctx.autenticado)
-
-        limite = LIMITES_FREE.get(recurso)
-        if limite is None:
-            return ctx
-
-        try:
-            usados = contas.consultar_uso(ctx.identidade, recurso)
-        except Exception:  # noqa: BLE001 — banco fora do ar não vira paywall
-            return ctx
-
-        if usados >= limite:
-            _recusar(recurso,
-                     f"Você usou as {limite} consultas gratuitas de hoje.",
-                     limite=limite, usado=usados, autenticado=ctx.autenticado)
-
-        try:
-            contas.registrar_uso(ctx.identidade, recurso)
-        except Exception:  # noqa: BLE001
-            pass
-        return ctx
+        return cobrar(ctx, recurso)
 
     return dependencia
 
@@ -187,9 +205,22 @@ def _sem_detalhe(linha):
     return {k: v for k, v in linha.items() if k not in DETALHE_SCORE}
 
 
+def _e_premium(ctx):
+    """True quando não há contexto de plano.
+
+    As funções de endpoint também são chamadas diretamente como funções
+    Python — a suíte faz isso em `equity.executar_scanner(forcar=True)` para
+    testar o motor sem subir HTTP. Nesse caminho o `ctx` chega como o objeto
+    `Depends`, não como um Contexto, e cortar seria errado duas vezes: o teste
+    veria uma lista de cinco onde espera oitenta, e o corte teria acontecido
+    fora de qualquer decisão de plano. Sem contexto, resposta inteira.
+    """
+    return getattr(ctx, "premium", True)
+
+
 def cortar_scanner(payload, ctx: Contexto):
     """Scanner de renda variável: cinco papéis e sem os fatores do score."""
-    if ctx.premium or not isinstance(payload, dict):
+    if _e_premium(ctx) or not isinstance(payload, dict):
         return payload
     lista = payload.get("oportunidades") or []
     payload = dict(payload)
@@ -204,7 +235,7 @@ def cortar_scanner(payload, ctx: Contexto):
 
 def cortar_quant(payload, ctx: Contexto):
     """Radar quantitativo: três papéis de amostra."""
-    if ctx.premium or not isinstance(payload, dict):
+    if _e_premium(ctx) or not isinstance(payload, dict):
         return payload
     lista = payload.get("papeis") or []
     payload = dict(payload)
@@ -218,7 +249,7 @@ def cortar_fundos(payload, ctx: Contexto):
 
     Ver o desconto instiga; saber o que fazer com ele é o que se assina.
     """
-    if ctx.premium or not isinstance(payload, dict):
+    if _e_premium(ctx) or not isinstance(payload, dict):
         return payload
     payload = dict(payload)
     total = 0
@@ -232,3 +263,48 @@ def cortar_fundos(payload, ctx: Contexto):
     exibidos = sum(len(payload.get(b) or []) for b in ("tijolo", "papel", "etfs"))
     return _marcar(payload, total, exibidos,
                    "O plano gratuito mostra parte da lista, sem a recomendação.")
+
+
+def cortar_barsi(payload, ctx: Contexto):
+    """Barsi: três aprovados, sem a lista de reprovados.
+
+    A lista de reprovados é metade do valor do módulo — saber *por que* um
+    papel não passou é o que ensina o critério. Por isso ela é do Premium.
+    """
+    if _e_premium(ctx) or not isinstance(payload, dict):
+        return payload
+    aprovados = payload.get("aprovados") or []
+    reprovados = payload.get("reprovados") or []
+    payload = dict(payload)
+    payload["aprovados"] = aprovados[:BARSI_FREE_LINHAS]
+    payload["reprovados"] = []
+    payload["reprovados_ocultos"] = len(reprovados)
+    return _marcar(payload, len(aprovados) + len(reprovados),
+                   len(payload["aprovados"]),
+                   "O plano gratuito mostra três aprovados e esconde o porquê "
+                   "de cada reprovação.")
+
+
+def cortar_greenblatt(payload, ctx: Contexto):
+    """Greenblatt: três do ranking, sem os descartados."""
+    if _e_premium(ctx) or not isinstance(payload, dict):
+        return payload
+    ranking = payload.get("ranking") or []
+    descartados = payload.get("descartados") or []
+    payload = dict(payload)
+    payload["ranking"] = ranking[:GREENBLATT_FREE_LINHAS]
+    payload["descartados"] = []
+    payload["descartados_ocultos"] = len(descartados)
+    return _marcar(payload, len(ranking), len(payload["ranking"]),
+                   "O plano gratuito mostra os três primeiros do ranking.")
+
+
+def cortar_bdr(payload, ctx: Contexto):
+    """BDR: cinco linhas do painel."""
+    if _e_premium(ctx) or not isinstance(payload, dict):
+        return payload
+    linhas = payload.get("linhas") or []
+    payload = dict(payload)
+    payload["linhas"] = linhas[:BDR_FREE_LINHAS]
+    return _marcar(payload, len(linhas), len(payload["linhas"]),
+                   "O plano gratuito acompanha cinco ativos do painel.")

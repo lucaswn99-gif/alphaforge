@@ -1,0 +1,56 @@
+# Publica no droplet a cada push na main.
+#
+# A chave SSH NUNCA aparece aqui nem no repositório: ela mora em
+# Settings > Secrets and variables > Actions, e o GitHub a injeta em tempo de
+# execução. Quem cria e cola a chave é você; nem eu nem o workflow a leem.
+#
+# Segredos necessários (Settings > Secrets and variables > Actions > New):
+#   DROPLET_HOST     alphaforge.api.br  (ou o IP)
+#   DROPLET_USER     o usuário que roda o serviço (ex.: root ou deploy)
+#   DROPLET_SSH_KEY  a chave PRIVADA cuja pública está em ~/.ssh/authorized_keys
+#   DROPLET_DIR      caminho do projeto no servidor (ex.: /opt/alphaforge)
+#   DROPLET_SERVICE  nome da unit do systemd (ex.: alphaforge)
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # permite disparar à mão pela aba Actions
+
+concurrency:
+  group: deploy-producao
+  cancel-in-progress: false   # nunca abortar um deploy pela metade
+
+jobs:
+  testar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependências
+        run: pip install -r requirements.txt pytest
+      - name: Rodar a suíte
+        run: python -m pytest -q
+
+  publicar:
+    needs: testar           # teste vermelho não chega no servidor
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy por SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script_stop: true
+          script: |
+            export ALPHAFORGE_DIR="${{ secrets.DROPLET_DIR }}"
+            export ALPHAFORGE_SERVICE="${{ secrets.DROPLET_SERVICE }}"
+            cd "$ALPHAFORGE_DIR"
+            git fetch origin main
+            git checkout origin/main -- deploy.sh
+            chmod +x deploy.sh
+            ./deploy.sh

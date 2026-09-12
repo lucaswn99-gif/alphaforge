@@ -5,6 +5,17 @@ mesmos cortes — sem arrastar yfinance e pandas para o teste. O que está sob
 teste é a regra de plano, não a coleta de dado.
 """
 
+if __name__ != "__main__":  # pragma: no cover
+    # Isto é um script de verificação, não uma suíte pytest: sobe servidor (e,
+    # no caso do billing, navegador) no corpo do módulo. Coletado pelo
+    # `python -m pytest` que guarda o deploy, tudo isso rodaria durante a
+    # COLETA — e uma máquina de CI sem navegador derrubaria o portão inteiro.
+    # `allow_module_level` corta a coleta antes de qualquer linha abaixo.
+    import pytest
+
+    pytest.skip("script de verificação; rode com: python test_planos.py",
+                allow_module_level=True)
+
 import os
 import tempfile
 

@@ -96,6 +96,35 @@ def balanco_por_cnpj(cnpj, banco=None):
     return registro
 
 
+def historico_por_cnpj(cnpj, banco=None):
+    """Todos os exercícios da companhia, do mais antigo ao mais recente.
+
+    `balanco_por_cnpj` devolve só o exercício mais recente, que responde
+    "quanto vale hoje". Constância de lucro é outra pergunta — precisa da
+    série — e alcançar a conexão privada a partir de outro módulo para
+    respondê-la deixaria o esquema do banco espalhado pelo projeto.
+    """
+    if not cnpj:
+        return []
+    conexao = _conectar(banco)
+    if conexao is None:
+        return []
+    try:
+        linhas = conexao.execute(
+            "SELECT * FROM fundamentos WHERE cnpj = ? ORDER BY ano", (cnpj,)
+        ).fetchall()
+        if not linhas and len(cnpj) >= 8:
+            linhas = conexao.execute(
+                "SELECT * FROM fundamentos WHERE cnpj LIKE ? ORDER BY ano",
+                (cnpj[:8] + "%",)
+            ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conexao.close()
+    return [dict(linha) for linha in linhas]
+
+
 def _positivo(valor):
     try:
         numero = float(valor)

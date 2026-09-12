@@ -27,3 +27,10 @@ pypdf==6.18.0
 # pagamento — assinar RS256 a mao num caminho que decide quem pagou seria
 # economia no lugar errado.
 google-auth==2.43.0
+
+# fastapi.testclient (starlette.testclient) exige httpx a partir da versao
+# do starlette usada pelo fastapi 0.141.1 — sem isso, qualquer teste que
+# importa TestClient (test_legal.py, test_conta.py etc.) falha na COLETA do
+# pytest, e um erro de coleta aborta a suite inteira antes de rodar qualquer
+# teste. So e usado pelos testes; a API em producao nao depende dele.
+httpx==0.28.1
