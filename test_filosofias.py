@@ -240,9 +240,11 @@ def principal():
     fundamentos_cvm.historico_por_cnpj = lambda cnpj, banco=None: [
         {"ano": a, "lucro_liquido": 700.0 + a} for a in (2023, 2024, 2025)]
 
-    dpa, anos = motor._dpa_projetado("TAEE11.SA")
+    dpa, anos, fechados_taee = motor._dpa_projetado("TAEE11.SA")
     checar("DPA ignora o ano corrente", perto(dpa, (2.0 + 2.2 + 2.4) / 3), dpa)
     checar("DPA usa três exercícios", anos == 3, anos)
+    checar("fechados traz só exercícios fechados",
+           sorted(fechados_taee) == [2023, 2024, 2025], fechados_taee)
 
     # Preço teto = DPA/6%. Com DPA 2,2 → teto 36,67; preço 30 → MS de 18%.
     linha = motor._avaliar_barsi("TAEE11", "energia", aplicar_momentum=True)
@@ -250,6 +252,12 @@ def principal():
     checar("margem de segurança correta",
            perto(linha["margem_seguranca"], (2.2 / 0.06 - 30) / (2.2 / 0.06), 1e-3),
            linha["margem_seguranca"])
+    checar("DPA em alta (2,0→2,2→2,4) classifica como crescente",
+           linha["tendencia_dpa"]["classificacao"] == "crescente",
+           linha["tendencia_dpa"])
+    checar("tendência crescente registra 'sempre_subiu'",
+           linha["tendencia_dpa"]["consistencia"] == "sempre_subiu",
+           linha["tendencia_dpa"])
 
     caro = FonteFalsa(
         perfis={"EGIE3.SA": {"preco": 36.0, "moeda": "BRL", "nome": "Engie",
@@ -355,6 +363,8 @@ def principal():
     checar("relatório traz aprovados", len(relatorio["aprovados"]) == 1,
            relatorio["aprovados"])
     checar("relatório declara os critérios", "payout_pct" in relatorio["criterios"])
+    checar("relatório declara os parâmetros de tendência de DPA",
+           "tendencia_dpa" in relatorio["criterios"], relatorio["criterios"])
 
     quebrada = FonteFalsa(explode={"SBSP3.SA"})
     resiliente = filosofias.PhilosophyEngine(fonte=quebrada, selic_aa=10.0) \
@@ -362,6 +372,69 @@ def principal():
     checar("fonte que explode vira ressalva, não queda",
            len(resiliente["ressalvas"]) == 1, resiliente["ressalvas"])
 
+    cadastro_b3.cnpj_do_ticker = original_cnpj
+    fundamentos_cvm.balanco_por_cnpj = original_balanco
+    fundamentos_cvm.historico_por_cnpj = original_historico
+
+    # ======================================================================
+    print("\n[Barsi — tendência de DPA]")
+    _tendencia = filosofias._tendencia_dpa
+    subindo_dpa = _tendencia({2021: 1.0, 2022: 1.1, 2023: 1.2, 2024: 1.3, 2025: 1.4})
+    checar("DPA em alta consistente é 'crescente'",
+           subindo_dpa["classificacao"] == "crescente", subindo_dpa)
+    checar("CAGR de alta é positivo", (subindo_dpa["cagr_aa"] or 0) > 0, subindo_dpa)
+
+    caindo_dpa = _tendencia({2021: 2.0, 2022: 1.8, 2023: 1.6, 2024: 1.4, 2025: 1.2})
+    checar("DPA em queda consistente é 'decrescente'",
+           caindo_dpa["classificacao"] == "decrescente", caindo_dpa)
+    checar("queda registra 'sempre_caiu'",
+           caindo_dpa["consistencia"] == "sempre_caiu", caindo_dpa)
+
+    estavel_dpa = _tendencia({2021: 1.0, 2022: 1.01, 2023: 0.99, 2024: 1.0, 2025: 1.0})
+    checar("DPA quase parado é 'estavel'",
+           estavel_dpa["classificacao"] == "estavel", estavel_dpa)
+
+    curto_dpa = _tendencia({2024: 1.0, 2025: 1.1})
+    checar("menos de 3 exercícios não apura tendência",
+           curto_dpa["classificacao"] == "nao_apurado", curto_dpa)
+    checar("motivo da tendência não apurada é explicado",
+           "mínimo" in (curto_dpa["motivo"] or ""), curto_dpa)
+
+    zero_dpa = _tendencia({2021: 0.0, 2022: 1.0, 2023: 1.1, 2024: 1.2})
+    checar("exercício inicial sem provento positivo não apura CAGR",
+           zero_dpa["classificacao"] == "nao_apurado", zero_dpa)
+
+    janela_longa = _tendencia({2018: 1.0, 2019: 1.0, 2020: 1.0, 2021: 1.0,
+                               2022: 1.1, 2023: 1.2, 2024: 1.3, 2025: 1.4})
+    checar("janela usa só os últimos ANOS_TENDENCIA_DPA exercícios",
+           janela_longa["anos_considerados"] == filosofias.ANOS_TENDENCIA_DPA
+           and janela_longa["primeiro_ano"] == 2021, janela_longa)
+
+    vazio_dpa = _tendencia({})
+    checar("sem nenhum exercício, tendência vem não apurada",
+           vazio_dpa["classificacao"] == "nao_apurado", vazio_dpa)
+
+    # Integração: papel com DPA em queda e histórico curto tem que aparecer
+    # como "não apurado" na saída de `_avaliar_barsi`, não travar o motor.
+    dividendos_poucos = pd.Series(
+        [1.0, 1.1], index=pd.to_datetime(["2024-06-01", "2025-06-01"]))
+    fonte_curta = FonteFalsa(
+        perfis={"POUC3.SA": {"preco": 10.0, "moeda": "BRL", "nome": "Pouco Histórico",
+                             "setor": None, "valor_mercado": None, "volume": None}},
+        dividendos={"POUC3.SA": dividendos_poucos},
+        precos={"POUC3.SA": precos_bons})
+    cadastro_b3.cnpj_do_ticker = lambda t, c=None: "11111111000191"
+    fundamentos_cvm.balanco_por_cnpj = lambda cnpj, banco=None: dict(balanco_bom)
+    fundamentos_cvm.historico_por_cnpj = lambda cnpj, banco=None: [
+        {"ano": a, "lucro_liquido": 700.0 + a} for a in (2023, 2024, 2025)]
+    linha_curta = filosofias.PhilosophyEngine(fonte=fonte_curta, selic_aa=10.0) \
+        ._avaliar_barsi("POUC3", "energia", aplicar_momentum=False)
+    checar("histórico curto de proventos não trava o motor",
+           linha_curta["tendencia_dpa"]["classificacao"] == "nao_apurado",
+           linha_curta["tendencia_dpa"])
+    checar("tendência não apurada não reprova por si só",
+           not any("tendência" in m.lower() for m in linha_curta["motivos"]),
+           linha_curta["motivos"])
     cadastro_b3.cnpj_do_ticker = original_cnpj
     fundamentos_cvm.balanco_por_cnpj = original_balanco
     fundamentos_cvm.historico_por_cnpj = original_historico
@@ -651,6 +724,9 @@ def principal():
     r = cliente.get("/filosofias/universos").json()
     checar("rota de universos expõe os critérios", "criterios" in r and "besst" in r)
     checar("universos declara o total BESST", r["besst_total"] == 26, r["besst_total"])
+    checar("universos expõe a janela de tendência de DPA",
+           r["criterios"]["barsi"].get("tendencia_dpa_janela_anos") ==
+           filosofias.ANOS_TENDENCIA_DPA, r["criterios"]["barsi"])
 
     print()
     if falhas:

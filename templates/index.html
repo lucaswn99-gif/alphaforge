@@ -161,6 +161,7 @@
   <button onclick="alternarAba('opcoes')"         id="btn-tab-opcoes"          class="aba">Opções</button>
   <button onclick="alternarAba('renda-fixa')"     id="btn-tab-renda-fixa"     class="aba">Crédito</button>
   <button onclick="alternarAba('allocation')"     id="btn-tab-allocation"     class="aba">Alocação</button>
+  <button onclick="alternarAba('filosofias')"     id="btn-tab-filosofias"     class="aba">Filosofias</button>
 </nav>
 
 <main class="flex-1 p-5 max-w-[1500px] w-full mx-auto space-y-5">
@@ -710,6 +711,155 @@
     </div>
   </section>
 
+  <!-- ================= ABA: FILOSOFIAS ================= -->
+  <section id="tab-filosofias" class="hidden space-y-5">
+    <div class="painel p-4">
+      <h2 class="rotulo mb-1">Motores de filosofia</h2>
+      <p class="text-[11px]" style="color: var(--suave)">
+        Bogle (núcleo passivo) · Barsi (BESST) · Greenblatt + Shareholder Yield (EUA) · BDR × ação-mãe —
+        filtros quantitativos determinísticos, não recomendação de investimento.
+      </p>
+      <div class="flex gap-2 flex-wrap mt-3">
+        <button onclick="alternarSubAbaFilosofia('bogle')" id="btn-sub-bogle" class="aba aba-ativa">Bogle</button>
+        <button onclick="alternarSubAbaFilosofia('barsi')" id="btn-sub-barsi" class="aba">Barsi</button>
+        <button onclick="alternarSubAbaFilosofia('greenblatt')" id="btn-sub-greenblatt" class="aba">Greenblatt</button>
+        <button onclick="alternarSubAbaFilosofia('bdr')" id="btn-sub-bdr" class="aba">BDR × Ação</button>
+      </div>
+    </div>
+
+    <!-- ---------- sub: Bogle ---------- -->
+    <div id="sub-bogle" class="space-y-4">
+      <div class="painel p-4">
+        <div class="flex gap-2 flex-wrap items-end">
+          <label class="flex-1 min-w-[240px]">
+            <span class="text-[10px]" style="color: var(--suave)">Posições — TICKER:QUANTIDADE, ...</span>
+            <input type="text" id="bogleposicoes" placeholder="VOO:10,WRLD11.SA:300,SCHD:20"
+                   class="campo mono uppercase w-full mt-1">
+          </label>
+          <label class="flex-1 min-w-[240px]">
+            <span class="text-[10px]" style="color: var(--suave)">Alvo (opcional) — TICKER:PERCENTUAL, soma 100</span>
+            <input type="text" id="bogleAlvo" placeholder="VOO:40,WRLD11.SA:40,SCHD:20"
+                   class="campo mono uppercase w-full mt-1">
+          </label>
+          <label>
+            <span class="text-[10px]" style="color: var(--suave)">Banda</span>
+            <select id="bogleBanda" class="campo text-[11px] py-1.5 mt-1 block">
+              <option value="0.02">2%</option>
+              <option value="0.05" selected>5%</option>
+              <option value="0.10">10%</option>
+            </select>
+          </label>
+          <button onclick="carregarBogle()" id="btnBogle" class="btn">Calcular rebalanceamento</button>
+        </div>
+        <p class="text-[10px] mt-2" style="color: var(--suave)">
+          O alvo é política de quem investe — o motor mede a distância até ele, não escolhe a alocação.
+          Sem alvo, usa 40% WRLD11.SA / 40% VOO / 20% SCHD.
+        </p>
+      </div>
+
+      <p id="bogleAviso" class="hidden text-xs rounded px-4 py-3 border"></p>
+
+      <div id="painelBogleResultado" class="hidden painel p-4">
+        <div class="flex gap-5 flex-wrap mb-3">
+          <div><span class="rotulo">Patrimônio</span><p class="mono text-lg" id="boglePatrimonio">—</p></div>
+          <div><span class="rotulo">Dólar usado</span><p class="mono text-lg" id="bogleDolar">—</p></div>
+        </div>
+        <p id="bogleVeredito" class="text-xs mb-3"></p>
+        <div class="overflow-x-auto"><table class="w-full text-xs">
+          <thead><tr class="rotulo text-left">
+            <th class="p-1.5">Ativo</th><th class="p-1.5 text-right">Peso atual</th>
+            <th class="p-1.5 text-right">Peso alvo</th><th class="p-1.5 text-right">Desvio</th>
+            <th class="p-1.5 text-center">Ação</th><th class="p-1.5 text-right">Ajuste</th>
+          </tr></thead>
+          <tbody id="tabelaBogle" class="divide-y" style="border-color: var(--borda)"></tbody>
+        </table></div>
+        <p id="bogleRessalvas" class="text-[10px] mt-3" style="color: var(--ambar)"></p>
+      </div>
+    </div>
+
+    <!-- ---------- sub: Barsi ---------- -->
+    <div id="sub-barsi" class="hidden space-y-4">
+      <div class="painel p-4 flex justify-between items-center gap-3 flex-wrap">
+        <div>
+          <h3 class="rotulo">Satélite Barsi — BESST</h3>
+          <p class="text-[11px] mt-1" id="barsiResumo" style="color: var(--suave)">—</p>
+        </div>
+        <button onclick="carregarBarsi(true)" id="btnBarsi" class="btn">Atualizar Barsi</button>
+      </div>
+      <p id="barsiAviso" class="hidden text-xs rounded px-4 py-3 border"></p>
+      <div class="painel p-4">
+        <div class="overflow-x-auto"><table class="w-full text-xs">
+          <thead><tr class="rotulo text-left">
+            <th class="p-1.5">Papel</th><th class="p-1.5 text-right">Preço</th>
+            <th class="p-1.5 text-right">Preço teto</th><th class="p-1.5 text-right">Margem</th>
+            <th class="p-1.5 text-right so-desktop">Payout</th><th class="p-1.5 text-right so-desktop">Dív./EBIT</th>
+            <th class="p-1.5 text-center so-desktop">Tendência DPA</th><th class="p-1.5 text-center">Momentum</th>
+            <th class="p-1.5">Veredito</th>
+          </tr></thead>
+          <tbody id="tabelaBarsi" class="divide-y" style="border-color: var(--borda)"></tbody>
+        </table></div>
+        <p id="barsiRessalvas" class="text-[10px] mt-3" style="color: var(--ambar)"></p>
+      </div>
+    </div>
+
+    <!-- ---------- sub: Greenblatt ---------- -->
+    <div id="sub-greenblatt" class="hidden space-y-4">
+      <div class="painel p-4 flex justify-between items-center gap-3 flex-wrap">
+        <div>
+          <h3 class="rotulo">Magic Formula + Shareholder Yield — EUA</h3>
+          <p class="text-[11px] mt-1" id="greenblattResumo" style="color: var(--suave)">—</p>
+        </div>
+        <div class="flex gap-3 items-center flex-wrap">
+          <label class="flex items-center gap-1.5 text-[11px]" style="color: var(--suave)">
+            <input type="checkbox" id="greenblattCompleto"> universo completo (premium)
+          </label>
+          <button onclick="carregarGreenblatt(true)" id="btnGreenblatt" class="btn">Atualizar Greenblatt</button>
+        </div>
+      </div>
+      <p id="greenblattAviso" class="hidden text-xs rounded px-4 py-3 border"></p>
+      <div class="painel p-4">
+        <div class="overflow-x-auto"><table class="w-full text-xs">
+          <thead><tr class="rotulo text-left">
+            <th class="p-1.5 text-center">Posto</th><th class="p-1.5">Ativo</th>
+            <th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right so-desktop">EV/EBIT</th>
+            <th class="p-1.5 text-right so-desktop">ROIC</th><th class="p-1.5 text-right">Shareholder Yield</th>
+            <th class="p-1.5 text-center">Momentum</th>
+          </tr></thead>
+          <tbody id="tabelaGreenblatt" class="divide-y" style="border-color: var(--borda)"></tbody>
+        </table></div>
+        <p id="greenblattDescartados" class="text-[10px] mt-3" style="color: var(--suave)"></p>
+      </div>
+    </div>
+
+    <!-- ---------- sub: BDR ---------- -->
+    <div id="sub-bdr" class="hidden space-y-4">
+      <div class="painel p-4 flex justify-between items-center gap-3 flex-wrap">
+        <div class="flex-1 min-w-[240px]">
+          <h3 class="rotulo mb-1">Ação americana × BDR na B3</h3>
+          <input type="text" id="bdrAtivos" placeholder="AAPL,MSFT — vazio usa o mapa padrão"
+                 class="campo mono uppercase w-full">
+        </div>
+        <button onclick="carregarBDR(true)" id="btnBDR" class="btn">Atualizar BDR</button>
+      </div>
+      <p id="bdrAviso" class="hidden text-xs rounded px-4 py-3 border"></p>
+      <div class="painel p-4">
+        <div class="overflow-x-auto"><table class="w-full text-xs">
+          <thead><tr class="rotulo text-left">
+            <th class="p-1.5">Ativo</th><th class="p-1.5 text-right">Preço USD</th>
+            <th class="p-1.5 text-right">Preço BRL</th><th class="p-1.5 text-right so-desktop">Var% USD</th>
+            <th class="p-1.5 text-right so-desktop">Var% BRL</th><th class="p-1.5 text-right">Preço justo BRL</th>
+            <th class="p-1.5 text-right">Spread</th><th class="p-1.5 text-center">Confiabilidade</th>
+          </tr></thead>
+          <tbody id="tabelaBDR" class="divide-y" style="border-color: var(--borda)"></tbody>
+        </table></div>
+        <p class="text-[10px] mt-3" style="color: var(--suave)">
+          Tabela de razões (BDRs por ação) conferida em <span id="bdrVerificadoEm" class="mono">—</span> contra
+          o preço de tela. Spread só é "confiável" quando a razão veio da tabela conferida e o BDR tem liquidez.
+        </p>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <footer class="border-t px-5 py-4 mono text-[10px] space-y-2" style="border-color: var(--borda); color: var(--suave); background: #000;">
@@ -835,7 +985,7 @@ function atualizarRelogio() {
 }
 
 // ===================== navegação =========================
-const ABAS = ['mercado', 'renda-variavel', 'quant', 'opcoes', 'fundos', 'renda-fixa', 'allocation'];
+const ABAS = ['mercado', 'renda-variavel', 'quant', 'opcoes', 'fundos', 'renda-fixa', 'allocation', 'filosofias'];
 const JA_CARREGADA = {};
 
 function alternarAba(aba) {
@@ -1884,6 +2034,235 @@ async function otimizarPortfolio() {
   } finally { btn.disabled = false; btn.innerText = 'Otimizar pesos'; }
 }
 
+// ===================== filosofias =========================
+// Bogle, Barsi, Greenblatt e BDR moram na mesma aba, em sub-abas — são
+// motores independentes, mas todos fazem a mesma pergunta ("o que este
+// critério diz sobre este ativo, com o quê medido e o quê não apurado") e
+// dividir em quatro abas de primeiro nível empurraria o menu para fora da
+// tela no celular.
+const SUBABAS_FILOSOFIA = ['bogle', 'barsi', 'greenblatt', 'bdr'];
+
+function alternarSubAbaFilosofia(sub) {
+  SUBABAS_FILOSOFIA.forEach(s => {
+    document.getElementById(`sub-${s}`).classList.add('hidden');
+    document.getElementById(`btn-sub-${s}`).classList.remove('aba-ativa');
+  });
+  document.getElementById(`sub-${sub}`).classList.remove('hidden');
+  document.getElementById(`btn-sub-${sub}`).classList.add('aba-ativa');
+  // Carregamento tardio: Barsi e Greenblatt varrem dezenas de papéis cada.
+  // Só busca na primeira vez que a sub-aba abre, não a cada troca de aba.
+  if (sub === 'barsi' && !JA_CARREGADA.barsi) { JA_CARREGADA.barsi = true; carregarBarsi(false); }
+  if (sub === 'greenblatt' && !JA_CARREGADA.greenblatt) { JA_CARREGADA.greenblatt = true; carregarGreenblatt(false); }
+  if (sub === 'bdr' && !JA_CARREGADA.bdr) { JA_CARREGADA.bdr = true; carregarBDR(false); }
+}
+
+// Tendência de DPA e veredito de momentum viram badges coloridos com o motivo
+// no title — a cor dá a leitura de relance, o texto por trás sustenta.
+function badgeTendenciaDPA(t) {
+  if (!t) return '<span style="color:#4a554e">—</span>';
+  const rotulos = {
+    crescente:   ['DPA ↑', 'sobe'],
+    estavel:     ['DPA →', ''],
+    decrescente: ['DPA ↓', 'desce'],
+    nao_apurado: ['não apurado', ''],
+  };
+  const [rotulo, classe] = rotulos[t.classificacao] || [esc(t.classificacao || '—'), ''];
+  const cagr = (classe && t.cagr_aa != null) ? ` ${(t.cagr_aa * 100).toFixed(1)}%/a.a.` : '';
+  const titulo = t.motivo || `${t.anos_considerados || 0} exercício(s) · ${t.consistencia || ''}`;
+  return `<span class="${classe}" title="${esc(titulo)}">${rotulo}${cagr}</span>`;
+}
+
+function badgeMomentum(m) {
+  if (!m) return '<span style="color:#4a554e">—</span>';
+  const classes = { favoravel: 'sobe', rebaixar: '', excluir: 'desce', nao_apurado: '' };
+  const classe = classes[m.veredito] ?? '';
+  const valor = m.momentum_12m_1m != null ? `${(m.momentum_12m_1m * 100).toFixed(1)}%` : '—';
+  return `<span class="${classe}" title="${esc(m.motivo || '')}">${valor}</span>`;
+}
+
+// ---------------------------------------------------------------- Bogle
+async function carregarBogle() {
+  const btn = document.getElementById('btnBogle');
+  const posicoesRaw = document.getElementById('bogleposicoes').value.trim();
+  const alvoRaw = document.getElementById('bogleAlvo').value.trim();
+  const banda = document.getElementById('bogleBanda').value;
+  mostrarAviso('bogleAviso', '');
+  if (!posicoesRaw) {
+    mostrarAviso('bogleAviso', 'Informe ao menos uma posição, como VOO:10,WRLD11.SA:300.');
+    return;
+  }
+  btn.innerText = 'Calculando…'; btn.disabled = true;
+  try {
+    const params = new URLSearchParams({ posicoes: posicoesRaw, banda });
+    if (alvoRaw) params.set('alvo', alvoRaw);
+    const res = await fetch(`/filosofias/bogle?${params.toString()}`);
+    if (!res.ok) { mostrarAviso('bogleAviso', `O servidor respondeu ${res.status}.`); return; }
+    const data = await res.json();
+    if (data.erro) { mostrarAviso('bogleAviso', esc(data.erro)); return; }
+
+    document.getElementById('painelBogleResultado').classList.remove('hidden');
+    document.getElementById('boglePatrimonio').innerText =
+      'R$ ' + Number(data.patrimonio_brl || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+    document.getElementById('bogleDolar').innerText = data.dolar ? num(data.dolar, 4) : '—';
+
+    const veredito = document.getElementById('bogleVeredito');
+    veredito.innerText = data.precisa_rebalancear
+      ? 'Fora da banda — rebalanceamento sugerido abaixo.'
+      : 'Dentro da banda de tolerância — nenhum ajuste necessário.';
+    veredito.className = 'text-xs mb-3 ' + (data.precisa_rebalancear ? 'desce' : 'sobe');
+
+    document.getElementById('tabelaBogle').innerHTML = (data.posicoes || []).map(l => `
+      <tr class="linha">
+        <td class="p-1.5 font-bold text-[12px]" style="color: var(--verde)">${esc(l.ticker)}</td>
+        <td class="p-1.5 text-right mono">${num(l.peso_atual, 1, '%')}</td>
+        <td class="p-1.5 text-right mono" style="color:var(--suave)">${num(l.peso_alvo, 1, '%')}</td>
+        <td class="p-1.5 text-right">${pct(l.desvio_pp)}</td>
+        <td class="p-1.5 text-center text-[10px] font-bold ${
+          l.acao === 'comprar' ? 'sobe' : (l.acao === 'vender' ? 'desce' : '')
+        }">${esc((l.acao || '').toUpperCase())}</td>
+        <td class="p-1.5 text-right mono">${
+          l.ajuste_brl ? 'R$ ' + Math.abs(l.ajuste_brl).toLocaleString('pt-BR', { maximumFractionDigits: 0 })
+                       : '<span style="color:#4a554e">—</span>'}</td>
+      </tr>`).join('');
+
+    const ressalvas = data.ressalvas || [];
+    document.getElementById('bogleRessalvas').innerText = ressalvas.length
+      ? `Sem preço apurado: ${ressalvas.map(r => `${r.ticker} (${r.motivo})`).join('; ')}` : '';
+  } catch (e) {
+    mostrarAviso('bogleAviso', `Não foi possível calcular: ${esc(e.message || e)}`);
+  } finally {
+    btn.innerText = 'Calcular rebalanceamento'; btn.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------- Barsi
+async function carregarBarsi(forcar = false) {
+  const btn = document.getElementById('btnBarsi');
+  btn.innerText = 'Atualizando…'; btn.disabled = true;
+  mostrarAviso('barsiAviso', '');
+  try {
+    const res = await fetch(`/filosofias/barsi?forcar=${forcar ? 'true' : 'false'}`);
+    if (!res.ok) { mostrarAviso('barsiAviso', `O servidor respondeu ${res.status}.`); return; }
+    const data = await res.json();
+
+    const aprovados = data.aprovados || [];
+    const reprovados = data.reprovados || [];
+    const ocultos = data.reprovados_ocultos || 0;
+    const idade = Number(data.idade_segundos || 0);
+    const origem = data.cache ? `cache de ${Math.floor(idade / 60)} min — use "Atualizar" para refazer` : 'coleta ao vivo';
+    document.getElementById('barsiResumo').innerText =
+      `${aprovados.length} aprovado(s)` +
+      (reprovados.length ? `, ${reprovados.length} reprovado(s)` : '') +
+      (ocultos ? `, ${ocultos} reprovado(s) oculto(s) no plano gratuito` : '') +
+      ` · ${origem}`;
+
+    const linha = (l, aprovado) => `
+      <tr class="linha${aprovado ? '' : ' opacity-60'}">
+        <td class="p-1.5">
+          <div class="font-bold text-[12px]" style="color: var(--verde)">${esc(l.ticker)}</div>
+          <div class="text-[9px]" style="color:#4a554e">${esc(l.setor || '')}</div>
+        </td>
+        <td class="p-1.5 text-right mono">${num(l.preco)}</td>
+        <td class="p-1.5 text-right mono" style="color:var(--suave)">${num(l.preco_teto)}</td>
+        <td class="p-1.5 text-right">${l.margem_seguranca != null ? pct(l.margem_seguranca * 100) : '<span style="color:#4a554e">—</span>'}</td>
+        <td class="p-1.5 text-right mono so-desktop">${num(l.payout, 1, '%')}</td>
+        <td class="p-1.5 text-right mono so-desktop">${num(l.divida_liquida_ebit, 1, 'x')}</td>
+        <td class="p-1.5 text-center so-desktop">${badgeTendenciaDPA(l.tendencia_dpa)}</td>
+        <td class="p-1.5 text-center">${badgeMomentum(l.momentum)}</td>
+        <td class="p-1.5 text-[10px] font-bold" style="color: ${aprovado ? 'var(--verde)' : 'var(--ambar)'}"
+            title="${esc((l.motivos || []).join(' | '))}">${
+              aprovado ? 'APROVADO' : esc((l.motivos && l.motivos[0]) || 'reprovado')}</td>
+      </tr>`;
+
+    document.getElementById('tabelaBarsi').innerHTML =
+      aprovados.map(l => linha(l, true)).join('') + reprovados.map(l => linha(l, false)).join('');
+
+    const ressalvas = data.ressalvas || [];
+    document.getElementById('barsiRessalvas').innerText = ressalvas.length
+      ? `${ressalvas.length} papel(is) sem dado suficiente: ${ressalvas.map(r => r.ticker).join(', ')}` : '';
+  } catch (e) {
+    mostrarAviso('barsiAviso', `Não foi possível atualizar: ${esc(e.message || e)}`);
+  } finally {
+    btn.innerText = 'Atualizar Barsi'; btn.disabled = false;
+  }
+}
+
+// ------------------------------------------------------------ Greenblatt
+async function carregarGreenblatt(forcar = false) {
+  const btn = document.getElementById('btnGreenblatt');
+  const completo = document.getElementById('greenblattCompleto').checked;
+  btn.innerText = 'Atualizando…'; btn.disabled = true;
+  mostrarAviso('greenblattAviso', '');
+  try {
+    const res = await fetch(`/filosofias/greenblatt?completo=${completo ? 'true' : 'false'}&forcar=${forcar ? 'true' : 'false'}`);
+    if (!res.ok) { mostrarAviso('greenblattAviso', `O servidor respondeu ${res.status}.`); return; }
+    const data = await res.json();
+
+    const ranking = data.ranking || [];
+    const ocultos = data.descartados_ocultos || 0;
+    document.getElementById('greenblattResumo').innerText =
+      `${ranking.length} no ranking de ${data.avaliados || 0} avaliado(s)` +
+      (data.universo_completo ? ' · universo completo' : ' · universo rápido') +
+      (ocultos ? ` · ${ocultos} descartado(s) oculto(s) no plano gratuito` : '');
+
+    document.getElementById('tabelaGreenblatt').innerHTML = ranking.map(l => `
+      <tr class="linha">
+        <td class="p-1.5 text-center mono" style="color:var(--suave)">${l.posto_combinado ?? '—'}</td>
+        <td class="p-1.5">
+          <div class="font-bold text-[12px]" style="color: var(--verde)">${esc(l.ticker)}</div>
+          <div class="text-[9px]" style="color:#4a554e">${esc(l.setor || '')}</div>
+        </td>
+        <td class="p-1.5 text-right mono">${num(l.preco)}</td>
+        <td class="p-1.5 text-right mono so-desktop">${num(l.ev_ebit, 1, 'x')}</td>
+        <td class="p-1.5 text-right mono so-desktop">${num(l.roic, 1, '%')}</td>
+        <td class="p-1.5 text-right mono">${num(l.shareholder_yield, 1, '%')}</td>
+        <td class="p-1.5 text-center">${badgeMomentum(l.momentum)}${
+          l.penalizado_por_momentum ? ' <span class="text-[9px]" style="color:var(--ambar)">rebaixado</span>' : ''}</td>
+      </tr>`).join('');
+  } catch (e) {
+    mostrarAviso('greenblattAviso', `Não foi possível atualizar: ${esc(e.message || e)}`);
+  } finally {
+    btn.innerText = 'Atualizar Greenblatt'; btn.disabled = false;
+  }
+}
+
+// ------------------------------------------------------------------ BDR
+async function carregarBDR(forcar = false) {
+  const btn = document.getElementById('btnBDR');
+  const ativosRaw = document.getElementById('bdrAtivos').value.trim();
+  btn.innerText = 'Atualizando…'; btn.disabled = true;
+  mostrarAviso('bdrAviso', '');
+  try {
+    const params = new URLSearchParams({ forcar: forcar ? 'true' : 'false' });
+    if (ativosRaw) params.set('ativos', ativosRaw);
+    const res = await fetch(`/filosofias/bdr?${params.toString()}`);
+    if (!res.ok) { mostrarAviso('bdrAviso', `O servidor respondeu ${res.status}.`); return; }
+    const data = await res.json();
+
+    document.getElementById('tabelaBDR').innerHTML = (data.linhas || []).map(l => `
+      <tr class="linha${l.confiavel ? '' : ' opacity-60'}">
+        <td class="p-1.5">
+          <div class="font-bold text-[12px]" style="color: var(--verde)">${esc(l.ativo || '')}</div>
+          <div class="text-[9px]" style="color:#4a554e">${esc(l.bdr || 'sem BDR mapeado')}</div>
+        </td>
+        <td class="p-1.5 text-right mono">${num(l.preco_usd)}</td>
+        <td class="p-1.5 text-right mono">${num(l.preco_brl)}</td>
+        <td class="p-1.5 text-right so-desktop">${pct(l.var_pct_usd)}</td>
+        <td class="p-1.5 text-right so-desktop">${pct(l.var_pct_brl)}</td>
+        <td class="p-1.5 text-right mono" style="color:var(--suave)">${num(l.preco_justo_brl)}</td>
+        <td class="p-1.5 text-right">${l.spread_pct != null ? pct(l.spread_pct) : '<span style="color:#4a554e">—</span>'}</td>
+        <td class="p-1.5 text-center text-[9px] font-bold ${l.confiavel ? 'sobe' : ''}"
+            title="${esc((l.alertas || []).join(' | '))}">${l.confiavel ? 'CONFIÁVEL' : 'VER ALERTA'}</td>
+      </tr>`).join('');
+
+    document.getElementById('bdrVerificadoEm').innerText = data.tabela_de_razoes_verificada_em || '—';
+  } catch (e) {
+    mostrarAviso('bdrAviso', `Não foi possível atualizar: ${esc(e.message || e)}`);
+  } finally {
+    btn.innerText = 'Atualizar BDR'; btn.disabled = false;
+  }
+}
+
 // ===================== inicialização =========================
 // Registra o service worker: é ele que permite instalar como app e faz a
 // casca abrir instantânea. Falhar aqui não pode derrubar a página — em http
@@ -2037,8 +2416,10 @@ const AF = (function () {
     credito_calcular:   'Score de crédito',
     opcoes_recomendar:  'Recomendação de estruturas',
     wealth_otimizar:    'Otimização de carteira',
+    bogle_rebalanceamento: 'Rebalanceamento Bogle',
   };
-  const LISTAS_CORTAVEIS = ['/renda-variavel/scanner', '/api/quant/scanner', '/wealth/fundos'];
+  const LISTAS_CORTAVEIS = ['/renda-variavel/scanner', '/api/quant/scanner', '/wealth/fundos',
+                           '/filosofias/barsi', '/filosofias/greenblatt', '/filosofias/bdr'];
 
   let estado = { autenticado: false, plano: 'free', email: null, cotas: {} };
   let modo = 'entrar';

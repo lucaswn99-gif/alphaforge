@@ -10,9 +10,11 @@ Dois submódulos novos, desacoplados do motor de ordens: `PhilosophyEngine`
 | `modules/filosofias.py` | `PhilosophyEngine` e `MotorMomentum`. |
 | `modules/bdr.py` | `GlobalEquitiesPanel`. |
 | `routers/filosofias.py` | As cinco rotas, com cache e corte por plano. |
-| `test_filosofias.py` | 119 verificações, todas com fontes falsas. |
+| `test_filosofias.py` | 136 verificações, todas com fontes falsas. |
 | `conferir_filosofias.py` | Roda os motores contra dado real e aponta contrato quebrado. |
 | `conferir_bdr.py` | Afere os fatores de paridade contra o preço de tela. |
+| `smoke_frontend.py` | Abre a aba Filosofias num Chromium headless e confere a renderização. |
+| `templates/index.html` | Aba "Filosofias", com sub-abas para Bogle, Barsi, Greenblatt e BDR. |
 
 Dependência nova: nenhuma. Tudo roda com o que o projeto já tem.
 
@@ -94,6 +96,21 @@ conservador**: reprova antes, nunca depois.
 clássico pede cinco anos de lucro; o campo `exercicios_com_lucro` diz quantos
 foram de fato verificados, para quem lê saber o peso do "passou".
 
+**Barsi — tendência de DPA é indicador, não filtro.** Cada papel aprovado ou
+reprovado carrega `tendencia_dpa`: classifica a trajetória do provento por
+ação nos últimos exercícios fechados como `crescente`, `estavel`,
+`decrescente` ou `nao_apurado`. A janela (`ANOS_TENDENCIA_DPA = 5`) é
+deliberadamente mais larga que a do preço teto (`ANOS_DPA = 3`) — três pontos
+bastam para uma média, não para dizer se o provento está subindo. Abaixo de
+`MINIMO_ANOS_TENDENCIA = 3` exercícios, ou com algum ano sem provento
+positivo na janela, a classificação vem `nao_apurado` em vez de arriscar um
+CAGR sobre base insuficiente. É puramente informativo: **não entra em
+`motivos_reprova` nem em `criterios_medidos`** — preço barato com provento em
+queda ainda pode ser barato, e quem decide isso é quem lê o ranking, não o
+motor por trás de um "aprovado" silencioso. O campo `consistencia`
+(`sempre_subiu` / `sempre_caiu` / `com_oscilacao`) mostra se o CAGR resume uma
+trajetória limpa ou um zigue-zague que só parece limpo no agregado.
+
 **Barsi — Basileia não é apurada.** Banco e seguradora não entram no teste de
 dívida/EBIT (captar recurso é matéria-prima deles, não alavancagem). O
 critério equivalente seria Basileia > 13%, que a base da CVM não publica. Eles
@@ -161,12 +178,12 @@ três consultas do dia sem nada ter sido calculado.
 ## Testes
 
 ```
-python test_filosofias.py       # 119 verificações, sem rede
+python test_filosofias.py       # 136 verificações, sem rede
 python conferir_filosofias.py   # os motores contra dado real
 python conferir_bdr.py          # os fatores de paridade contra o mercado
 ```
 
-119 verificações, sem rede. O que provam, além da aritmética: que o momentum
+136 verificações, sem rede. O que provam, além da aritmética: que o momentum
 pula mesmo o mês recente (série que sobe 30% e depois desaba tem que marcar
 +30%), que carteira em duas moedas é convertida antes de comparar, que banco
 não é reprovado por uma dívida/EBIT que não se aplica a ele, que razão de BDR
@@ -175,3 +192,46 @@ ressalva em vez de derrubar a varredura.
 
 O arquivo é pulado pelo `pytest` que guarda o deploy — ele sobe servidor no
 corpo do módulo e quebraria a coleta.
+
+`smoke_frontend.py` cobre a camada visual: sobe a API com motores falsos,
+abre um Chromium headless de verdade (Playwright) e navega pela aba
+Filosofias — Bogle, Barsi, Greenblatt e BDR — checando que cada sub-aba
+renderiza os dados esperados sem erro de execução em JS. Roda fora do
+`pytest` pelo mesmo motivo dos outros scripts de verificação: sobe servidor e
+navegador no corpo do módulo.
+
+```
+python smoke_frontend.py        # a aba Filosofias, num navegador de verdade
+```
+
+## Frontend — aba Filosofias
+
+`templates/index.html` ganhou uma aba nova, com quatro sub-abas — os quatro
+motores moram juntos porque fazem a mesma pergunta ("o que este critério diz
+sobre este ativo, com o quê medido e o quê não apurado"), e abas de primeiro
+nível para cada um empurraria o menu para fora da tela no celular:
+
+- **Bogle** — campos de posições e alvo (`TICKER:QUANTIDADE` /
+  `TICKER:PERCENTUAL`), banda de rebalanceamento, e a tabela de peso
+  atual × alvo × ação sugerida.
+- **Barsi** — tabela BESST com preço teto, margem de segurança, payout,
+  dívida/EBIT, o badge de **tendência de DPA** (verde para crescente, neutro
+  para estável, vermelho para decrescente, cinza para não apurado — com o
+  CAGR e o motivo no `title`) e o badge de momentum.
+- **Greenblatt** — ranking com posto combinado, EV/EBIT, ROIC, Shareholder
+  Yield e o mesmo badge de momentum (com aviso de "rebaixado" quando o
+  momentum penalizou o posto sem excluir o ativo).
+- **BDR × Ação** — o painel de paridade, com a data em que a tabela de
+  razões foi conferida e o selo "CONFIÁVEL" só quando a razão veio da tabela
+  e o BDR tem liquidez.
+
+Barsi, Greenblatt e BDR carregam sob demanda — só buscam na primeira vez que
+a sub-aba abre (`JA_CARREGADA`), porque são varreduras caras. Bogle nunca
+carrega sozinho: precisa da carteira de quem está olhando.
+
+As três rotas que o servidor pode cortar por plano (`/filosofias/barsi`,
+`/filosofias/greenblatt`, `/filosofias/bdr`) entraram em `LISTAS_CORTAVEIS`:
+a faixa "Gratuito … Ver tudo" que já existia para o scanner e o radar de
+fundos aparece aqui do mesmo jeito, sem código novo por rota. O Bogle ganhou
+entrada em `RECURSOS` (`bogle_rebalanceamento`) para o aviso de limite diário
+mostrar o nome certo em vez da chave crua.

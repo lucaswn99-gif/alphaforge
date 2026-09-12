@@ -118,6 +118,15 @@ DIVIDA_EBITDA_MAXIMA = 3.0
 ANOS_DPA = 3                     # Média dos três últimos exercícios fechados.
 BASILEIA_MINIMA = 13.0           # Documentado; ver `_alavancagem` sobre a fonte.
 
+# Tendência de DPA — janela deliberadamente mais larga que ANOS_DPA (que serve
+# a projeção do teto, não a leitura de trajetória: 3 pontos bastam pra média,
+# não pra dizer se o provento está subindo). Abaixo do mínimo, "tendência" não
+# é apurada — não existe reta confiável com dois pontos.
+ANOS_TENDENCIA_DPA = 5
+MINIMO_ANOS_TENDENCIA = 3
+CRESCIMENTO_DPA_MINIMO = 0.02    # CAGR acima disto: "crescente".
+QUEDA_DPA_MINIMA = -0.02        # CAGR abaixo disto: "decrescente". Entre os dois: "estavel".
+
 # Greenblatt
 SHAREHOLDER_YIELD_MINIMO = 5.0
 TOP_GREENBLATT = 20
@@ -425,6 +434,13 @@ class PhilosophyEngine:
                 "margem_seguranca_minima_pct": MARGEM_SEGURANCA_MINIMA * 100.0,
                 "anos_de_dpa": ANOS_DPA,
                 "basileia_minima_bancos": BASILEIA_MINIMA,
+                "tendencia_dpa": {
+                    "janela_anos": ANOS_TENDENCIA_DPA,
+                    "minimo_anos": MINIMO_ANOS_TENDENCIA,
+                    "cagr_crescimento_minimo_pct": CRESCIMENTO_DPA_MINIMO * 100.0,
+                    "cagr_queda_maxima_pct": QUEDA_DPA_MINIMA * 100.0,
+                    "observacao": "Informativo — não afeta aprovacao nem criterios_medidos.",
+                },
             },
             "aprovados": aprovados,
             "reprovados": reprovados,
@@ -439,8 +455,12 @@ class PhilosophyEngine:
         if preco is None:
             return None
 
-        dpa, anos_usados = self._dpa_projetado(simbolo)
+        dpa, anos_usados, fechados_dpa = self._dpa_projetado(simbolo)
         balanco = self._balanco_cvm(ticker)
+        tendencia = (_tendencia_dpa(fechados_dpa) if fechados_dpa else
+                    {"classificacao": "nao_apurado", "cagr_aa": None,
+                     "anos_considerados": 0, "consistencia": None,
+                     "motivo": "Sem histórico de proventos para apurar tendência."})
 
         motivos_reprova, nao_apurados = [], []
 
@@ -508,6 +528,7 @@ class PhilosophyEngine:
             "criterios_medidos": medidos,
             "divida_liquida_ebit": alavancagem,
             "exercicios_com_lucro": anos_lucro,
+            "tendencia_dpa": tendencia,
             "momentum": momento,
             "aprovado": not motivos_reprova,
             "motivos": motivos_reprova,
@@ -520,27 +541,32 @@ class PhilosophyEngine:
         O ano corrente fica de fora de propósito: em setembro ele tem só parte
         dos proventos, e incluí-lo derrubaria a média — produzindo um teto
         artificialmente baixo e um "caro" que é só calendário.
+
+        Devolve também o dicionário {ano: total} de exercícios fechados — a
+        mesma base que o preço teto usa (últimos ANOS_DPA anos), só que sem
+        cortar a janela, porque `_tendencia_dpa` precisa de mais pontos do que
+        a média projetada.
         """
         serie = self.fonte.dividendos(simbolo)
         if serie is None or not len(serie):
-            return None, 0
+            return None, 0, {}
 
         try:
             por_ano = serie.groupby(serie.index.year).sum()
         except Exception:  # noqa: BLE001
-            return None, 0
+            return None, 0, {}
 
         ano_corrente = datetime.now().year
         fechados = {ano: valor for ano, valor in por_ano.items() if ano < ano_corrente}
         if not fechados:
-            return None, 0
+            return None, 0, {}
 
         recentes = sorted(fechados)[-ANOS_DPA:]
         valores = [fontes.positivo(fechados[ano]) for ano in recentes]
         valores = [v for v in valores if v is not None]
         if not valores:
-            return None, 0
-        return sum(valores) / len(valores), len(valores)
+            return None, 0, fechados
+        return sum(valores) / len(valores), len(valores), fechados
 
     def _balanco_cvm(self, ticker):
         try:
@@ -835,6 +861,64 @@ class PhilosophyEngine:
 # --------------------------------------------------------------------------
 # Auxiliares
 # --------------------------------------------------------------------------
+
+def _tendencia_dpa(fechados):
+    """Classifica a trajetória do DPA nos exercícios fechados disponíveis.
+
+    Puramente informativo: não entra em `motivos_reprova` nem em
+    `criterios_medidos`. Preço barato com provento caindo ainda pode ser
+    barato — só que quem lê o ranking precisa ver essa trajetória para
+    decidir, não ter o motor decidindo por trás de um "aprovado".
+
+    CAGR pede pelo menos MINIMO_ANOS_TENDENCIA pontos **e** um valor inicial
+    positivo — sem isso vira estimar reta com dado insuficiente ou dividir
+    por algo que não é base de crescimento. Faltando qualquer um dos dois,
+    a classificação cai para "nao_apurado" em vez de arriscar um número em
+    que não se confia.
+    """
+    anos = sorted(fechados)
+    if len(anos) < MINIMO_ANOS_TENDENCIA:
+        return {"classificacao": "nao_apurado", "cagr_aa": None,
+                "anos_considerados": len(anos), "consistencia": None,
+                "motivo": (f"Histórico de {len(anos)} exercício(s) fechado(s) — "
+                          f"mínimo {MINIMO_ANOS_TENDENCIA} para apurar tendência.")}
+
+    janela = anos[-ANOS_TENDENCIA_DPA:]
+    valores = [fontes.positivo(fechados[ano]) for ano in janela]
+    if any(v is None for v in valores) or valores[0] <= 0:
+        return {"classificacao": "nao_apurado", "cagr_aa": None,
+                "anos_considerados": len(janela), "consistencia": None,
+                "motivo": "Algum exercício da janela sem provento positivo."}
+
+    subiu = [valores[i] > valores[i - 1] for i in range(1, len(valores))]
+    caiu = [valores[i] < valores[i - 1] for i in range(1, len(valores))]
+    if all(subiu):
+        consistencia = "sempre_subiu"
+    elif all(caiu):
+        consistencia = "sempre_caiu"
+    else:
+        consistencia = "com_oscilacao"
+
+    anos_decorridos = len(valores) - 1
+    cagr = (valores[-1] / valores[0]) ** (1.0 / anos_decorridos) - 1.0
+
+    if cagr > CRESCIMENTO_DPA_MINIMO:
+        classificacao = "crescente"
+    elif cagr < QUEDA_DPA_MINIMA:
+        classificacao = "decrescente"
+    else:
+        classificacao = "estavel"
+
+    return {
+        "classificacao": classificacao,
+        "cagr_aa": cagr,
+        "anos_considerados": len(valores),
+        "primeiro_ano": janela[0],
+        "ultimo_ano": janela[-1],
+        "consistencia": consistencia,
+        "motivo": None,
+    }
+
 
 def _ranquear(linhas, chave, maior_melhor, campo):
     """Atribui posto 1..N. Quem não tem o indicador vai para o fim.
