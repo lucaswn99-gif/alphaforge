@@ -9,12 +9,12 @@ Dois submódulos novos, desacoplados do motor de ordens: `PhilosophyEngine`
 | `modules/fontes.py` | Camada de dados injetável: Yahoo, SEC EDGAR, e o saneamento de todo número que entra. |
 | `modules/filosofias.py` | `PhilosophyEngine` e `MotorMomentum`. |
 | `modules/bdr.py` | `GlobalEquitiesPanel`. |
-| `routers/filosofias.py` | As cinco rotas, com cache e corte por plano. |
-| `test_filosofias.py` | 136 verificações, todas com fontes falsas. |
+| `routers/filosofias.py` | As seis rotas, com cache e corte por plano. |
+| `test_filosofias.py` | 159 verificações, todas com fontes falsas. |
 | `conferir_filosofias.py` | Roda os motores contra dado real e aponta contrato quebrado. |
 | `conferir_bdr.py` | Afere os fatores de paridade contra o preço de tela. |
 | `smoke_frontend.py` | Abre a aba Filosofias num Chromium headless e confere a renderização. |
-| `templates/index.html` | Aba "Filosofias", com sub-abas para Bogle, Barsi, Greenblatt e BDR. |
+| `templates/index.html` | Aba "Filosofias", com sub-abas para Bogle, Barsi, Graham, Greenblatt e BDR. |
 
 Dependência nova: nenhuma. Tudo roda com o que o projeto já tem.
 
@@ -24,6 +24,7 @@ Dependência nova: nenhuma. Tudo roda com o que o projeto já tem.
 |---|---|
 | `GET /filosofias/bogle?posicoes=VOO:10,WRLD11.SA:300` | Distância até o alvo e o ajuste que a fecha. |
 | `GET /filosofias/barsi` | Ranking BESST por preço teto e margem de segurança. |
+| `GET /filosofias/graham` | Os sete critérios do investidor defensivo, sobre o IBOV. |
 | `GET /filosofias/greenblatt` | Magic Formula com trava de Shareholder Yield. |
 | `GET /filosofias/bdr?ativos=AAPL,MSFT` | Paridade entre ação e BDR. |
 | `GET /filosofias/universos` | O que cada motor varre e com que critérios. |
@@ -70,6 +71,38 @@ não escolhe o alvo.
 ## Limitações declaradas
 
 Estão no código, e repetidas aqui porque mudam a leitura do resultado.
+
+**Graham — sete critérios, e o produto é o que decide os múltiplos.** P/L ≤ 15
+e P/VP ≤ 1,5 não são testados isoladamente quando os dois existem: o que
+reprova é o produto P/L × P/VP acima de 22,5. É o critério como Graham
+escreveu — ele admitia P/L de 18 se o P/VP compensasse. Testar os dois tetos
+separadamente endureceria o método em cima do autor, e reprovaria papel que
+ele aprovaria.
+
+**Graham — o Número de Graham não é "quanto a empresa vale".** √(22,5 × LPA ×
+VPA) é o preço em que o produto dos múltiplos bate exatamente o teto — o
+limite acima do qual o papel deixa de caber no critério. Chamar isso de valor
+intrínseco é o erro mais comum na leitura do método. A `margem_seguranca` é o
+desconto do preço sobre esse teto, não sobre um valuation.
+
+**Graham — três exercícios, não dez.** Graham pedia dez anos de lucro positivo
+e vinte de dividendo ininterrupto. A base da CVM cobre três exercícios. O
+motor não finge dez: mede o que tem e devolve `anos_apurados`. Crescimento de
+lucro medido em três anos é um critério **fraco** — e dizer isso é melhor que
+inventar histórico.
+
+**Graham — banco não é reprovado por liquidez corrente.** A DFP de instituição
+financeira não publica ativo e passivo circulante. Isso vira "não apurado",
+nunca reprovação — mesmo tratamento que dívida/EBIT recebe em Barsi. A trava é
+`MINIMO_CRITERIOS_GRAHAM`: pelo menos 4 dos 6 critérios verificáveis precisam
+ter saído como número, senão não há base para aprovar. Sem ela, banco passaria
+por ausência de dado.
+
+**Graham — a quantidade de ações é derivada, não publicada.** A DFP não traz o
+número de ações. Sai de lucro/LPA quando os dois vêm do mesmo demonstrativo
+(exato), e de valor de mercado/preço quando o LPA falta (**aproximado** para
+quem tem ON e PN, porque o valor de mercado cobre as duas classes e o preço é
+de uma só). O campo `origem_acoes` diz qual via foi usada.
 
 **Barsi — cobertura mínima de critérios.** Um papel só pode ser aprovado se
 pelo menos 2 dos 3 critérios de qualidade (payout, alavancagem, constância de
@@ -178,12 +211,12 @@ três consultas do dia sem nada ter sido calculado.
 ## Testes
 
 ```
-python test_filosofias.py       # 136 verificações, sem rede
+python test_filosofias.py       # 159 verificações, sem rede
 python conferir_filosofias.py   # os motores contra dado real
 python conferir_bdr.py          # os fatores de paridade contra o mercado
 ```
 
-136 verificações, sem rede. O que provam, além da aritmética: que o momentum
+159 verificações, sem rede. O que provam, além da aritmética: que o momentum
 pula mesmo o mês recente (série que sobe 30% e depois desaba tem que marcar
 +30%), que carteira em duas moedas é convertida antes de comparar, que banco
 não é reprovado por uma dívida/EBIT que não se aplica a ele, que razão de BDR

@@ -111,6 +111,12 @@ class FonteFalsa(fontes.FonteMercado):
         return self._contabeis.get(ticker, {})
 
 
+def perfil_simples(preco, valor_mercado, nome, setor=None):
+    """Perfil mínimo que o motor de Graham consome."""
+    return {"preco": preco, "valor_mercado": valor_mercado, "nome": nome,
+            "setor": setor, "moeda": "BRL", "volume": None}
+
+
 def principal():
     # ======================================================================
     print("\n[saneamento de número]")
@@ -438,6 +444,105 @@ def principal():
     cadastro_b3.cnpj_do_ticker = original_cnpj
     fundamentos_cvm.balanco_por_cnpj = original_balanco
     fundamentos_cvm.historico_por_cnpj = original_historico
+
+    # ======================================================================
+    print("\n[Graham — investidor defensivo]")
+    # Balanços desenhados para isolar um critério de cada vez. O ponto do
+    # método são os SETE critérios; testar só "passou/não passou" não prova
+    # que foi o critério certo que derrubou o papel.
+    BALANCOS_GRAHAM = {
+        "BOA3": {"ano": 2025, "denom_cia": "BOA SA", "receita_liquida": 5e9,
+                 "ativo_circulante": 5e9, "passivo_circulante": 2e9,
+                 "divida_longo_prazo": 1e9, "patrimonio_liquido": 10e9,
+                 "lucro_liquido": 1e9, "lpa_on": 1.0},
+        "CARA3": {"ano": 2025, "denom_cia": "CARA SA", "receita_liquida": 5e9,
+                  "ativo_circulante": 5e9, "passivo_circulante": 2e9,
+                  "divida_longo_prazo": 1e9, "patrimonio_liquido": 10e9,
+                  "lucro_liquido": 1e9, "lpa_on": 1.0},
+        "FRACA3": {"ano": 2025, "denom_cia": "FRACA SA", "receita_liquida": 2e8,
+                   "ativo_circulante": 1e9, "passivo_circulante": 9e8,
+                   "divida_longo_prazo": 5e9, "patrimonio_liquido": 1e9,
+                   "lucro_liquido": 1e8, "lpa_on": 0.1},
+        # Banco: a DFP não publica circulante. Tem que virar "não apurado",
+        # nunca reprovação — o mesmo tratamento que dívida/EBIT recebe em Barsi.
+        "BANCO3": {"ano": 2025, "denom_cia": "BANCO SA", "receita_liquida": 50e9,
+                   "ativo_circulante": None, "passivo_circulante": None,
+                   "divida_longo_prazo": None, "patrimonio_liquido": 100e9,
+                   "lucro_liquido": 20e9, "lpa_on": None},
+    }
+    HISTORICOS_GRAHAM = {
+        "BOA3": [6e8, 8e8, 1e9],
+        "CARA3": [6e8, 8e8, 1e9],
+        "FRACA3": [1e8, -2e7, 1e8],
+        "BANCO3": [18e9, 19e9, 20e9],
+    }
+
+    motor_g = filosofias.PhilosophyEngine(fonte=FonteFalsa(perfis={
+        "BOA3.SA": perfil_simples(8.0, 8e9, "Boa SA"),
+        "CARA3.SA": perfil_simples(40.0, 40e9, "Cara SA"),
+        "FRACA3.SA": perfil_simples(1.0, 1e9, "Fraca SA"),
+        "BANCO3.SA": perfil_simples(30.0, 150e9, "Banco SA"),
+    }))
+    motor_g._balanco_cvm = lambda t: BALANCOS_GRAHAM.get(t)
+    motor_g._historico_de_lucro = lambda t: (list(HISTORICOS_GRAHAM.get(t, [])),
+                                             len(HISTORICOS_GRAHAM.get(t, [])))
+
+    saida_g = motor_g.satelite_graham(universo=list(BALANCOS_GRAHAM),
+                                      aplicar_momentum=False)
+    linhas_g = {l["ticker"]: l for l in saida_g["aprovados"] + saida_g["reprovados"]}
+
+    checar("Graham: número = raiz de 22,5 x LPA x VPA",
+           perto(filosofias._numero_graham(5.0, 20.0), (22.5 * 5.0 * 20.0) ** 0.5))
+    checar("Graham: sem lucro positivo não há número",
+           filosofias._numero_graham(-1.0, 20.0) is None)
+
+    boa = linhas_g["BOA3"]
+    checar("Graham: LPA publicado na DFP vence o derivado", perto(boa["lpa"], 1.0), boa["lpa"])
+    checar("Graham: VPA sai de patrimônio / ações", perto(boa["vpa"], 10.0), boa["vpa"])
+    checar("Graham: P/L e P/VP batem", perto(boa["pl"], 8.0) and perto(boa["pvp"], 0.8),
+           (boa["pl"], boa["pvp"]))
+    checar("Graham: produto P/L x P/VP", perto(boa["produto_pl_pvp"], 6.4), boa["produto_pl_pvp"])
+    checar("Graham: liquidez corrente", perto(boa["liquidez_corrente"], 2.5))
+    checar("Graham: crescimento do lucro na janela",
+           perto(boa["crescimento_lucro_pct"], 200.0 / 3.0), boa["crescimento_lucro_pct"])
+    checar("Graham: empresa que cumpre os sete critérios é aprovada",
+           boa["aprovado"], boa["motivos"])
+    checar("Graham: margem de segurança positiva quando o preço está sob o número",
+           boa["margem_seguranca"] > 0, boa["margem_seguranca"])
+
+    cara = linhas_g["CARA3"]
+    checar("Graham: papel caro é reprovado", not cara["aprovado"])
+    # Graham admitia P/L > 15 se o P/VP compensasse. Reprovar pelos dois
+    # isolados endureceria o método em cima do autor.
+    checar("Graham: reprovação vem do produto, não dos múltiplos isolados",
+           any("P/L x P/VP" in m for m in cara["motivos"]), cara["motivos"])
+    checar("Graham: margem negativa quando o preço passa do número",
+           cara["margem_seguranca"] < 0, cara["margem_seguranca"])
+
+    fraca = linhas_g["FRACA3"]
+    checar("Graham: reprova por porte insuficiente",
+           any("Receita" in m for m in fraca["motivos"]), fraca["motivos"])
+    checar("Graham: reprova por liquidez corrente abaixo de 2x",
+           any("Liquidez" in m for m in fraca["motivos"]))
+    checar("Graham: reprova dívida longa acima do capital de giro",
+           any("capital de giro" in m for m in fraca["motivos"]))
+    checar("Graham: reprova prejuízo na janela apurada",
+           any("Prejuízo" in m for m in fraca["motivos"]))
+
+    banco = linhas_g["BANCO3"]
+    checar("Graham: banco sem circulante não é reprovado por liquidez",
+           banco["liquidez_corrente"] is None
+           and not any("Liquidez" in m for m in banco["motivos"]), banco["motivos"])
+    checar("Graham: ausência vira não apurado explícito",
+           any("liquidez" in n for n in banco["nao_apurados"]), banco["nao_apurados"])
+    checar("Graham: sem LPA na DFP, as ações saem do valor de mercado",
+           "valor de mercado" in (banco["origem_acoes"] or ""), banco["origem_acoes"])
+    checar("Graham: aprovação exige critérios MEDIDOS, não ausências",
+           banco["criterios_medidos"] < 6, banco["criterios_medidos"])
+    checar("Graham: a janela apurada viaja junto do veredito",
+           boa["anos_apurados"] == 3, boa["anos_apurados"])
+    checar("Graham: crescimento a partir de prejuízo não vira porcentagem",
+           filosofias.PhilosophyEngine._crescimento_de_lucro([-1e8, 1e8]) is None)
 
     # ======================================================================
     print("\n[Greenblatt — EUA]")

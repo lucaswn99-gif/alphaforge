@@ -131,6 +131,18 @@ def barsi(forcar: bool = Query(False, description="Ignora o cache de 15 minutos"
     return planos.cortar_barsi(resultado, ctx)
 
 
+@router.get("/graham")
+def graham(forcar: bool = Query(False, description="Ignora o cache de 15 minutos"),
+           ctx: planos.Contexto = Depends(planos.acesso())):
+    """Os sete critérios do investidor defensivo, sobre a carteira do IBOV.
+
+    Varredura cara como a de Barsi — cada papel pede preço, perfil e balanço —
+    e por isso vive no mesmo cache de quinze minutos.
+    """
+    resultado = _em_cache("graham", lambda: motor().satelite_graham(), forcar)
+    return planos.cortar_graham(resultado, ctx)
+
+
 @router.get("/greenblatt")
 def greenblatt(completo: bool = Query(False, description="Universo inteiro; leva minutos"),
                forcar: bool = Query(False, description="Ignora o cache de 15 minutos"),
@@ -198,6 +210,13 @@ def universos():
                       "margem_seguranca_minima_pct": filosofias.MARGEM_SEGURANCA_MINIMA * 100,
                       "tendencia_dpa_janela_anos": filosofias.ANOS_TENDENCIA_DPA,
                       "tendencia_dpa_minimo_anos": filosofias.MINIMO_ANOS_TENDENCIA},
+            "graham": {"receita_minima": filosofias.RECEITA_MINIMA_GRAHAM,
+                       "liquidez_corrente_minima": filosofias.LIQUIDEZ_CORRENTE_MINIMA,
+                       "crescimento_lucro_minimo_pct": filosofias.CRESCIMENTO_LUCRO_MINIMO,
+                       "pl_maximo": filosofias.PL_MAXIMO_GRAHAM,
+                       "pvp_maximo": filosofias.PVP_MAXIMO_GRAHAM,
+                       "produto_maximo": filosofias.PRODUTO_MAXIMO_GRAHAM,
+                       "minimo_criterios_medidos": filosofias.MINIMO_CRITERIOS_GRAHAM},
             "greenblatt": {"shareholder_yield_minimo_pct": filosofias.SHAREHOLDER_YIELD_MINIMO,
                            "top": filosofias.TOP_GREENBLATT},
             "momentum": {"janela_meses": filosofias.MESES_JANELA,

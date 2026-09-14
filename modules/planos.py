@@ -296,6 +296,24 @@ def cortar_barsi(payload, ctx: Contexto):
                    "de cada reprovação.")
 
 
+def cortar_graham(payload, ctx: Contexto):
+    """Graham: mesma lógica de Barsi — os aprovados instigam, o porquê é do
+    Premium. Aqui a lista de reprovados vale ainda mais: num método de sete
+    critérios, saber QUAL deles derrubou o papel é o método inteiro."""
+    if _e_premium(ctx) or not isinstance(payload, dict):
+        return payload
+    aprovados = payload.get("aprovados") or []
+    reprovados = payload.get("reprovados") or []
+    payload = dict(payload)
+    payload["aprovados"] = aprovados[:BARSI_FREE_LINHAS]
+    payload["reprovados"] = []
+    payload["reprovados_ocultos"] = len(reprovados)
+    return _marcar(payload, len(aprovados) + len(reprovados),
+                   len(payload["aprovados"]),
+                   "O plano gratuito mostra três aprovados e esconde qual "
+                   "critério reprovou cada papel.")
+
+
 def cortar_greenblatt(payload, ctx: Contexto):
     """Greenblatt: três do ranking, sem os descartados."""
     if _e_premium(ctx) or not isinstance(payload, dict):

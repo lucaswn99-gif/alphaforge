@@ -51,6 +51,29 @@ class MotorFalso:
             "ressalvas": [], "criterios": {},
         }
 
+    def satelite_graham(self, universo=None):
+        return {
+            "filosofia": "graham", "universo": "IBOV (b3)", "avaliados": 2,
+            "gerado_em_legivel": "14/09/2026 10:00",
+            "aprovados": [{
+                "ticker": "BOA3", "nome": "Boa SA", "preco": 8.0,
+                "numero_graham": 15.0, "margem_seguranca": 0.466,
+                "pl": 8.0, "pvp": 0.8, "produto_pl_pvp": 6.4,
+                "liquidez_corrente": 2.5, "criterios_medidos": 6,
+                "anos_apurados": 3, "aprovado": True, "motivos": [], "nao_apurados": [],
+            }],
+            "reprovados": [{
+                "ticker": "CARA3", "nome": "Cara SA", "preco": 40.0,
+                "numero_graham": 15.0, "margem_seguranca": -1.67,
+                "pl": 40.0, "pvp": 4.0, "produto_pl_pvp": 160.0,
+                "liquidez_corrente": 2.5, "criterios_medidos": 6,
+                "anos_apurados": 3, "aprovado": False,
+                "motivos": ["P/L x P/VP = 160.0 — teto 22.5 (P/L 40.0x, P/VP 4.00x)."],
+                "nao_apurados": [],
+            }],
+            "ressalvas": [], "criterios": {},
+        }
+
     def satelite_greenblatt(self, universo=None):
         return {
             "filosofia": "greenblatt",
@@ -172,6 +195,21 @@ if __name__ == "__main__":
         texto_barsi = page.inner_text("#tabelaBarsi")
         checar("Barsi mostra o ticker aprovado", "TAEE11" in texto_barsi)
         checar("Barsi mostra badge de tendência DPA", "DPA ↑" in texto_barsi, texto_barsi)
+
+        # -------- Graham --------
+        page.click("#btn-sub-graham")
+        page.wait_for_selector("#tabelaGraham tr", timeout=5000)
+        texto_graham = page.inner_text("#tabelaGraham")
+        checar("Graham renderizou aprovado + reprovado",
+               page.eval_on_selector_all("#tabelaGraham tr", "els => els.length") == 2,
+               texto_graham[:200])
+        checar("Graham mostra o papel aprovado", "BOA3" in texto_graham)
+        checar("Graham mostra o Número de Graham", "15" in texto_graham, texto_graham[:200])
+        checar("Graham mostra a cobertura de critérios", "6 de 6" in texto_graham, texto_graham[:200])
+        checar("Graham mostra o motivo da reprovação no veredito",
+               "P/L x P/VP" in texto_graham or "P/L" in texto_graham, texto_graham[:200])
+        checar("Graham resumo cita o universo", "IBOV" in page.inner_text("#grahamResumo"),
+               page.inner_text("#grahamResumo"))
 
         # -------- Greenblatt --------
         page.click("#btn-sub-greenblatt")

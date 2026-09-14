@@ -1,6 +1,6 @@
-"""Motor de filosofias de investimento: Bogle, Barsi e Greenblatt.
+"""Motor de filosofias de investimento: Bogle, Barsi, Graham e Greenblatt.
 
-Três escolas com horizontes e perguntas diferentes, num motor só porque
+Quatro escolas com horizontes e perguntas diferentes, num motor só porque
 compartilham a mesma exigência: transformar critério declarado em número
 auditável. Cada saída carrega **por que** um ativo passou ou não — lista que
 só diz "compre" não é analisável, e critério que ninguém vê não é critério.
@@ -30,7 +30,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from modules import cadastro_b3, fontes, fundamentos_cvm, taxas
+from modules import cadastro_b3, composicao_ibov, fontes, fundamentos_cvm, taxas
 
 registro = logging.getLogger(__name__)
 
@@ -126,6 +126,32 @@ ANOS_TENDENCIA_DPA = 5
 MINIMO_ANOS_TENDENCIA = 3
 CRESCIMENTO_DPA_MINIMO = 0.02    # CAGR acima disto: "crescente".
 QUEDA_DPA_MINIMA = -0.02        # CAGR abaixo disto: "decrescente". Entre os dois: "estavel".
+
+# Graham — o investidor defensivo de "O Investidor Inteligente", cap. 14.
+# Os sete critérios originais, com os dois ajustes que a realidade impõe:
+#
+#  - Porte: Graham pedia US$ 100 milhões de receita em 1973. Corrigir isso
+#    para hoje em dólar e converter daria falsa precisão; R$ 1 bilhão de
+#    receita líquida é o corte equivalente para a bolsa brasileira — exclui
+#    micro cap sem excluir empresa média de verdade.
+#  - Histórico: Graham exigia 10 anos de lucro e 20 de dividendo. A base da
+#    CVM deste projeto cobre três exercícios. O motor NÃO finge dez: mede o
+#    que tem, e devolve `anos_apurados` para quem lê saber o peso do "passou".
+#    Critério medido em janela curta é critério fraco — mas inventar histórico
+#    seria pior.
+RECEITA_MINIMA_GRAHAM = 1_000_000_000.0   # R$ 1 bi de receita líquida.
+LIQUIDEZ_CORRENTE_MINIMA = 2.0            # Ativo circulante / passivo circulante.
+CRESCIMENTO_LUCRO_MINIMO = 33.0           # +1/3 na janela apurada.
+PL_MAXIMO_GRAHAM = 15.0
+PVP_MAXIMO_GRAHAM = 1.5
+# O produto P/L x P/VP é o critério que Graham deixou como válvula: ele
+# admitia P/L acima de 15 se o P/VP compensasse, e vice-versa. 22,5 = 15 x 1,5.
+PRODUTO_MAXIMO_GRAHAM = 22.5
+# Quantos dos seis critérios verificáveis precisam ter saído como NÚMERO para
+# a ação poder ser aprovada. Mesma trava do MINIMO_CRITERIOS de Barsi: banco
+# não publica ativo circulante na DFP, e sem este piso ele seria aprovado por
+# ausência — "não apurado não conta contra" vira aprovação de graça.
+MINIMO_CRITERIOS_GRAHAM = 4
 
 # Greenblatt
 SHAREHOLDER_YIELD_MINIMO = 5.0
@@ -698,6 +724,250 @@ class PhilosophyEngine:
         lucros = [fontes.numero(linha.get("lucro_liquido")) for linha in linhas]
         return lucros, len([v for v in lucros if v is not None])
 
+    # --------------------------------------------------------------- Graham
+    def satelite_graham(self, universo=None, aplicar_momentum=True):
+        """Os sete critérios do investidor defensivo, sobre o IBOV.
+
+        Universo é a carteira do IBOV (ver `composicao_ibov`), não uma lista
+        curada: "porte adequado" já é um dos critérios de Graham, e o índice é
+        a definição de porte que o próprio mercado publica e rebalanceia.
+        """
+        tickers, origem_universo = self._universo_graham(universo)
+        aprovados, reprovados, ressalvas = [], [], []
+
+        for ticker in tickers:
+            try:
+                linha = self._avaliar_graham(ticker, aplicar_momentum)
+            except Exception as falha:  # noqa: BLE001
+                registro.exception("graham(%s)", ticker)
+                ressalvas.append({"ticker": ticker, "motivo": str(falha)[:200]})
+                continue
+            if linha is None:
+                ressalvas.append({"ticker": ticker,
+                                  "motivo": "Sem preço ou sem balanço na CVM."})
+                continue
+            (aprovados if linha["aprovado"] else reprovados).append(linha)
+
+        # Entre aprovados, o que manda é desconto sobre o valor intrínseco —
+        # é a margem de segurança, o conceito central do método.
+        aprovados.sort(key=lambda l: -(l["margem_seguranca"] if l["margem_seguranca"]
+                                       is not None else -9e9))
+        reprovados.sort(key=lambda l: l["ticker"])
+        return {
+            "filosofia": "graham",
+            "universo": origem_universo,
+            "avaliados": len(tickers),
+            "criterios": {
+                "receita_minima": RECEITA_MINIMA_GRAHAM,
+                "liquidez_corrente_minima": LIQUIDEZ_CORRENTE_MINIMA,
+                "crescimento_lucro_minimo_pct": CRESCIMENTO_LUCRO_MINIMO,
+                "pl_maximo": PL_MAXIMO_GRAHAM,
+                "pvp_maximo": PVP_MAXIMO_GRAHAM,
+                "produto_maximo": PRODUTO_MAXIMO_GRAHAM,
+                "minimo_criterios_medidos": MINIMO_CRITERIOS_GRAHAM,
+                "observacao": ("Graham pedia 10 anos de lucro e 20 de dividendo; "
+                               "a base da CVM cobre três exercícios. O campo "
+                               "anos_apurados diz sobre quantos o teste rodou."),
+            },
+            "aprovados": aprovados,
+            "reprovados": reprovados,
+            "ressalvas": ressalvas,
+            **_carimbo(),
+        }
+
+    @staticmethod
+    def _universo_graham(universo):
+        """(tickers, rótulo de origem). Lista explícita vence tudo."""
+        if universo:
+            return list(universo), "informado"
+        try:
+            codigos, origem, _ = composicao_ibov.obter_composicao()
+            return list(codigos), f"IBOV ({origem})"
+        except Exception:  # noqa: BLE001
+            registro.warning("composição do IBOV indisponível para o Graham")
+            return list(composicao_ibov.IBOV_FALLBACK), "IBOV (fallback)"
+
+    def _avaliar_graham(self, ticker, aplicar_momentum=True):
+        simbolo = f"{ticker}.SA"
+        perfil = self.fonte.perfil(simbolo) or {}
+        preco = fontes.positivo(perfil.get("preco"))
+        balanco = self._balanco_cvm(ticker)
+        if preco is None or not balanco:
+            return None
+
+        motivos_reprova, nao_apurados = [], []
+
+        acoes, origem_acoes = self._acoes_em_circulacao(
+            balanco, perfil.get("valor_mercado"), preco)
+        lpa = self._por_acao(balanco.get("lucro_liquido"), acoes,
+                             publicado=balanco.get("lpa_on"))
+        vpa = self._por_acao(balanco.get("patrimonio_liquido"), acoes)
+
+        # 1. Porte adequado.
+        receita = fontes.positivo(balanco.get("receita_liquida"))
+        if receita is None:
+            nao_apurados.append("porte (receita líquida não publicada)")
+        elif receita < RECEITA_MINIMA_GRAHAM:
+            motivos_reprova.append(
+                f"Receita de R$ {receita / 1e9:.2f} bi — mínimo "
+                f"R$ {RECEITA_MINIMA_GRAHAM / 1e9:.0f} bi.")
+
+        # 2. Liquidez corrente. Banco e seguradora não publicam circulante na
+        # DFP: para eles isto é ausência de dado, não reprovação.
+        circulante = fontes.positivo(balanco.get("ativo_circulante"))
+        passivo_circ = fontes.positivo(balanco.get("passivo_circulante"))
+        liquidez = (circulante / passivo_circ) if (circulante and passivo_circ) else None
+        if liquidez is None:
+            nao_apurados.append("liquidez corrente (circulante não publicado)")
+        elif liquidez < LIQUIDEZ_CORRENTE_MINIMA:
+            motivos_reprova.append(
+                f"Liquidez corrente de {liquidez:.2f}x — mínimo "
+                f"{LIQUIDEZ_CORRENTE_MINIMA:.1f}x.")
+
+        # 3. Dívida de longo prazo não pode passar do capital de giro.
+        capital_giro = ((circulante - passivo_circ)
+                        if (circulante is not None and passivo_circ is not None) else None)
+        divida_longa = fontes.positivo(balanco.get("divida_longo_prazo"))
+        if capital_giro is None or divida_longa is None:
+            nao_apurados.append("dívida longa sobre capital de giro")
+        elif capital_giro <= 0:
+            motivos_reprova.append("Capital de giro negativo.")
+        elif divida_longa > capital_giro:
+            motivos_reprova.append(
+                f"Dívida de longo prazo (R$ {divida_longa / 1e9:.2f} bi) maior que "
+                f"o capital de giro (R$ {capital_giro / 1e9:.2f} bi).")
+
+        # 4. Estabilidade: nenhum prejuízo na janela apurada.
+        lucros, anos_apurados = self._historico_de_lucro(ticker)
+        if not anos_apurados:
+            nao_apurados.append("estabilidade de lucro")
+        elif any(valor is not None and valor <= 0 for valor in lucros):
+            motivos_reprova.append(
+                f"Prejuízo em pelo menos um dos {anos_apurados} exercícios apurados.")
+
+        # 5. Crescimento do lucro na janela.
+        crescimento = self._crescimento_de_lucro(lucros)
+        if crescimento is None:
+            nao_apurados.append("crescimento de lucro")
+        elif crescimento < CRESCIMENTO_LUCRO_MINIMO:
+            motivos_reprova.append(
+                f"Lucro cresceu {crescimento:.0f}% em {anos_apurados} exercícios "
+                f"— mínimo {CRESCIMENTO_LUCRO_MINIMO:.0f}%.")
+
+        # 6 e 7. Múltiplos, e a válvula do produto.
+        pl = (preco / lpa) if (lpa and lpa > 0) else None
+        pvp = (preco / vpa) if (vpa and vpa > 0) else None
+        produto = (pl * pvp) if (pl and pvp) else None
+        if pl is None:
+            nao_apurados.append("P/L (sem lucro por ação positivo)")
+        if pvp is None:
+            nao_apurados.append("P/VP (sem patrimônio por ação)")
+        if produto is None:
+            if pl is not None and pl > PL_MAXIMO_GRAHAM:
+                motivos_reprova.append(
+                    f"P/L de {pl:.1f}x — teto {PL_MAXIMO_GRAHAM:.0f}x.")
+            if pvp is not None and pvp > PVP_MAXIMO_GRAHAM:
+                motivos_reprova.append(
+                    f"P/VP de {pvp:.2f}x — teto {PVP_MAXIMO_GRAHAM:.1f}x.")
+        elif produto > PRODUTO_MAXIMO_GRAHAM:
+            # Reprovar pelo produto, e não pelos dois isolados, é o critério
+            # como Graham escreveu: P/L de 18 com P/VP de 1,0 passa (18,0), e
+            # reprovar isso por causa do "teto de 15" seria endurecer o método
+            # em cima do autor.
+            motivos_reprova.append(
+                f"P/L x P/VP = {produto:.1f} — teto {PRODUTO_MAXIMO_GRAHAM:.1f} "
+                f"(P/L {pl:.1f}x, P/VP {pvp:.2f}x).")
+
+        # Número de Graham: o preço em que o produto bate exatamente 22,5.
+        numero = _numero_graham(lpa, vpa)
+        margem = ((numero - preco) / numero) if numero else None
+
+        momento = self.momentum.avaliar(simbolo) if aplicar_momentum else None
+        if momento and momento["veredito"] == "excluir":
+            motivos_reprova.append(momento["motivo"])
+
+        medidos = sum(1 for valor in (receita, liquidez, capital_giro,
+                                      anos_apurados or None, crescimento, produto)
+                      if valor is not None)
+        if medidos < MINIMO_CRITERIOS_GRAHAM:
+            motivos_reprova.append(
+                f"Apenas {medidos} de 6 critérios puderam ser medidos (mínimo "
+                f"{MINIMO_CRITERIOS_GRAHAM}) — sem base para aprovar.")
+
+        return {
+            "ticker": ticker,
+            "nome": perfil.get("nome") or balanco.get("denom_cia"),
+            "preco": preco,
+            "exercicio": balanco.get("ano"),
+            "receita_liquida": receita,
+            "liquidez_corrente": liquidez,
+            "capital_giro": capital_giro,
+            "divida_longo_prazo": divida_longa,
+            "anos_apurados": anos_apurados,
+            "crescimento_lucro_pct": crescimento,
+            "lpa": lpa,
+            "vpa": vpa,
+            "origem_acoes": origem_acoes,
+            "pl": pl,
+            "pvp": pvp,
+            "produto_pl_pvp": produto,
+            "numero_graham": numero,
+            "margem_seguranca": margem,
+            "criterios_medidos": medidos,
+            "momentum": momento,
+            "aprovado": not motivos_reprova,
+            "motivos": motivos_reprova,
+            "nao_apurados": nao_apurados,
+        }
+
+    @staticmethod
+    def _acoes_em_circulacao(balanco, valor_mercado, preco):
+        """(quantidade, origem). Duas vias, ambas aproximadas — e a origem diz
+        qual foi usada.
+
+        A DFP não publica quantidade de ações. Lucro/LPA é exato quando os
+        dois vêm do mesmo demonstrativo; valor de mercado/preço é o plano B, e
+        é aproximado para quem tem ON e PN, porque o valor de mercado cobre as
+        duas classes e o preço é de uma só.
+        """
+        lucro = fontes.numero(balanco.get("lucro_liquido"))
+        lpa = fontes.numero(balanco.get("lpa_on"))
+        if lucro and lpa:
+            acoes = lucro / lpa
+            if acoes > 0:
+                return acoes, "lucro/LPA (DFP)"
+
+        mercado = fontes.positivo(valor_mercado)
+        cotacao = fontes.positivo(preco)
+        if mercado and cotacao:
+            return mercado / cotacao, "valor de mercado/preço (aproximado)"
+        return None, None
+
+    @staticmethod
+    def _por_acao(total, acoes, publicado=None):
+        """Valor por ação. O publicado na DFP vence o derivado."""
+        valor_publicado = fontes.numero(publicado)
+        if valor_publicado is not None:
+            return valor_publicado
+        total = fontes.numero(total)
+        if total is None or not acoes:
+            return None
+        return total / acoes
+
+    @staticmethod
+    def _crescimento_de_lucro(lucros):
+        """Variação percentual do primeiro ao último exercício apurado.
+
+        None quando a série não permite a conta: menos de dois pontos, ou
+        lucro inicial não positivo — crescimento medido a partir de prejuízo
+        produz porcentagem sem significado (sair de -100 para +10 não é
+        "crescimento de 110%").
+        """
+        serie = [v for v in (lucros or []) if v is not None]
+        if len(serie) < 2 or serie[0] <= 0:
+            return None
+        return (serie[-1] - serie[0]) / serie[0] * 100.0
+
     # ----------------------------------------------------------- Greenblatt
     def satelite_greenblatt(self, universo=None, top=TOP_GREENBLATT,
                             aplicar_momentum=True):
@@ -918,6 +1188,24 @@ def _tendencia_dpa(fechados):
         "consistencia": consistencia,
         "motivo": None,
     }
+
+
+def _numero_graham(lpa, vpa):
+    """Valor intrínseco defensivo: raiz de 22,5 x LPA x VPA.
+
+    É o preço em que P/L x P/VP bate exatamente o teto de 22,5 — ou seja, o
+    limite acima do qual o papel deixa de caber no critério. Não é "quanto a
+    empresa vale": é o teto que os dois múltiplos, juntos, permitem pagar.
+
+    Sem lucro ou sem patrimônio positivo não existe número: prejuízo não tem
+    raiz quadrada com significado, e devolver zero seria afirmar que o papel
+    vale nada.
+    """
+    lpa = fontes.positivo(lpa)
+    vpa = fontes.positivo(vpa)
+    if not lpa or not vpa:
+        return None
+    return (PRODUTO_MAXIMO_GRAHAM * lpa * vpa) ** 0.5
 
 
 def _ranquear(linhas, chave, maior_melhor, campo):

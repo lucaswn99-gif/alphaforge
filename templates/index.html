@@ -841,6 +841,7 @@
       <div class="flex gap-2 flex-wrap mt-3">
         <button onclick="alternarSubAbaFilosofia('bogle')" id="btn-sub-bogle" class="aba aba-ativa">Bogle</button>
         <button onclick="alternarSubAbaFilosofia('barsi')" id="btn-sub-barsi" class="aba">Barsi</button>
+        <button onclick="alternarSubAbaFilosofia('graham')" id="btn-sub-graham" class="aba">Graham</button>
         <button onclick="alternarSubAbaFilosofia('greenblatt')" id="btn-sub-greenblatt" class="aba">Greenblatt</button>
         <button onclick="alternarSubAbaFilosofia('bdr')" id="btn-sub-bdr" class="aba">BDR × Ação</button>
       </div>
@@ -918,6 +919,38 @@
           <tbody id="tabelaBarsi" class="divide-y" style="border-color: var(--borda)"></tbody>
         </table></div>
         <p id="barsiRessalvas" class="text-[10px] mt-3" style="color: var(--ambar)"></p>
+      </div>
+    </div>
+
+    <!-- ---------- sub: Graham ---------- -->
+    <div id="sub-graham" class="hidden space-y-4">
+      <div class="painel p-4 flex justify-between items-center gap-3 flex-wrap">
+        <div>
+          <h3 class="rotulo">Investidor defensivo — Graham · IBOV</h3>
+          <p class="text-[11px] mt-1" id="grahamResumo" style="color: var(--suave)">—</p>
+        </div>
+        <button onclick="carregarGraham(true)" id="btnGraham" class="btn">Atualizar Graham</button>
+      </div>
+      <p id="grahamAviso" class="hidden text-xs rounded px-4 py-3 border"></p>
+      <div class="painel p-4">
+        <p class="text-[10px] mb-3" style="color: var(--suave)">
+          Sete critérios de <i>O Investidor Inteligente</i> (cap. 14). O <b>Número de Graham</b>
+          é √(22,5 × LPA × VPA) — o preço em que P/L × P/VP bate exatamente o teto de 22,5,
+          não uma estimativa de quanto a empresa vale. A margem é o desconto do preço sobre ele.
+        </p>
+        <div class="overflow-x-auto max-h-[520px] overflow-y-auto"><table class="w-full text-xs">
+          <thead class="sticky top-0" style="background: var(--painel)"><tr class="rotulo text-left">
+            <th class="p-1.5">Papel</th><th class="p-1.5 text-right">Preço</th>
+            <th class="p-1.5 text-right">Nº Graham</th><th class="p-1.5 text-right">Margem</th>
+            <th class="p-1.5 text-right so-desktop">P/L</th><th class="p-1.5 text-right so-desktop">P/VP</th>
+            <th class="p-1.5 text-right so-desktop">P/L × P/VP</th>
+            <th class="p-1.5 text-right so-desktop">Liq. corr.</th>
+            <th class="p-1.5 text-center so-desktop">Critérios</th>
+            <th class="p-1.5">Veredito</th>
+          </tr></thead>
+          <tbody id="tabelaGraham" class="divide-y" style="border-color: var(--borda)"></tbody>
+        </table></div>
+        <p id="grahamRessalvas" class="text-[10px] mt-3" style="color: var(--ambar)"></p>
       </div>
     </div>
 
@@ -2291,7 +2324,7 @@ async function otimizarPortfolio() {
 // critério diz sobre este ativo, com o quê medido e o quê não apurado") e
 // dividir em quatro abas de primeiro nível empurraria o menu para fora da
 // tela no celular.
-const SUBABAS_FILOSOFIA = ['bogle', 'barsi', 'greenblatt', 'bdr'];
+const SUBABAS_FILOSOFIA = ['bogle', 'barsi', 'graham', 'greenblatt', 'bdr'];
 
 function alternarSubAbaFilosofia(sub) {
   SUBABAS_FILOSOFIA.forEach(s => {
@@ -2303,6 +2336,7 @@ function alternarSubAbaFilosofia(sub) {
   // Carregamento tardio: Barsi e Greenblatt varrem dezenas de papéis cada.
   // Só busca na primeira vez que a sub-aba abre, não a cada troca de aba.
   if (sub === 'barsi' && !JA_CARREGADA.barsi) { JA_CARREGADA.barsi = true; carregarBarsi(false); }
+  if (sub === 'graham' && !JA_CARREGADA.graham) { JA_CARREGADA.graham = true; carregarGraham(false); }
   if (sub === 'greenblatt' && !JA_CARREGADA.greenblatt) { JA_CARREGADA.greenblatt = true; carregarGreenblatt(false); }
   if (sub === 'bdr' && !JA_CARREGADA.bdr) { JA_CARREGADA.bdr = true; carregarBDR(false); }
 }
@@ -2439,6 +2473,67 @@ async function carregarBarsi(forcar = false) {
 }
 
 // ------------------------------------------------------------ Greenblatt
+async function carregarGraham(forcar = false) {
+  const btn = document.getElementById('btnGraham');
+  btn.innerText = 'Atualizando…'; btn.disabled = true;
+  mostrarAviso('grahamAviso', '');
+  try {
+    const res = await fetch(`/filosofias/graham?forcar=${forcar ? 'true' : 'false'}`);
+    if (!res.ok) { mostrarAviso('grahamAviso', `O servidor respondeu ${res.status}.`); return; }
+    const data = await res.json();
+
+    const aprovados = data.aprovados || [];
+    const reprovados = data.reprovados || [];
+    const ocultos = data.reprovados_ocultos || 0;
+    const idade = Number(data.idade_segundos || 0);
+    const origem = data.cache ? `cache de ${Math.floor(idade / 60)} min — use "Atualizar" para refazer` : 'coleta ao vivo';
+    document.getElementById('grahamResumo').innerText =
+      `${aprovados.length} aprovado(s) de ${data.avaliados || 0} avaliados` +
+      (reprovados.length ? `, ${reprovados.length} reprovado(s)` : '') +
+      (ocultos ? `, ${ocultos} reprovado(s) oculto(s) no plano gratuito` : '') +
+      ` · universo ${esc(data.universo || 'IBOV')} · ${origem}`;
+
+    // A cobertura de critérios é coluna de primeira classe: "4 de 6" ao lado
+    // de um APROVADO diz que dois critérios não puderam ser medidos — sem
+    // isso, aprovação por dado ausente pareceria aprovação por mérito.
+    const linha = (l, aprovado) => `
+      <tr class="linha${aprovado ? '' : ' opacity-60'}">
+        <td class="p-1.5">
+          <div class="font-bold text-[12px]" style="color: var(--verde)">${esc(l.ticker)}</div>
+          <div class="text-[9px] truncate max-w-[130px]" style="color:#4a554e"
+               title="${esc(l.nome || '')}">${esc(l.nome || '')}</div>
+        </td>
+        <td class="p-1.5 text-right mono">${num(l.preco)}</td>
+        <td class="p-1.5 text-right mono" style="color:var(--suave)">${num(l.numero_graham)}</td>
+        <td class="p-1.5 text-right">${l.margem_seguranca != null ? pct(l.margem_seguranca * 100) : '<span style="color:#4a554e">—</span>'}</td>
+        <td class="p-1.5 text-right mono so-desktop">${num(l.pl, 1, 'x')}</td>
+        <td class="p-1.5 text-right mono so-desktop">${num(l.pvp, 2, 'x')}</td>
+        <td class="p-1.5 text-right mono so-desktop">${num(l.produto_pl_pvp, 1)}</td>
+        <td class="p-1.5 text-right mono so-desktop">${num(l.liquidez_corrente, 2, 'x')}</td>
+        <td class="p-1.5 text-center so-desktop">
+          <span class="text-[10px] mono" style="color:${l.criterios_medidos >= 6 ? 'var(--suave)' : 'var(--ambar)'}"
+                title="${esc((l.nao_apurados || []).join(' | ') || 'todos os critérios medidos')}">
+            ${l.criterios_medidos ?? '—'} de 6</span>
+        </td>
+        <td class="p-1.5 text-[10px] font-bold" style="color: ${aprovado ? 'var(--verde)' : 'var(--ambar)'}"
+            title="${esc((l.motivos || []).join(' | '))}">${
+              aprovado ? 'APROVADO' : esc((l.motivos && l.motivos[0]) || 'reprovado')}</td>
+      </tr>`;
+
+    document.getElementById('tabelaGraham').innerHTML =
+      (aprovados.map(l => linha(l, true)).join('') + reprovados.map(l => linha(l, false)).join(''))
+      || '<tr><td colspan="10" class="p-3 text-center text-[11px]" style="color:#4a554e">Nenhum papel do IBOV passou nos sete critérios. Isso é resultado, não erro — Graham reprova a maioria por construção.</td></tr>';
+
+    const ressalvas = data.ressalvas || [];
+    document.getElementById('grahamRessalvas').innerText = ressalvas.length
+      ? `${ressalvas.length} papel(is) sem dado suficiente: ${ressalvas.map(r => r.ticker).join(', ')}` : '';
+  } catch (e) {
+    mostrarAviso('grahamAviso', `Não foi possível atualizar: ${esc(e.message || e)}`);
+  } finally {
+    btn.innerText = 'Atualizar Graham'; btn.disabled = false;
+  }
+}
+
 async function carregarGreenblatt(forcar = false) {
   const btn = document.getElementById('btnGreenblatt');
   const completo = document.getElementById('greenblattCompleto').checked;
@@ -2670,7 +2765,7 @@ const AF = (function () {
     bogle_rebalanceamento: 'Rebalanceamento Bogle',
   };
   const LISTAS_CORTAVEIS = ['/renda-variavel/scanner', '/api/quant/scanner', '/wealth/fundos',
-                           '/filosofias/barsi', '/filosofias/greenblatt', '/filosofias/bdr'];
+                           '/filosofias/barsi', '/filosofias/graham', '/filosofias/greenblatt', '/filosofias/bdr'];
 
   let estado = { autenticado: false, plano: 'free', email: null, cotas: {} };
   let modo = 'entrar';
