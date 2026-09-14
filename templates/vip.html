@@ -264,6 +264,26 @@
       </div>
     </section>
 
+    <!-- Diagnóstico: o retrato do conjunto antes da lista. Quatro estados,
+         e o PESO importa mais que a contagem — três desconformidades em 2%
+         da carteira é problema diferente de uma em 40%. -->
+    <section id="painelDiagnostico" class="hidden painel p-5 entra" style="animation-delay:.03s">
+      <div class="flex items-start justify-between gap-3 flex-wrap mb-4">
+        <div>
+          <h2 class="rotulo">Diagnóstico da carteira</h2>
+          <p class="text-[10px] mt-1.5" style="color: #3d4a43" id="diagnosticoOrigem"></p>
+        </div>
+        <button class="btn-fantasma" id="btnDiagnostico" type="button">Reavaliar</button>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3" id="cartoesDiagnostico"></div>
+      <p class="text-[10px] mt-3.5 leading-relaxed" style="color: #3d4a43">
+        Ação é medida pelos sete critérios do investidor defensivo de Graham; FII, pelo
+        desconto sobre o valor patrimonial. <b>Preço alto não é desconformidade</b> —
+        papel caro pede esperar, papel que piorou pede rever a tese, e só o segundo
+        entra em desconformidade.
+      </p>
+    </section>
+
     <!-- Importação de planilha -->
     <section class="painel p-5 entra" style="animation-delay:.04s">
       <div class="flex items-start justify-between gap-3 flex-wrap mb-3.5">
@@ -370,6 +390,7 @@
               <th class="px-3 py-2.5 font-semibold text-right">Preço médio</th>
               <th class="px-3 py-2.5 font-semibold text-right">Custo</th>
               <th class="px-3 py-2.5 font-semibold text-right" style="min-width:110px">Peso</th>
+              <th class="px-3 py-2.5 font-semibold">Diagnóstico</th>
               <th class="px-5 py-2.5 font-semibold text-right">Ações</th>
             </tr>
           </thead>
@@ -500,6 +521,11 @@ async function carregar() {
       el.classList.remove('hidden');
     } else { el.classList.add('hidden'); }
     renderizar();
+    // O diagnóstico vem DEPOIS da tabela aparecer: ele consulta balanço de
+    // cada posição e demora, e segurar a carteira inteira esperando por ele
+    // deixaria a tela em branco por segundos sem necessidade.
+    if (POSICOES.length) carregarDiagnostico(false);
+    else { DIAGNOSTICO = {}; $('painelDiagnostico').classList.add('hidden'); }
   } catch (e) {
     aviso('avisoItem', `Falha ao carregar: ${esc(e.message || e)}`);
   }
@@ -535,6 +561,7 @@ function renderizar() {
         <div class="mono text-[11px]">${p.peso_pct == null ? '—' : p.peso_pct.toFixed(1) + '%'}</div>
         <div class="barra-peso mt-1 ml-auto" style="width: ${Math.max(2, Math.min(100, p.peso_pct || 0))}%"></div>
       </td>
+      <td class="px-3 py-3">${selo(DIAGNOSTICO[p.ticker])}</td>
       <td class="px-5 py-3 text-right whitespace-nowrap">
         ${editando
           ? `<button class="btn-fantasma" onclick="salvarEdicao('${esc(p.ticker)}')"
@@ -546,6 +573,67 @@ function renderizar() {
       </td>
     </tr>`; }).join('');
 }
+
+// ===================== diagnóstico =====================
+let DIAGNOSTICO = {};
+
+const CORES_ESTADO = {
+  conforme:    ['var(--verde)',    'rgba(0,229,122,.09)',  'rgba(0,229,122,.26)'],
+  atencao:     ['var(--ambar)',    'rgba(255,176,32,.09)', 'rgba(255,176,32,.26)'],
+  desconforme: ['var(--vermelho)', 'rgba(255,77,94,.09)',  'rgba(255,77,94,.26)'],
+  nao_apurado: ['#4a554e',         'rgba(120,135,127,.07)','rgba(120,135,127,.20)'],
+};
+
+function selo(d) {
+  if (!d) return '<span class="text-[10px]" style="color:#3d4a43">—</span>';
+  const [cor, fundo, borda] = CORES_ESTADO[d.estado] || CORES_ESTADO.nao_apurado;
+  // O motivo vai no title: a cor dá a leitura de relance, o texto sustenta.
+  // Estado sem o porquê é opinião, não diagnóstico.
+  return `<span class="text-[9px] font-bold px-2 py-1 rounded whitespace-nowrap"
+                style="color:${cor}; background:${fundo}; border:1px solid ${borda}"
+                title="${esc((d.metodo ? d.metodo + ' · ' : '') + (d.resumo || ''))}"
+          >${esc(d.rotulo || d.estado)}</span>`;
+}
+
+async function carregarDiagnostico(forcar = false) {
+  const btn = $('btnDiagnostico');
+  btn.disabled = true; btn.innerText = 'Avaliando…';
+  try {
+    const res = await fetch(`/api/v1/carteira/diagnostico?forcar=${forcar ? 'true' : 'false'}`);
+    if (!res.ok) { $('painelDiagnostico').classList.add('hidden'); return; }
+    const dados = await res.json();
+
+    DIAGNOSTICO = {};
+    (dados.posicoes || []).forEach((p) => { DIAGNOSTICO[p.ticker] = p.diagnostico; });
+
+    const ordem = ['desconforme', 'atencao', 'conforme', 'nao_apurado'];
+    const rotulos = dados.rotulos || {};
+    $('cartoesDiagnostico').innerHTML = ordem.map((estado) => {
+      const [cor, fundo, borda] = CORES_ESTADO[estado];
+      const quantas = (dados.resumo || {})[estado] || 0;
+      const peso = (dados.peso_por_estado || {})[estado] || 0;
+      return `
+        <div class="p-3.5 rounded" style="background:${fundo}; border:1px solid ${borda}">
+          <p class="text-[9px] font-bold uppercase tracking-wider" style="color:${cor}">
+            ${esc(rotulos[estado] || estado)}</p>
+          <p class="mono font-bold text-[22px] mt-1.5 leading-none" style="color:${quantas ? cor : '#2a332e'}">
+            ${quantas}</p>
+          <p class="text-[10px] mt-1.5" style="color: var(--suave)">
+            ${peso.toFixed(1)}% do custo</p>
+        </div>`;
+    }).join('');
+
+    $('diagnosticoOrigem').innerText = dados.cache
+      ? `${dados.avaliadas} posição(ões) · avaliação de ${Math.floor((dados.idade_segundos || 0) / 60)} min atrás`
+      : `${dados.avaliadas} posição(ões) · avaliadas agora`;
+    $('painelDiagnostico').classList.remove('hidden');
+    renderizar();
+  } catch (e) {
+    $('painelDiagnostico').classList.add('hidden');
+  } finally { btn.disabled = false; btn.innerText = 'Reavaliar'; }
+}
+
+$('btnDiagnostico').addEventListener('click', () => carregarDiagnostico(true));
 
 // ===================== importação de planilha =====================
 let PREVIA = [];

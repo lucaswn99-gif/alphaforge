@@ -831,6 +831,13 @@ class PhilosophyEngine:
             balanco, perfil.get("setor"))
 
         motivos_reprova, nao_apurados = [], []
+        # Reprovar por PREÇO e reprovar por QUALIDADE pedem ações opostas, e
+        # Graham faz as duas coisas com a mesma lista de motivos. "Está caro"
+        # é motivo para não aportar agora; "teve prejuízo" é motivo para rever
+        # a tese. O diagnóstico de carteira (modules/diagnostico.py) precisa
+        # distinguir os dois, e marcar aqui — na origem — é o único jeito que
+        # não quebra quando eu reescrever uma frase de mensagem.
+        alertas_qualidade = []
 
         acoes, origem_acoes = self._acoes_em_circulacao(
             balanco, perfil.get("valor_mercado"), preco)
@@ -866,19 +873,23 @@ class PhilosophyEngine:
         if capital_giro is None or divida_longa is None:
             nao_apurados.append("dívida longa sobre capital de giro")
         elif capital_giro <= 0:
-            motivos_reprova.append("Capital de giro negativo.")
+            motivo = "Capital de giro negativo."
+            motivos_reprova.append(motivo)
+            alertas_qualidade.append(motivo)
         elif divida_longa > capital_giro:
-            motivos_reprova.append(
-                f"Dívida de longo prazo (R$ {divida_longa / 1e9:.2f} bi) maior que "
-                f"o capital de giro (R$ {capital_giro / 1e9:.2f} bi).")
+            motivo = (f"Dívida de longo prazo (R$ {divida_longa / 1e9:.2f} bi) maior que "
+                      f"o capital de giro (R$ {capital_giro / 1e9:.2f} bi).")
+            motivos_reprova.append(motivo)
+            alertas_qualidade.append(motivo)
 
         # 4. Estabilidade: nenhum prejuízo na janela apurada.
         lucros, anos_apurados = self._historico_de_lucro(ticker)
         if not anos_apurados:
             nao_apurados.append("estabilidade de lucro")
         elif any(valor is not None and valor <= 0 for valor in lucros):
-            motivos_reprova.append(
-                f"Prejuízo em pelo menos um dos {anos_apurados} exercícios apurados.")
+            motivo = f"Prejuízo em pelo menos um dos {anos_apurados} exercícios apurados."
+            motivos_reprova.append(motivo)
+            alertas_qualidade.append(motivo)
 
         # 5. Crescimento do lucro na janela.
         crescimento = self._crescimento_de_lucro(lucros)
@@ -949,6 +960,12 @@ class PhilosophyEngine:
             "numero_graham": numero,
             "margem_seguranca": margem,
             "criterios_medidos": medidos,
+            # Subconjunto de `motivos` que indica DETERIORAÇÃO da empresa, e
+            # não preço alto. Liquidez corrente, porte e crescimento ficam de
+            # fora de propósito: são "não cabe no critério do defensivo", não
+            # "a empresa piorou" — e empresa brasileira raramente tem liquidez
+            # corrente de 2x, como a varredura do IBOV mostrou.
+            "alertas_qualidade": alertas_qualidade,
             "momentum": momento,
             "fora_do_escopo": fora_do_escopo,
             "motivo_escopo": motivo_escopo,

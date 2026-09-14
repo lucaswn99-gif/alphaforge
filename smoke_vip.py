@@ -20,6 +20,31 @@ contas.CAMINHO_BANCO = os.path.join(tempfile.mkdtemp(), "contas_smoke.db")
 import api
 import uvicorn
 
+# Motor falso: o diagnostico real consulta perfil no Yahoo, que o sandbox nao
+# alcanca. O que este smoke prova e a TELA — selo por linha, cartoes do
+# retrato e ordenacao —, nao a aritmetica de Graham, que tem cobertura
+# propria em test_filosofias.py.
+from routers import filosofias as rota_filosofias
+
+
+class MotorDeTeste:
+    def _avaliar_graham(self, ticker, aplicar_momentum=True):
+        alerta = "Prejuizo em pelo menos um dos 3 exercicios apurados."
+        base = {"ticker": ticker, "aprovado": False, "motivos": [],
+                "alertas_qualidade": [], "fora_do_escopo": False,
+                "motivo_escopo": None, "numero_graham": 20.0,
+                "margem_seguranca": 0.1, "criterios_medidos": 6}
+        if ticker == "PETR4":                       # deteriorou: desconformidade
+            base.update(motivos=[alerta], alertas_qualidade=[alerta])
+        elif ticker == "VALE3":                     # so caro: atencao
+            base.update(motivos=["P/L x P/VP = 44.6 - teto 22.5."])
+        else:
+            base.update(aprovado=True)
+        return base
+
+
+rota_filosofias.motor = lambda: MotorDeTeste()
+
 
 def rodar():
     uvicorn.run(api.app, host="127.0.0.1", port=8996, log_level="warning")
@@ -212,6 +237,32 @@ if __name__ == "__main__":
         checar("aviso diz quantas entraram",
                "importada" in pagina.inner_text("#avisoImportacao"),
                pagina.inner_text("#avisoImportacao"))
+
+        # -------- diagnóstico --------
+        pagina.wait_for_selector("#painelDiagnostico:not(.hidden)", timeout=10000)
+        cartoes = pagina.inner_text("#cartoesDiagnostico")
+        checar("painel de diagnóstico aparece", "Desconformidade" in cartoes, cartoes[:200])
+        checar("os quatro estados aparecem, não três",
+               all(r in cartoes for r in ("Desconformidade", "Atenção", "Conforme", "Não apurado")),
+               cartoes[:250])
+
+        tabela = pagina.inner_text("#tabelaPosicoes")
+        checar("selo de diagnóstico entra na linha",
+               "Desconformidade" in tabela or "Atenção" in tabela, tabela[:250])
+        # PETR4 deteriorou (prejuízo) -> desconformidade; VALE3 só está caro
+        # -> atenção. Confundir os dois mandaria vender no topo do que deu certo.
+        estado_petr = pagina.eval_on_selector(
+            "tr[data-ticker='PETR4'] td:nth-child(6) span", "el => el.innerText")
+        estado_vale = pagina.eval_on_selector(
+            "tr[data-ticker='VALE3'] td:nth-child(6) span", "el => el.innerText")
+        checar("papel que deteriorou vira Desconformidade",
+               estado_petr.strip() == "Desconformidade", estado_petr)
+        checar("papel só caro vira Atenção, não Desconformidade",
+               estado_vale.strip() == "Atenção", estado_vale)
+        estado_zzz = pagina.eval_on_selector(
+            "tr[data-ticker='ZZZZ3'] td:nth-child(6) span", "el => el.innerText")
+        checar("papel fora dos registros vira Não apurado",
+               estado_zzz.strip() == "Não apurado", estado_zzz)
 
         # -------- planilha em formato não aceito --------
         pagina.set_input_files("#arquivo", {

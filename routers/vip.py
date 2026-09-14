@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from modules import carteira, importacao, planos
+from modules import carteira, diagnostico, importacao, planos
 
 router = APIRouter(tags=["VIP & Carteira"])
 
@@ -157,6 +157,42 @@ def editar_item(ticker: str, item: ItemCarteira,
             "erro": "nao_encontrado",
             "motivo": f"{carteira.normalizar_ticker(ticker)} não está na carteira."})
     return {"posicao": linha}
+
+
+# O diagnóstico consulta perfil e balanço de cada posição — caro o bastante
+# para não repetir a cada clique. Quinze minutos, o mesmo TTL do resto do
+# projeto, por usuário (é a carteira dele que está sendo medida).
+_CACHE_TTL = 900
+_cache_diagnostico = {}
+
+
+@router.get("/api/v1/carteira/diagnostico")
+def diagnosticar_carteira(forcar: bool = False,
+                          ctx: planos.Contexto = Depends(_vip)):
+    """Cada posição medida contra a filosofia que cabe à classe dela.
+
+    Quatro estados, não três: `nao_apurado` existe para o que não deu para
+    medir, em vez de virar desconformidade — ver `modules/diagnostico.py`.
+    """
+    usuario_id = ctx.usuario["id"]
+    dados = carteira.listar(usuario_id)
+
+    # A chave inclui um carimbo das posições: mudou a carteira, o diagnóstico
+    # velho não vale mais, mesmo dentro dos quinze minutos.
+    assinatura = tuple(sorted((p["ticker"], p["quantidade"], p["preco_medio"])
+                              for p in dados["posicoes"]))
+    chave = (usuario_id, assinatura)
+
+    agora = time.time()
+    guardado = _cache_diagnostico.get(chave)
+    if guardado and not forcar and agora - guardado[0] < _CACHE_TTL:
+        return {**guardado[1], "cache": True,
+                "idade_segundos": int(agora - guardado[0])}
+
+    from routers import filosofias as rota_filosofias
+    resultado = diagnostico.diagnosticar(rota_filosofias.motor(), dados["posicoes"])
+    _cache_diagnostico[chave] = (time.time(), resultado)
+    return {**resultado, "cache": False, "idade_segundos": 0}
 
 
 class LinhaImportada(BaseModel):

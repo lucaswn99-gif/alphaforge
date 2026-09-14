@@ -479,3 +479,179 @@ class TestRotasDeImportacao(unittest.TestCase):
             "modo": "substituir",
             "linhas": [{"ticker": "PETR4", "quantidade": 1, "preco_medio": 1}]}).status_code, 402)
         self.assertEqual(self._enviar([["Papel", "Qtde", "PM"], ["PETR4", 1, 1]]).status_code, 402)
+
+
+# ==========================================================================
+# Diagnóstico da carteira
+# ==========================================================================
+
+class TestDiagnostico(unittest.TestCase):
+    """O que está sob teste aqui é a REGRA DE CLASSIFICAÇÃO, não a aritmética
+    de Graham — essa já tem cobertura em test_filosofias.py. O risco desta
+    camada é outro: rotular de "desconformidade crítica" um papel que só está
+    caro, ou um que a gente não conseguiu medir."""
+
+    @staticmethod
+    def _linha_graham(**campos):
+        base = {"ticker": "XPTO3", "aprovado": False, "motivos": [],
+                "alertas_qualidade": [], "fora_do_escopo": False,
+                "motivo_escopo": None, "numero_graham": 20.0,
+                "margem_seguranca": 0.1, "criterios_medidos": 6}
+        base.update(campos)
+        return base
+
+    def test_papel_que_cumpre_tudo_e_conforme(self):
+        from modules import diagnostico
+        estado, _, _ = diagnostico._veredito_acao(
+            self._linha_graham(aprovado=True))
+        self.assertEqual(estado, diagnostico.CONFORME)
+
+    def test_papel_caro_e_atencao_nao_desconformidade(self):
+        # É a distinção central do módulo: papel excelente que subiu demais
+        # pede ESPERAR, não reciclar. Tratar preço como desconformidade
+        # mandaria vender no topo do que deu certo.
+        from modules import diagnostico
+        estado, resumo, _ = diagnostico._veredito_acao(self._linha_graham(
+            motivos=["P/L x P/VP = 44.6 — teto 22.5 (P/L 15.7x, P/VP 2.83x)."]))
+        self.assertEqual(estado, diagnostico.ATENCAO)
+        self.assertIn("P/L", resumo)
+
+    def test_liquidez_corrente_baixa_e_atencao_nao_desconformidade(self):
+        # Empresa brasileira raramente tem liquidez corrente de 2x — a
+        # varredura do IBOV mostrou isso. Se isso virasse desconformidade, a
+        # carteira inteira apareceria vermelha e o sinal perderia o sentido.
+        from modules import diagnostico
+        estado, _, _ = diagnostico._veredito_acao(self._linha_graham(
+            motivos=["Liquidez corrente de 0.96x — mínimo 2.0x."]))
+        self.assertEqual(estado, diagnostico.ATENCAO)
+
+    def test_prejuizo_e_desconformidade(self):
+        from modules import diagnostico
+        alerta = "Prejuízo em pelo menos um dos 3 exercícios apurados."
+        estado, resumo, detalhes = diagnostico._veredito_acao(self._linha_graham(
+            motivos=[alerta], alertas_qualidade=[alerta]))
+        self.assertEqual(estado, diagnostico.DESCONFORME)
+        self.assertEqual(resumo, alerta)
+        self.assertEqual(detalhes, [alerta])
+
+    def test_divida_acima_do_capital_de_giro_e_desconformidade(self):
+        from modules import diagnostico
+        alerta = "Dívida de longo prazo (R$ 5.00 bi) maior que o capital de giro (R$ 1.00 bi)."
+        estado, _, _ = diagnostico._veredito_acao(self._linha_graham(
+            motivos=[alerta], alertas_qualidade=[alerta]))
+        self.assertEqual(estado, diagnostico.DESCONFORME)
+
+    def test_qualidade_vence_preco_quando_os_dois_reprovam(self):
+        from modules import diagnostico
+        alerta = "Capital de giro negativo."
+        estado, resumo, _ = diagnostico._veredito_acao(self._linha_graham(
+            motivos=["P/L x P/VP = 90.0 — teto 22.5.", alerta],
+            alertas_qualidade=[alerta]))
+        self.assertEqual(estado, diagnostico.DESCONFORME)
+        self.assertEqual(resumo, alerta)
+
+    def test_banco_fora_do_escopo_e_nao_apurado(self):
+        from modules import diagnostico
+        estado, resumo, _ = diagnostico._veredito_acao(self._linha_graham(
+            fora_do_escopo=True, motivo_escopo="Setor Financial Services: Graham..."))
+        self.assertEqual(estado, diagnostico.NAO_APURADO)
+        self.assertIn("Graham", resumo)
+
+    def test_sem_balanco_e_nao_apurado_nunca_desconformidade(self):
+        from modules import diagnostico
+        estado, _, _ = diagnostico._veredito_acao(None)
+        self.assertEqual(estado, diagnostico.NAO_APURADO)
+
+    def test_fii_com_desconto_e_conforme(self):
+        from modules import diagnostico
+        estado, resumo, _ = diagnostico._veredito_fii({"pvp": 0.85}, 100.0)
+        self.assertEqual(estado, diagnostico.CONFORME)
+        self.assertIn("0.85", resumo)
+
+    def test_fii_com_agio_e_atencao(self):
+        from modules import diagnostico
+        estado, _, _ = diagnostico._veredito_fii({"pvp": 1.30}, 100.0)
+        self.assertEqual(estado, diagnostico.ATENCAO)
+
+    def test_fii_sem_pvp_e_nao_apurado(self):
+        from modules import diagnostico
+        estado, _, _ = diagnostico._veredito_fii({"pvp": None}, 100.0)
+        self.assertEqual(estado, diagnostico.NAO_APURADO)
+
+    def test_etf_nao_e_medido_por_criterio_de_empresa(self):
+        from modules import diagnostico
+        veredito = diagnostico.avaliar_posicao(
+            None, {"ticker": "BOVA11", "classe": "etf", "preco_medio": 100.0})
+        self.assertEqual(veredito["estado"], diagnostico.NAO_APURADO)
+        self.assertIn("cesta de índice", veredito["resumo"])
+
+    def test_papel_desconhecido_nao_vira_desconformidade(self):
+        from modules import diagnostico
+        veredito = diagnostico.avaliar_posicao(
+            None, {"ticker": "ZZZZ3", "classe": "desconhecida", "preco_medio": 5.0})
+        self.assertEqual(veredito["estado"], diagnostico.NAO_APURADO)
+
+    def test_falha_da_fonte_vira_nao_apurado_e_nao_derruba(self):
+        from modules import diagnostico
+
+        class MotorQueExplode:
+            def _avaliar_graham(self, ticker, aplicar_momentum=True):
+                raise RuntimeError("Yahoo fora do ar")
+
+        veredito = diagnostico.avaliar_posicao(
+            MotorQueExplode(), {"ticker": "PETR4", "classe": "acao", "preco_medio": 30.0})
+        self.assertEqual(veredito["estado"], diagnostico.NAO_APURADO)
+        self.assertIn("Falha", veredito["resumo"])
+
+    def test_retrato_do_conjunto_pesa_por_custo_e_nao_por_contagem(self):
+        from modules import diagnostico
+
+        class MotorFalso:
+            def _avaliar_graham(self, ticker, aplicar_momentum=True):
+                alerta = "Prejuízo em pelo menos um dos 3 exercícios apurados."
+                if ticker == "RUIM3":
+                    return TestDiagnostico._linha_graham(
+                        ticker=ticker, motivos=[alerta], alertas_qualidade=[alerta])
+                return TestDiagnostico._linha_graham(ticker=ticker, aprovado=True)
+
+        posicoes = [
+            {"ticker": "BOA3", "classe": "acao", "preco_medio": 10.0, "custo_total": 9000.0},
+            {"ticker": "RUIM3", "classe": "acao", "preco_medio": 10.0, "custo_total": 1000.0},
+        ]
+        saida = diagnostico.diagnosticar(MotorFalso(), posicoes)
+
+        self.assertEqual(saida["resumo"][diagnostico.CONFORME], 1)
+        self.assertEqual(saida["resumo"][diagnostico.DESCONFORME], 1)
+        # Contagem empata 1 a 1; o peso é que conta a história.
+        self.assertAlmostEqual(saida["peso_por_estado"][diagnostico.DESCONFORME], 10.0)
+        self.assertAlmostEqual(saida["peso_por_estado"][diagnostico.CONFORME], 90.0)
+        # O que pede olhar primeiro vem primeiro.
+        self.assertEqual(saida["posicoes"][0]["ticker"], "RUIM3")
+
+    def test_carteira_vazia_nao_quebra(self):
+        from modules import diagnostico
+        saida = diagnostico.diagnosticar(None, [])
+        self.assertEqual(saida["avaliadas"], 0)
+        self.assertEqual(saida["custo_total"], 0.0)
+
+
+class TestRotaDiagnostico(unittest.TestCase):
+    def setUp(self):
+        _banco_limpo()
+        import api
+        self.cliente = TestClient(api.app)
+
+    def test_exige_premium(self):
+        self.cliente.post("/conta/registrar",
+                          json={"email": "diag-free@teste.com", "senha": "senha-boa-123"})
+        self.assertEqual(
+            self.cliente.get("/api/v1/carteira/diagnostico").status_code, 402)
+
+    def test_carteira_vazia_devolve_retrato_vazio(self):
+        self.cliente.post("/conta/registrar",
+                          json={"email": "diag@teste.com", "senha": "senha-boa-123"})
+        contas.definir_plano(
+            contas.autenticar("diag@teste.com", "senha-boa-123")["id"], "premium")
+        corpo = self.cliente.get("/api/v1/carteira/diagnostico").json()
+        self.assertEqual(corpo["avaliadas"], 0)
+        self.assertEqual(corpo["posicoes"], [])
