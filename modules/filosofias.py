@@ -1006,9 +1006,9 @@ class PhilosophyEngine:
         A DFP não publica quantidade de ações. As alternativas, da melhor para
         a pior:
 
-        * FCA — a companhia declara a quantidade por classe no Formulário
-          Cadastral. É a única que não é dedução, e a única que existe para
-          quem não publica LPA.
+        * FRE — a companhia declara a quantidade no Formulário de Referência
+          (item 17.1). É a única que não é dedução, e a única que existe
+          para quem não publica LPA.
         * Lucro/LPA — exato quando os dois saem do mesmo demonstrativo, mas é
           média ponderada do exercício, não saldo em data, e some sem LPA.
         * Valor de mercado/preço — plano C, aproximado para quem tem ON e PN,
@@ -1038,7 +1038,7 @@ class PhilosophyEngine:
                 declarado > fundamentos_cvm.DIVERGENCIA_MAXIMA_ACOES * deduzido
                 or deduzido > fundamentos_cvm.DIVERGENCIA_MAXIMA_ACOES * declarado)
             if not divergente:
-                return declarado, "quantidade declarada (FCA)"
+                return declarado, "quantidade declarada (FRE 17.1)"
 
         if deduzido:
             return deduzido, "lucro/LPA (DFP)"

@@ -1,10 +1,10 @@
 """Constrói a base de fundamentos a partir da DFP e do ITR da CVM.
 
-    python atualizar_fundamentos_cvm.py            # DFP + ITR + FCA
+    python atualizar_fundamentos_cvm.py            # DFP + ITR + FRE
     python atualizar_fundamentos_cvm.py 2024 2025  # esses anos, nas três fontes
     python atualizar_fundamentos_cvm.py --so-itr   # só o balanço trimestral
-    python atualizar_fundamentos_cvm.py --so-fca   # só a quantidade de ações
-    python atualizar_fundamentos_cvm.py --sem-itr --sem-fca   # como era antes
+    python atualizar_fundamentos_cvm.py --so-acoes   # só a quantidade de ações
+    python atualizar_fundamentos_cvm.py --sem-itr --sem-acoes   # como era antes
 
 Três fontes, três tabelas, por um motivo:
 
@@ -15,7 +15,7 @@ Três fontes, três tabelas, por um motivo:
   P/VP atual: sem ele o patrimônio usado no cálculo pode estar até quinze meses
   atrás do preço com que é dividido, o que faz o múltiplo divergir de qualquer
   fonte que acompanhe o trimestre.
-* `acoes_cia`, do FCA, é a quantidade de ações declarada pela companhia. É o
+* `acoes_cia`, do FRE, é a quantidade de ações declarada pela companhia. É o
   denominador do VPA. Sem ela a conta dependia de lucro/LPA, que some quando a
   companhia não publica LPA — e aí não havia P/VP nenhum.
 
@@ -53,7 +53,7 @@ import requests
 
 URL_DFP = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFP/DADOS/dfp_cia_aberta_{ano}.zip"
 URL_ITR = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/ITR/DADOS/itr_cia_aberta_{ano}.zip"
-URL_FCA = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/FCA/DADOS/fca_cia_aberta_{ano}.zip"
+URL_FRE = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/FRE/DADOS/fre_cia_aberta_{ano}.zip"
 BANCO = "fundamentos_cvm.db"
 TIMEOUT = 180
 TAMANHO_BLOCO = 200_000  # linhas por chunk: a DFP passa de 1 milhão
@@ -194,47 +194,68 @@ def baixar_zip_itr(ano):
     return _baixar(URL_ITR.format(ano=ano), f"ITR {ano}")
 
 
-def baixar_zip_fca(ano):
-    return _baixar(URL_FCA.format(ano=ano), f"FCA {ano}")
+def baixar_zip_fre(ano):
+    return _baixar(URL_FRE.format(ano=ano), f"FRE {ano}")
 
 
-# ---------------------------------------------------------------- FCA: ações
+# ---------------------------------------------------------------- FRE: ações
 #
-# Por que o FCA entra. O VPA era calculado com um número de ações DEDUZIDO:
+# Por que o FRE entra. O VPA era calculado com um número de ações DEDUZIDO:
 # lucro / LPA. Isso tem três defeitos, e os três aparecem no P/VP:
 #
 # * Companhia que não publica a conta 3.99.01.01 ficava sem P/VP NENHUM — não
 #   um P/VP velho, nenhum. Era a maior fonte de "não apurado" do radar.
 # * lucro/LPA dá a média ponderada do exercício. VPA é conceito de data: o que
-#   cabe ali é a quantidade em circulação no fechamento.
+#   cabe ali é a quantidade emitida no fechamento.
 # * Recompra e follow-on no meio do ano ficavam invisíveis.
 #
-# O FCA publica a quantidade por classe, declarada pela própria companhia.
+# Por que FRE e não FCA. O FCA é cadastral — auditor, endereço, escriturador,
+# DRI — e o único arquivo dele que fala de papel, `valor_mobiliario`, registra
+# ONDE cada ação negocia, sem quantidade nenhuma. Capital social é item 17.1 do
+# Anexo 24 da ICVM 480, e isso vive no FRE.
 #
-# O que ele NÃO desconta: ações em tesouraria. O total aqui é o emitido, então
-# o VPA sai levemente subestimado e o P/VP levemente superestimado. O erro é da
-# ordem de 1-2% do capital na maioria das companhias, e ele empurra para o lado
+# O que o total do 17.1 NÃO desconta: ações em tesouraria. É o emitido, então o
+# VPA sai levemente subestimado e o P/VP levemente superestimado. O erro é da
+# ordem de 1-2% do capital na maioria das companhias, e empurra para o lado
 # conservador — um papel nunca vai parecer mais barato do que é por causa disso.
 
-# O FCA não usa a mesma convenção de nome de coluna da DFP (CNPJ_CIA vira
+# A convenção de nome de coluna do FRE não é a da DFP (CNPJ_CIA vira
 # CNPJ_Companhia). Em vez de fixar uma grafia e quebrar quando ela mudar, o
 # cabeçalho real é normalizado e casado contra estes candidatos.
-COLUNAS_FCA = {
+#
+# NENHUM candidato tem "circulação" no nome, e isso é deliberado. No item 15.3
+# do mesmo formulário, "ações em circulação" significa FREE FLOAT — exclui
+# controlador e administração. Usar free float como denominador do VPA
+# encolheria a contagem em algo entre 30% e 80% conforme a companhia, inflaria
+# o patrimônio por ação na mesma proporção e faria papel de controle
+# concentrado aparecer como o mais barato do radar. É a mesma família de erro
+# do capital autorizado, e ela não dá exceção: dá um P/VP plausível e falso.
+COLUNAS_CAPITAL = {
     "cnpj": ("CNPJ_COMPANHIA", "CNPJ_CIA"),
     "data": ("DATA_REFERENCIA", "DT_REFER"),
     "versao": ("VERSAO",),
-    "nome": ("NOME_COMPANHIA", "DENOM_CIA"),
+    "nome": ("NOME_EMPRESARIAL", "NOME_COMPANHIA", "DENOM_CIA"),
     "tipo": ("TIPO_CAPITAL",),
-    "ordinarias": ("QUANTIDADE_ACOES_ORDINARIAS", "QUANTIDADE_ACOES_ORDINARIAS_CIRCULACAO"),
-    "preferenciais": ("QUANTIDADE_ACOES_PREFERENCIAIS",
-                      "QUANTIDADE_ACOES_PREFERENCIAIS_CIRCULACAO"),
-    "total": ("QUANTIDADE_TOTAL_ACOES", "QUANTIDADE_TOTAL_ACOES_CIRCULACAO",
-              "QUANTIDADE_ACOES", "QUANTIDADE_TOTAL"),
+    "ordinarias": ("QUANTIDADE_ACOES_ORDINARIAS",),
+    "preferenciais": ("QUANTIDADE_ACOES_PREFERENCIAIS",),
+    "total": ("QUANTIDADE_TOTAL_ACOES", "QUANTIDADE_ACOES"),
 }
 # Só cnpj e total são indispensáveis. Data, versão e tipo de capital melhoram o
 # desempate mas nem todo formulário os traz, e recusar o arquivo inteiro por
 # falta deles seria jogar fora a única fonte de quantidade de ações que existe.
-OBRIGATORIAS_FCA = ("cnpj", "total")
+OBRIGATORIAS_CAPITAL = ("cnpj", "total")
+
+# Arquivos do FRE que falam de capital mas NÃO respondem "quantas ações existem
+# hoje". Ficam de fora por nome, antes de qualquer tentativa de leitura:
+#
+# * distribuicao_capital (15.3) — free float, pelo motivo acima.
+# * aumento / reducao / desdobramento (17.2 a 17.4) — são EVENTOS, o delta de
+#   uma operação, não o saldo. Somar delta como se fosse saldo é absurdo.
+# * titulo_conversivel — ações que podem passar a existir, não que existem.
+# * classe_acao — quebra por classe; exigiria somar, e o arquivo base já traz
+#   o total consolidado.
+EXCLUIR_DO_CAPITAL = ("distribuicao", "circulacao", "aumento", "reducao",
+                      "desdobramento", "titulo_conversivel", "classe_acao")
 
 # Ordem de preferência do tipo de capital. Integralizado é o que foi de fato
 # pago; autorizado é apenas o teto do estatuto e NÃO entra em hipótese alguma —
@@ -244,7 +265,7 @@ TIPOS_CAPITAL = ("capital integralizado", "capital subscrito", "capital emitido"
 ACOES_MINIMO_PLAUSIVEL = 1_000.0
 
 
-def _mapear_colunas_fca(cabecalho):
+def _mapear_colunas_capital(cabecalho):
     """Cabeçalho real -> {papel: nome da coluna}. Devolve (mapa, faltando)."""
     presentes = {}
     for bruto in cabecalho.split(";"):
@@ -252,12 +273,12 @@ def _mapear_colunas_fca(cabecalho):
         presentes[_normalizar_texto(limpo).upper().replace(" ", "_")] = limpo
 
     mapa = {}
-    for papel, candidatos in COLUNAS_FCA.items():
+    for papel, candidatos in COLUNAS_CAPITAL.items():
         for candidato in candidatos:
             if candidato in presentes:
                 mapa[papel] = presentes[candidato]
                 break
-    faltando = [p for p in OBRIGATORIAS_FCA if p not in mapa]
+    faltando = [p for p in OBRIGATORIAS_CAPITAL if p not in mapa]
     return mapa, faltando
 
 
@@ -279,7 +300,7 @@ def _quantidade(bruto):
     return numero if numero >= ACOES_MINIMO_PLAUSIVEL else None
 
 
-def ler_acoes_fca(arquivo_zip, nome_csv):
+def ler_acoes_capital(arquivo_zip, nome_csv):
     """{cnpj: {data_ref, versao, ordinarias, preferenciais, total, nome}}.
 
     Fica com o registro de data mais recente, desempatando por versão. Entre
@@ -291,7 +312,7 @@ def ler_acoes_fca(arquivo_zip, nome_csv):
     try:
         with arquivo_zip.open(nome_csv) as fluxo:
             cabecalho = fluxo.readline().decode("iso-8859-1", errors="replace")
-        mapa, faltando = _mapear_colunas_fca(cabecalho)
+        mapa, faltando = _mapear_colunas_capital(cabecalho)
         if faltando:
             # Layout diferente do esperado. Imprime o que existe de verdade em
             # vez de seguir com colunas erradas: contagem de ações errada não
@@ -354,67 +375,72 @@ def ler_acoes_fca(arquivo_zip, nome_csv):
     return coletado
 
 
-def _csvs_candidatos_fca(arquivo_zip, ano):
-    """CSVs do FCA que podem trazer quantidade de ações, do mais provável ao menos.
+def _csvs_candidatos_capital(arquivo_zip, ano):
+    """CSVs do FRE que podem trazer quantidade de ações, do mais provável ao menos.
 
     O nome do arquivo dentro do ZIP não é estável entre versões do formulário,
-    e chutar um nome só custou uma coleta inteira. Aqui a lista do próprio ZIP
-    é que manda: primeiro os nomes que falam de capital, depois os que falam de
-    valor mobiliário, depois o principal do ano.
+    e chutar um nome custou uma coleta inteira. Aqui a lista do próprio ZIP é
+    que manda.
+
+    A exclusão vem ANTES da pontuação, e é o que importa nesta função. Vários
+    arquivos do FRE têm "capital" no nome e responderiam outra pergunta:
+    EXCLUIR_DO_CAPITAL diz quais, e por quê. Um deles — distribuição de capital
+    — passaria em todas as checagens de coluna e gravaria free float como se
+    fosse o total de ações.
     """
     nomes = [n for n in arquivo_zip.namelist() if n.lower().endswith(".csv")]
 
     def pontuar(nome):
-        baixo = _normalizar_texto(nome.rsplit("/", 1)[-1])
-        if "capital_social" in baixo or "capital social" in baixo:
+        baixo = _normalizar_texto(nome.rsplit("/", 1)[-1]).replace(" ", "_")
+        if any(veto in baixo for veto in EXCLUIR_DO_CAPITAL):
+            return 9
+        if "capital_social" in baixo:
             return 0
         if "capital" in baixo:
             return 1
-        if "valor_mobiliario" in baixo or "valor mobiliario" in baixo:
+        if baixo == f"fre_cia_aberta_{ano}.csv":
             return 2
-        if baixo == f"fca_cia_aberta_{ano}.csv":
-            return 3
         return 9
 
     pontuados = sorted(((pontuar(n), n) for n in nomes), key=lambda p: (p[0], p[1]))
     return [nome for ponto, nome in pontuados if ponto < 9], nomes
 
 
-def processar_fca(ano):
-    arquivo_zip = baixar_zip_fca(ano)
+def processar_capital(ano):
+    arquivo_zip = baixar_zip_fre(ano)
     if arquivo_zip is None:
         return {}
 
-    candidatos, todos = _csvs_candidatos_fca(arquivo_zip, ano)
+    candidatos, todos = _csvs_candidatos_capital(arquivo_zip, ano)
     if not candidatos:
-        print(f"   ! FCA {ano}: nenhum CSV com cara de capital social. "
+        print(f"   ! FRE {ano}: nenhum CSV com cara de capital social. "
               f"Arquivos no zip:")
         for nome in todos:
             print(f"       {nome}")
         return {}
 
     for nome in candidatos:
-        lido = ler_acoes_fca(arquivo_zip, nome)
+        lido = ler_acoes_capital(arquivo_zip, nome)
         if lido:
-            print(f"   FCA {ano}: {len(lido)} companhias com quantidade de ações "
+            print(f"   FRE {ano}: {len(lido)} companhias com quantidade de ações "
                   f"(de {nome})")
             return lido
 
-    print(f"   ! FCA {ano}: nenhum dos candidatos serviu. Arquivos no zip:")
+    print(f"   ! FRE {ano}: nenhum dos candidatos serviu. Arquivos no zip:")
     for nome in todos:
         print(f"       {nome}")
     return {}
 
 
-def listar_fca(ano):
-    """Despeja o conteúdo do ZIP do FCA e o cabeçalho de cada CSV.
+def listar_fre(ano):
+    """Despeja o conteúdo do ZIP do FRE e o cabeçalho de cada CSV.
 
-        python atualizar_fundamentos_cvm.py --listar-fca 2026
+        python atualizar_fundamentos_cvm.py --listar-fre 2026
 
     Existe para não voltar a adivinhar nome de arquivo nem de coluna: isto
     mostra o que a CVM publica de fato.
     """
-    arquivo_zip = baixar_zip_fca(ano)
+    arquivo_zip = baixar_zip_fre(ano)
     if arquivo_zip is None:
         return
     for nome in sorted(arquivo_zip.namelist()):
@@ -481,23 +507,23 @@ def relatorio_qualidade_acoes(banco=BANCO):
               AND f.lucro_liquido / f.lpa_on > 0
         """).fetchall()
     except sqlite3.Error as exc:
-        print(f"\n! não deu para cruzar FCA com DFP: {exc}")
+        print(f"\n! não deu para cruzar FRE com DFP: {exc}")
         conexao.close()
         return
     conexao.close()
 
     if not linhas:
-        print("\nFCA x LPA: nada para cruzar.")
+        print("\nFRE x LPA: nada para cruzar.")
         return
 
     fora = [(nome, declarado, deduzido) for nome, declarado, deduzido in linhas
             if declarado > 5.0 * deduzido or deduzido > 5.0 * declarado]
-    print(f"\nFCA x lucro/LPA — {len(linhas)} companhias cruzadas, "
+    print(f"\nFRE x lucro/LPA — {len(linhas)} companhias cruzadas, "
           f"{len(fora)} fora de proporção:")
     if not fora:
         print("   nenhuma  <-- esperado")
     for nome, declarado, deduzido in sorted(fora, key=lambda x: -x[1])[:15]:
-        print(f"   {(nome or '')[:30]:<30} FCA {declarado:>16,.0f}   "
+        print(f"   {(nome or '')[:30]:<30} FRE {declarado:>16,.0f}   "
               f"LPA {deduzido:>16,.0f}   <-- revisar")
 
 
@@ -983,11 +1009,11 @@ def coletar_itr(anos):
     relatorio_qualidade_itr()
 
 
-def coletar_fca(anos):
+def coletar_capital(anos):
     """Fica com a declaração mais recente de cada companhia entre os anos."""
     registros = {}
     for ano in sorted(anos):
-        for cnpj, valores in processar_fca(ano).items():
+        for cnpj, valores in processar_capital(ano).items():
             atual = registros.get(cnpj)
             if atual is None or (valores["data_ref"], valores["versao"]) >= \
                     (atual["data_ref"], atual["versao"]):
@@ -1045,13 +1071,13 @@ def inspecionar_itr(cnpj_alvo, ano):
                 print(f"   ! {type(exc).__name__}: {exc}")
 
 
-def main(anos, anos_itr=None, com_dfp=True, com_itr=True, com_fca=True):
+def main(anos, anos_itr=None, com_dfp=True, com_itr=True, com_acoes=True):
     if com_dfp:
         coletar_dfp(anos)
     if com_itr:
         coletar_itr(anos_itr or anos)
-    if com_fca:
-        coletar_fca(anos_itr or anos)
+    if com_acoes:
+        coletar_capital(anos_itr or anos)
 
 
 if __name__ == "__main__":
@@ -1077,10 +1103,10 @@ if __name__ == "__main__":
                         int(restante[1]) if len(restante) > 1 else atual)
         raise SystemExit(0)
 
-    if "--listar-fca" in sys.argv:
-        posicao = sys.argv.index("--listar-fca")
+    if "--listar-fre" in sys.argv:
+        posicao = sys.argv.index("--listar-fre")
         restante = [a for a in sys.argv[posicao + 1:] if a.isdigit()]
-        listar_fca(int(restante[0]) if restante else atual)
+        listar_fre(int(restante[0]) if restante else atual)
         raise SystemExit(0)
 
     argumentos = [a for a in sys.argv[1:] if a.isdigit()]
@@ -1096,23 +1122,23 @@ if __name__ == "__main__":
 
     so_itr = "--so-itr" in sys.argv
     sem_itr = "--sem-itr" in sys.argv
-    so_fca = "--so-fca" in sys.argv
-    sem_fca = "--sem-fca" in sys.argv
+    so_acoes = "--so-acoes" in sys.argv
+    sem_acoes = "--sem-acoes" in sys.argv
     if so_itr and sem_itr:
         raise SystemExit("--so-itr e --sem-itr se cancelam: escolha um.")
-    if so_fca and sem_fca:
-        raise SystemExit("--so-fca e --sem-fca se cancelam: escolha um.")
-    if so_itr and so_fca:
-        raise SystemExit("--so-itr e --so-fca se cancelam: escolha um.")
+    if so_acoes and sem_acoes:
+        raise SystemExit("--so-acoes e --sem-acoes se cancelam: escolha um.")
+    if so_itr and so_acoes:
+        raise SystemExit("--so-itr e --so-acoes se cancelam: escolha um.")
 
-    com_dfp = not (so_itr or so_fca)
-    com_itr = not (sem_itr or so_fca)
-    com_fca = not (sem_fca or so_itr)
+    com_dfp = not (so_itr or so_acoes)
+    com_itr = not (sem_itr or so_acoes)
+    com_acoes = not (sem_acoes or so_itr)
 
     if com_dfp:
         print(f"Exercícios (DFP): {anos_alvo}")
     if com_itr:
         print(f"Trimestres (ITR): {anos_itr_alvo}")
-    if com_fca:
-        print(f"Ações (FCA):      {anos_itr_alvo}")
-    main(anos_alvo, anos_itr_alvo, com_dfp=com_dfp, com_itr=com_itr, com_fca=com_fca)
+    if com_acoes:
+        print(f"Ações (FRE):      {anos_itr_alvo}")
+    main(anos_alvo, anos_itr_alvo, com_dfp=com_dfp, com_itr=com_itr, com_acoes=com_acoes)

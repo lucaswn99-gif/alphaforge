@@ -43,9 +43,9 @@ PVP_MAXIMO_PLAUSIVEL = 100.0
 # é descartado e vale a DFP, que é auditada.
 VARIACAO_MAXIMA_PATRIMONIO = 3.0
 
-# Quanto a quantidade de ações declarada no FCA pode divergir da deduzida de
+# Quanto a quantidade de ações declarada no FRE pode divergir da deduzida de
 # lucro/LPA antes de uma das duas ser considerada errada. As duas medem coisas
-# ligeiramente diferentes — o FCA é o emitido numa data, lucro/LPA é a média
+# ligeiramente diferentes — o FRE é o emitido numa data, lucro/LPA é a média
 # ponderada do exercício — então divergência pequena é esperada e não é erro.
 # Ordem de grandeza diferente é coluna trocada, e o sintoma seria um VPA
 # deslocado por um fator de dez, que produz um P/VP plausível e falso.
@@ -188,7 +188,7 @@ def base_acoes_disponivel(banco=None):
 
 
 def acoes_por_cnpj(cnpj, banco=None):
-    """Quantidade de ações declarada no FCA, ou None."""
+    """Quantidade de ações declarada no FRE, ou None."""
     if not cnpj:
         return None
     with _lock:
@@ -303,11 +303,11 @@ def _acoes_em_circulacao(balanco, registro_acoes):
 
     Duas fontes, nesta ordem:
 
-    * `fca` — a quantidade que a companhia declarou no Formulário Cadastral.
+    * `fre` — a quantidade que a companhia declarou no Formulário de Referência (item 17.1).
       É o que cabe no VPA, que é conceito de data, e existe mesmo para quem
       não publica LPA.
     * `lpa` — lucro / LPA, a dedução que era a única fonte até aqui. Continua
-      como segunda opção, porque nem toda companhia aparece no FCA.
+      como segunda opção, porque nem toda companhia aparece no FRE.
 
     Quando as duas existem e discordam por ordem de grandeza, a declarada é
     recusada e vale a deduzida: lucro e LPA saem do mesmo demonstrativo
@@ -328,12 +328,12 @@ def _acoes_em_circulacao(balanco, registro_acoes):
     if declarado is None:
         return deduzido, ("lpa" if deduzido else None)
     if deduzido is None:
-        return declarado, "fca"
+        return declarado, "fre"
 
     if (declarado > DIVERGENCIA_MAXIMA_ACOES * deduzido
             or deduzido > DIVERGENCIA_MAXIMA_ACOES * declarado):
         return deduzido, "lpa"
-    return declarado, "fca"
+    return declarado, "fre"
 
 
 def multiplos_do_ticker(ticker, preco=None, banco=None, caminho_cadastro=None):
@@ -344,7 +344,7 @@ def multiplos_do_ticker(ticker, preco=None, banco=None, caminho_cadastro=None):
 
     `patrimonio_origem` e `patrimonio_data` dizem de que documento saiu o
     denominador do P/VP: "dfp" para exercício fechado, "itr" para trimestre.
-    `acoes_origem` diz de onde veio a quantidade de ações: "fca" quando a
+    `acoes_origem` diz de onde veio a quantidade de ações: "fre" quando a
     companhia declarou, "lpa" quando foi deduzida de lucro/LPA. Os três viajam
     junto para a tela poder declarar a procedência, como já faz com o
     exercício — um múltiplo sem data é um múltiplo que não dá para conferir.

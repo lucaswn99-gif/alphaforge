@@ -857,36 +857,36 @@ class TestPvpComItr(unittest.TestCase):
         self.assertEqual(m["patrimonio_origem"], "dfp")
 
 
-CABECALHO_FCA = ("CNPJ_Companhia;Data_Referencia;Versao;Nome_Companhia;"
+CABECALHO_CAPITAL = ("CNPJ_Companhia;Data_Referencia;Versao;Nome_Companhia;"
                  "Tipo_Capital;Quantidade_Acoes_Ordinarias;"
                  "Quantidade_Acoes_Preferenciais;Quantidade_Total_Acoes")
 
 
-def _linha_fca(tipo="Capital Integralizado", total="4550000000",
+def _linha_capital(tipo="Capital Integralizado", total="4550000000",
                on="4550000000", pn="0", data="2026-05-30", versao=3,
                cnpj=CNPJ_VALE, nome="VALE S.A."):
     return f"{cnpj};{data};{versao};{nome};{tipo};{on};{pn};{total}"
 
 
-def _zip_fca(ano, linhas, cabecalho=CABECALHO_FCA):
+def _zip_capital(ano, linhas, cabecalho=CABECALHO_CAPITAL):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as arquivo:
-        arquivo.writestr(f"fca_cia_aberta_capital_social_{ano}.csv",
+        arquivo.writestr(f"fre_cia_aberta_capital_social_{ano}.csv",
                          ("\n".join([cabecalho] + linhas) + "\n").encode("iso-8859-1"))
     buffer.seek(0)
     return zipfile.ZipFile(buffer)
 
 
-class TestColetorFca(unittest.TestCase):
+class TestColetorCapital(unittest.TestCase):
     """Quantidade de ações declarada: parsing, escolha de registro e recusas."""
 
-    def _ler(self, linhas, cabecalho=CABECALHO_FCA):
-        arquivo = _zip_fca(2026, linhas, cabecalho)
-        return coletor.ler_acoes_fca(
-            arquivo, "fca_cia_aberta_capital_social_2026.csv")
+    def _ler(self, linhas, cabecalho=CABECALHO_CAPITAL):
+        arquivo = _zip_capital(2026, linhas, cabecalho)
+        return coletor.ler_acoes_capital(
+            arquivo, "fre_cia_aberta_capital_social_2026.csv")
 
     def test_le_a_quantidade_declarada(self):
-        lido = self._ler([_linha_fca()])
+        lido = self._ler([_linha_capital()])
         self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
         self.assertEqual(lido[CNPJ_VALE]["ordinarias"], 4.55e9)
         self.assertEqual(lido[CNPJ_VALE]["data_ref"], "2026-05-30")
@@ -895,34 +895,34 @@ class TestColetorFca(unittest.TestCase):
         """Autorizado é o teto do estatuto. Usá-lo infla as ações e esvazia o
         VPA — a companhia apareceria barata por causa de um número que não
         corresponde a ação nenhuma emitida."""
-        lido = self._ler([_linha_fca(tipo="Capital Autorizado", total="9000000000")])
+        lido = self._ler([_linha_capital(tipo="Capital Autorizado", total="9000000000")])
         self.assertEqual(lido, {})
 
     def test_integralizado_vence_subscrito_na_mesma_data(self):
         lido = self._ler([
-            _linha_fca(tipo="Capital Subscrito", total="5000000000"),
-            _linha_fca(tipo="Capital Integralizado", total="4550000000"),
+            _linha_capital(tipo="Capital Subscrito", total="5000000000"),
+            _linha_capital(tipo="Capital Integralizado", total="4550000000"),
         ])
         self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
 
     def test_ordem_no_arquivo_nao_decide(self):
         lido = self._ler([
-            _linha_fca(tipo="Capital Integralizado", total="4550000000"),
-            _linha_fca(tipo="Capital Subscrito", total="5000000000"),
+            _linha_capital(tipo="Capital Integralizado", total="4550000000"),
+            _linha_capital(tipo="Capital Subscrito", total="5000000000"),
         ])
         self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
 
     def test_declaracao_mais_recente_vence(self):
         lido = self._ler([
-            _linha_fca(total="4000000000", data="2025-05-30", versao=1),
-            _linha_fca(total="4550000000", data="2026-05-30", versao=1),
+            _linha_capital(total="4000000000", data="2025-05-30", versao=1),
+            _linha_capital(total="4550000000", data="2026-05-30", versao=1),
         ])
         self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
 
     def test_versao_maior_vence_na_mesma_data(self):
         lido = self._ler([
-            _linha_fca(total="4000000000", versao=1),
-            _linha_fca(total="4550000000", versao=2),
+            _linha_capital(total="4000000000", versao=1),
+            _linha_capital(total="4550000000", versao=2),
         ])
         self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
 
@@ -932,7 +932,7 @@ class TestColetorFca(unittest.TestCase):
         cabecalho = ("CNPJ_CIA;DT_REFER;VERSAO;DENOM_CIA;Tipo Capital;"
                      "Quantidade Ações Ordinárias;Quantidade Ações Preferenciais;"
                      "Quantidade Total Ações")
-        lido = self._ler([_linha_fca()], cabecalho=cabecalho)
+        lido = self._ler([_linha_capital()], cabecalho=cabecalho)
         self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
 
     def test_coluna_obrigatoria_ausente_devolve_vazio(self):
@@ -1024,7 +1024,7 @@ class TestAcoesNoVpa(unittest.TestCase):
         self._gravar_acoes(4.55e9)
         m = self._multiplos()
         self.assertTrue(fundamentos_cvm.base_acoes_disponivel(self.banco))
-        self.assertEqual(m["acoes_origem"], "fca")
+        self.assertEqual(m["acoes_origem"], "fre")
         self.assertEqual(m["acoes"], 4.55e9)
         self.assertAlmostEqual(m["pvp"], self.PRECO / (self.PL_DFP / 4.55e9), places=6)
 
@@ -1037,7 +1037,7 @@ class TestAcoesNoVpa(unittest.TestCase):
 
         self._gravar_acoes(4.55e9)
         com = self._multiplos()
-        self.assertEqual(com["acoes_origem"], "fca")
+        self.assertEqual(com["acoes_origem"], "fre")
         self.assertAlmostEqual(com["pvp"], self.PRECO / (self.PL_DFP / 4.55e9), places=6)
         self.assertIsNone(com["pl"], "P/L sem LPA continua não apurado")
 
@@ -1063,9 +1063,9 @@ class TestAcoesNoVpa(unittest.TestCase):
         self._gravar_dfp()
         self._gravar_acoes(5.0e9)
         m = self._multiplos()
-        self.assertEqual(m["acoes_origem"], "fca")
+        self.assertEqual(m["acoes_origem"], "fre")
 
-    def test_companhia_fora_do_fca_cai_para_a_deduzida(self):
+    def test_companhia_fora_do_fre_cai_para_a_deduzida(self):
         self._gravar_dfp()
         self._gravar_acoes(1e9, cnpj="11222333000144")
         m = self._multiplos()
@@ -1085,7 +1085,7 @@ class TestAcoesNoVpa(unittest.TestCase):
         self.assertIsNone(m["vpa"])
         self.assertIsNone(m["acoes"])
 
-    def test_itr_e_fca_se_combinam(self):
+    def test_itr_e_fre_se_combinam(self):
         """Patrimônio do trimestre sobre ações declaradas: as duas correções
         juntas, que é o caso normal depois da coleta completa."""
         self._gravar_dfp()
@@ -1095,12 +1095,12 @@ class TestAcoesNoVpa(unittest.TestCase):
         self._gravar_acoes(4.55e9)
         m = self._multiplos()
         self.assertEqual(m["patrimonio_origem"], "itr")
-        self.assertEqual(m["acoes_origem"], "fca")
+        self.assertEqual(m["acoes_origem"], "fre")
         self.assertAlmostEqual(m["pvp"], self.PRECO / (2.2e11 / 4.55e9), places=6)
 
 
-class TestDescobertaDoCsvFca(unittest.TestCase):
-    """O nome do CSV dentro do ZIP do FCA não é estável entre versões do
+class TestDescobertaDoCsvCapital(unittest.TestCase):
+    """O nome do CSV dentro do ZIP do FRE não é estável entre versões do
     formulário. Chutar um nome custou uma coleta inteira; agora a lista do
     próprio ZIP é que decide."""
 
@@ -1113,21 +1113,42 @@ class TestDescobertaDoCsvFca(unittest.TestCase):
         buffer.seek(0)
         return zipfile.ZipFile(buffer)
 
-    def test_capital_social_vem_antes_dos_outros(self):
-        arquivo = self._zipar({
-            "fca_cia_aberta_2026.csv": "a;b\n1;2\n",
-            "fca_cia_aberta_endereco_2026.csv": "a;b\n1;2\n",
-            "fca_cia_aberta_capital_social_2026.csv": "a;b\n1;2\n",
-            "fca_cia_aberta_valor_mobiliario_2026.csv": "a;b\n1;2\n",
-        })
-        candidatos, _ = coletor._csvs_candidatos_fca(arquivo, 2026)
-        self.assertTrue(candidatos[0].endswith("capital_social_2026.csv"), candidatos)
-        self.assertTrue(candidatos[1].endswith("valor_mobiliario_2026.csv"), candidatos)
-        self.assertEqual(candidatos[2], "fca_cia_aberta_2026.csv")
+    LAYOUT_FRE = {
+        "fre_cia_aberta_2026.csv": "a;b\n1;2\n",
+        "fre_cia_aberta_endereco_2026.csv": "a;b\n1;2\n",
+        "fre_cia_aberta_capital_social_2026.csv": "a;b\n1;2\n",
+        "fre_cia_aberta_capital_social_classe_acao_2026.csv": "a;b\n1;2\n",
+        "fre_cia_aberta_capital_social_aumento_2026.csv": "a;b\n1;2\n",
+        "fre_cia_aberta_capital_social_reducao_2026.csv": "a;b\n1;2\n",
+        "fre_cia_aberta_capital_social_desdobramento_2026.csv": "a;b\n1;2\n",
+        "fre_cia_aberta_distribuicao_capital_2026.csv": "a;b\n1;2\n",
+    }
+
+    def test_capital_social_vem_primeiro(self):
+        candidatos, _ = coletor._csvs_candidatos_capital(
+            self._zipar(self.LAYOUT_FRE), 2026)
+        self.assertEqual(candidatos[0], "fre_cia_aberta_capital_social_2026.csv")
+
+    def test_distribuicao_de_capital_e_vetada(self):
+        """Free float como denominador do VPA encolheria a contagem e faria
+        papel de controle concentrado parecer o mais barato do radar. Este
+        arquivo passaria em toda checagem de coluna — tem que cair pelo nome."""
+        candidatos, _ = coletor._csvs_candidatos_capital(
+            self._zipar(self.LAYOUT_FRE), 2026)
+        self.assertFalse(any("distribuicao" in c for c in candidatos), candidatos)
+
+    def test_eventos_de_capital_sao_vetados(self):
+        """Aumento, redução e desdobramento são o DELTA de uma operação, não o
+        saldo. Somar delta como saldo é absurdo."""
+        candidatos, _ = coletor._csvs_candidatos_capital(
+            self._zipar(self.LAYOUT_FRE), 2026)
+        for evento in ("aumento", "reducao", "desdobramento", "classe_acao"):
+            self.assertFalse(any(evento in c for c in candidatos),
+                             f"{evento} não devia ser candidato: {candidatos}")
 
     def test_arquivo_sem_relacao_fica_de_fora(self):
-        arquivo = self._zipar({"fca_cia_aberta_endereco_2026.csv": "a;b\n1;2\n"})
-        candidatos, todos = coletor._csvs_candidatos_fca(arquivo, 2026)
+        arquivo = self._zipar({"fre_cia_aberta_endereco_2026.csv": "a;b\n1;2\n"})
+        candidatos, todos = coletor._csvs_candidatos_capital(arquivo, 2026)
         self.assertEqual(candidatos, [])
         self.assertEqual(len(todos), 1, "a lista completa volta para o diagnóstico")
 
@@ -1135,20 +1156,49 @@ class TestDescobertaDoCsvFca(unittest.TestCase):
         """Só CNPJ e quantidade são indispensáveis: recusar o arquivo por falta
         de tipo jogaria fora a única fonte de quantidade que existe."""
         cabecalho = "CNPJ_Companhia;Data_Referencia;Quantidade_Total_Acoes"
-        arquivo = self._zipar({"fca_cia_aberta_capital_social_2026.csv":
+        arquivo = self._zipar({"fre_cia_aberta_capital_social_2026.csv":
                                f"{cabecalho}\n{CNPJ_VALE};2026-05-30;4550000000\n"})
-        lido = coletor.ler_acoes_fca(arquivo, "fca_cia_aberta_capital_social_2026.csv")
+        lido = coletor.ler_acoes_capital(arquivo, "fre_cia_aberta_capital_social_2026.csv")
         self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
 
     def test_nome_alternativo_da_coluna_de_quantidade(self):
         cabecalho = ("CNPJ_Companhia;Data_Referencia;Tipo_Capital;"
-                     "Quantidade_Total_Acoes_Circulacao")
-        arquivo = self._zipar({"fca_cia_aberta_capital_social_2026.csv":
+                     "Quantidade_Acoes")
+        arquivo = self._zipar({"fre_cia_aberta_capital_social_2026.csv":
                                f"{cabecalho}\n{CNPJ_VALE};2026-05-30;"
                                f"Capital Integralizado;4550000000\n"})
-        lido = coletor.ler_acoes_fca(arquivo, "fca_cia_aberta_capital_social_2026.csv")
+        lido = coletor.ler_acoes_capital(arquivo, "fre_cia_aberta_capital_social_2026.csv")
         self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
 
+
+
+class TestColunaDeCirculacaoNaoEhTotal(unittest.TestCase):
+    """Segunda trava, no nível da coluna.
+
+    O veto por nome de arquivo já derruba `distribuicao_capital`. Esta checa a
+    outra metade: se um arquivo qualquer trouxer uma coluna de "ações em
+    circulação", ela NÃO pode ser aceita como total de ações. Free float não é
+    capital emitido, e confundir os dois infla o VPA entre 30% e 80%.
+    """
+
+    def test_circulacao_nao_esta_entre_os_candidatos_de_total(self):
+        for papel, candidatos in coletor.COLUNAS_CAPITAL.items():
+            for candidato in candidatos:
+                self.assertNotIn("CIRCULACAO", candidato,
+                                 f"{papel}: {candidato} é free float, não emitido")
+
+    def test_arquivo_so_com_circulacao_e_recusado(self):
+        cabecalho = ("CNPJ_Companhia;Data_Referencia;"
+                     "Quantidade_Total_Acoes_Circulacao")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as arquivo:
+            arquivo.writestr(
+                "fre_cia_aberta_capital_social_2026.csv",
+                (f"{cabecalho}\n{CNPJ_VALE};2026-05-30;1200000000\n").encode("iso-8859-1"))
+        buffer.seek(0)
+        lido = coletor.ler_acoes_capital(
+            zipfile.ZipFile(buffer), "fre_cia_aberta_capital_social_2026.csv")
+        self.assertEqual(lido, {}, "free float não pode virar total de ações")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
