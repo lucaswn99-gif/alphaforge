@@ -18,23 +18,25 @@ import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, Depends, Query
 
-from modules import composicao_ifix, fundamentos_fii, identidade, otimizador, planos, taxas
+from modules import (composicao_ifix, fundamentos_fii, identidade, otimizador,
+                     planos, segmentos_fii, taxas)
 from routers.equity import (_adicionar_sufixo_b3, carimbo_de_coleta, dy_da_serie,
                             fatiar_precos, normalizar_dy, raio_x_10_anos)
 
 router = APIRouter(prefix="/wealth", tags=["Gestão de Patrimônio & Fundos"])
 
-# Estas duas listas agora são só a CLASSIFICAÇÃO conhecida (tijolo/papel) de
-# FIIs curados manualmente — não mais o universo inteiro do radar. O universo
-# vem de `composicao_ifix.obter_composicao()` (o índice IFIX ao vivo, com
-# cache e fallback — mesmo desenho de `composicao_ibov` para o IBOV). Qualquer
-# FII do IFIX que não esteja em nenhuma das duas cai em "outros" — ainda
-# avaliado com o mesmo motor de P/VP e DY, só sem o rótulo de segmento, que a
-# gente não tem como inferir só pelo ticker.
-FIIS_TIJOLO = ["HGLG11", "BTLG11", "XPML11", "VISC11", "ALZR11",
-               "KNRI11", "VILG11", "MALL11", "PVBI11", "BRCR11"]
-FIIS_PAPEL = ["KNIP11", "KNCR11", "IRDM11", "CPTS11", "MXRF11",
-              "HGCR11", "MCCI11", "RECR11", "CVBI11", "VRTA11"]
+# Fonte única da classificação: `modules/segmentos_fii.py`. Estas listas eram
+# escritas à mão aqui e viviam divergindo do que a tela mostrava; agora são
+# derivadas, e corrigir um segmento é editar um lugar só (ou o
+# `segmentos_fii_manual.json`, que vence a lista embutida).
+#
+# O UNIVERSO do radar não vem daqui — vem de `composicao_ifix` (o IFIX ao
+# vivo, com cache e fallback). Estas listas só dizem em qual quadro cada
+# fundo aparece. O que o IFIX traz e ninguém classificou entra em "outros",
+# avaliado pelo mesmo motor, só sem rótulo de segmento.
+FIIS_TIJOLO = segmentos_fii.tickers_do_segmento(segmentos_fii.TIJOLO)
+FIIS_PAPEL = segmentos_fii.tickers_do_segmento(segmentos_fii.PAPEL)
+FIIS_FOF = segmentos_fii.tickers_do_segmento(segmentos_fii.FOF)
 ETFS_B3 = ["BOVA11", "IVVB11", "SMAL11", "NASD11", "HASH11",
            "DIVO11", "SPXI11", "GOLD11", "XINA11", "BINA11"]
 
@@ -170,9 +172,12 @@ def _montar_fiis(tickers, df_precos, fundamentos):
 
         recomendacao, racional = _recomendacao_fii(pvp)
 
+        segmento = segmentos_fii.segmento_do_ticker(ticker)
         linhas.append({
             "ticker": ticker,
             "nome": dados.get("nome") or ticker,
+            "segmento": segmento,
+            "segmento_rotulo": segmentos_fii.rotulo(segmento),
             "preco": round(preco, 2),
             "pvp": round(pvp, 2) if pvp is not None else None,
             "dy": round(dy, 2) if dy is not None else None,
@@ -229,17 +234,20 @@ def radar_fundos(forcar_ifix: bool = Query(False),
 
     O universo de FIIs vem do IFIX ao vivo (`composicao_ifix`), não mais de
     duas listas fixas de 10 — ver o comentário de `FIIS_TIJOLO`/`FIIS_PAPEL`
-    acima. Quem já está classificado nessas duas listas entra em `tijolo`/
-    `papel`; o resto do IFIX entra em `outros`, avaliado do mesmo jeito.
+    acima. Quem está classificado em `modules/segmentos_fii.py` entra no
+    quadro do seu segmento; o resto do IFIX entra em `outros`, avaliado do
+    mesmo jeito. `todos_fiis` na resposta é a lista completa com o campo
+    `segmento` em cada linha — é dela que a pesquisa de FIIs da tela filtra,
+    sem precisar de uma segunda requisição.
     """
     codigos_ifix, origem_ifix, idade_ifix = composicao_ifix.obter_composicao(forcar=forcar_ifix)
 
-    classificados = set(FIIS_TIJOLO) | set(FIIS_PAPEL)
+    classificados = set(FIIS_TIJOLO) | set(FIIS_PAPEL) | set(FIIS_FOF)
     outros_tickers = [t for t in codigos_ifix if t not in classificados]
     # Os curados sempre entram, mesmo se o B3/cache/fallback do IFIX não os
     # trouxer agora (rebalanceamento do índice, ou instabilidade da fonte) —
     # eles são o piso de qualidade que o radar tinha antes desta mudança.
-    todos_fiis = list(dict.fromkeys(FIIS_TIJOLO + FIIS_PAPEL + outros_tickers))
+    todos_fiis = list(dict.fromkeys(FIIS_TIJOLO + FIIS_PAPEL + FIIS_FOF + outros_tickers))
 
     df_fiis = _baixar_precos(todos_fiis)
     df_etfs = _baixar_precos(ETFS_B3)
@@ -258,10 +266,11 @@ def radar_fundos(forcar_ifix: bool = Query(False),
 
     tijolo = _montar_fiis(FIIS_TIJOLO, df_fiis, fundamentos)
     papel = _montar_fiis(FIIS_PAPEL, df_fiis, fundamentos)
+    fof = _montar_fiis(FIIS_FOF, df_fiis, fundamentos)
     outros = _montar_fiis(outros_tickers, df_fiis, fundamentos)
     etfs = _montar_etfs(df_etfs)
 
-    todos_montados = tijolo + papel + outros
+    todos_montados = tijolo + papel + fof + outros
     # Alerta: lista curta e ordenada por desconto, pra não exigir que o
     # usuário garimpe a tabela inteira atrás de oportunidade.
     alertas_desconto = sorted(
@@ -273,8 +282,13 @@ def radar_fundos(forcar_ifix: bool = Query(False),
         **carimbo_de_coleta(),
         "tijolo": tijolo,
         "papel": papel,
+        "fof": fof,
         "outros": outros,
         "etfs": etfs,
+        # A pesquisa de FIIs da tela filtra ESTA lista, no cliente. Mandar a
+        # lista completa uma vez é mais barato (e instantâneo pra quem digita)
+        # que uma rota de busca chamada a cada tecla — e o dado já está aqui.
+        "todos_fiis": todos_montados,
         "com_fundamentos": sum(1 for l in todos_montados if l["fundamentos_disponiveis"]),
         "com_pvp": sum(1 for l in todos_montados if l["pvp"] is not None),
         "total_fiis": len(todos_montados),
@@ -282,6 +296,7 @@ def radar_fundos(forcar_ifix: bool = Query(False),
         "idade_composicao_ifix_segundos": idade_ifix,
         "alertas_desconto_alto": alertas_desconto,
         "pvp_alerta_desconto": PVP_ALERTA_DESCONTO,
+        "segmentos": segmentos_fii.ROTULOS,
     }, ctx)
 
 

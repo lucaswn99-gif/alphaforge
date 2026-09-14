@@ -522,15 +522,15 @@
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
       <div class="painel p-4">
         <h3 class="rotulo mb-3">FIIs de tijolo</h3>
-        <div class="overflow-x-auto"><table class="w-full text-xs">
-          <thead><tr class="rotulo text-left"><th class="p-1.5">Fundo</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-right">DY</th><th class="p-1.5 text-center">Preço x VP</th></tr></thead>
+        <div class="overflow-x-auto max-h-[420px] overflow-y-auto"><table class="w-full text-xs">
+          <thead class="sticky top-0" style="background: var(--painel)"><tr class="rotulo text-left"><th class="p-1.5">Fundo</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-right">DY</th><th class="p-1.5 text-center">Preço x VP</th></tr></thead>
           <tbody id="tabelaTijolo" class="divide-y" style="border-color: var(--borda)"></tbody>
         </table></div>
       </div>
       <div class="painel p-4">
         <h3 class="rotulo mb-3">FIIs de papel</h3>
-        <div class="overflow-x-auto"><table class="w-full text-xs">
-          <thead><tr class="rotulo text-left"><th class="p-1.5">Fundo</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-right">DY</th><th class="p-1.5 text-center">Preço x VP</th></tr></thead>
+        <div class="overflow-x-auto max-h-[420px] overflow-y-auto"><table class="w-full text-xs">
+          <thead class="sticky top-0" style="background: var(--painel)"><tr class="rotulo text-left"><th class="p-1.5">Fundo</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-right">DY</th><th class="p-1.5 text-center">Preço x VP</th></tr></thead>
           <tbody id="tabelaPapel" class="divide-y" style="border-color: var(--borda)"></tbody>
         </table></div>
       </div>
@@ -543,19 +543,50 @@
       </div>
     </div>
 
-    <!-- Resto do IFIX: tudo que o índice traz e ainda não está classificado
-         como tijolo/papel acima. Cheio de propósito, não é "os melhores" —
-         é "o que falta olhar". -->
+    <!-- Pesquisa de FIIs: o IFIX inteiro, filtrável por segmento. Substitui o
+         quadro "outros" indiferenciado — os três quadros de cima são a leitura
+         curada, este é o acesso ao universo. Filtra no cliente, sobre a lista
+         que o radar já baixou: nenhuma requisição por tecla digitada. -->
     <div class="painel p-4">
       <div class="flex justify-between items-center mb-3 gap-2 flex-wrap">
-        <h3 class="rotulo">Outros FIIs do IFIX</h3>
+        <div>
+          <h3 class="rotulo">Pesquisa de FIIs</h3>
+          <p class="text-[10px] mt-1" style="color: var(--suave)">
+            Todo o universo do IFIX · segmento classificado à mão, o que não foi
+            aparece como <b>não classificado</b> em vez de virar palpite
+          </p>
+        </div>
         <p class="text-[10px]" style="color: var(--suave)" id="origemIfix"></p>
       </div>
-      <div class="overflow-x-auto max-h-[420px] overflow-y-auto"><table class="w-full text-xs">
+
+      <div class="flex gap-2 flex-wrap items-center mb-3">
+        <div class="flex gap-1 flex-wrap" id="filtrosSegmento">
+          <button onclick="filtrarSegmento('todos')" id="seg-todos" class="btn-fantasma seg-btn">Todos</button>
+          <button onclick="filtrarSegmento('tijolo')" id="seg-tijolo" class="btn-fantasma seg-btn">Tijolo</button>
+          <button onclick="filtrarSegmento('papel')" id="seg-papel" class="btn-fantasma seg-btn">Papel</button>
+          <button onclick="filtrarSegmento('fof')" id="seg-fof" class="btn-fantasma seg-btn">Fundo de fundos</button>
+          <button onclick="filtrarSegmento('nao_classificado')" id="seg-nao_classificado" class="btn-fantasma seg-btn">Não classificado</button>
+        </div>
+        <!-- oninput, não onkeyup: keyup não dispara em colar com o mouse nem
+             no "x" de limpar do próprio campo, e a tabela ficava desatualizada. -->
+        <input type="text" id="buscaFii" oninput="renderizarPesquisaFiis()" placeholder="Filtrar por código…"
+               class="campo text-xs uppercase w-40 ml-auto">
+      </div>
+
+      <p class="text-[10px] mb-2" style="color: var(--suave)" id="pesquisaFiisResumo"></p>
+
+      <div class="overflow-x-auto max-h-[460px] overflow-y-auto"><table class="w-full text-xs">
         <thead class="sticky top-0" style="background: var(--painel-alt)">
-          <tr class="rotulo text-left"><th class="p-1.5">Fundo</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-right">DY</th><th class="p-1.5 text-center">Preço x VP</th></tr>
+          <tr class="rotulo text-left">
+            <th class="p-1.5">Fundo</th>
+            <th class="p-1.5">Segmento</th>
+            <th class="p-1.5 text-right">Preço</th>
+            <th class="p-1.5 text-right">Entrada</th>
+            <th class="p-1.5 text-right">DY</th>
+            <th class="p-1.5 text-center">Preço x VP</th>
+          </tr>
         </thead>
-        <tbody id="tabelaOutrosFiis" class="divide-y" style="border-color: var(--borda)"></tbody>
+        <tbody id="tabelaPesquisaFiis" class="divide-y" style="border-color: var(--borda)"></tbody>
       </table></div>
     </div>
   </section>
@@ -1850,6 +1881,85 @@ async function precificarOpcao() {
 }
 
 // ===================== FIIs e ETFs =========================
+
+// Rótulos descrevem a POSIÇÃO do preço, não uma ação. Um fundo negociando
+// com desconto sobre o VP não é ordem de compra: é um fato sobre o preço.
+function estiloRecomendacaoFundo(rec) {
+  if (rec === 'DESCONTO' || rec === 'ABAIXO DA MÉDIA') return 'background:var(--verde);color:#04120b';
+  if (rec === 'ÁGIO' || rec === 'ACIMA DA MÉDIA')      return 'background:#3a2c08;color:var(--ambar)';
+  if (rec === 'SEM DADOS') return 'background:#1a2320;color:#78877f';
+  return 'background:var(--ambar);color:#1a1200';
+}
+
+// No escopo do módulo (e não dentro de carregarFundos) porque a pesquisa de
+// FIIs redesenha linhas depois, a cada filtro, sem refazer a requisição.
+// toFixed direto quebrava a tabela inteira num único campo nulo.
+function renderLinhaFii(fii, comSegmento = false) {
+  // A competência do informe importa: o valor patrimonial é mensal, e um
+  // P/VP de três meses atrás não é o de hoje.
+  // O nome do fundo entra no tooltip: se ele não bater com o papel, o
+  // vínculo ticker→CNPJ da CVM está errado, e é melhor você ver isso do
+  // que confiar num P/VP que na verdade é de outro fundo.
+  const fonte = (fii.competencia_vp
+    ? `VP de ${esc(fii.competencia_vp)}`
+    : (fii.origem_fundamentos ? esc(fii.origem_fundamentos) : 'sem P/VP na fonte'))
+    + (fii.nome_fundo_cvm ? ` · CVM: ${esc(fii.nome_fundo_cvm)}` : '');
+  const naoClassificado = !fii.segmento || fii.segmento === 'nao_classificado';
+  const celulaSegmento = comSegmento ? `
+          <td class="p-1.5">
+            <span class="text-[10px]" style="color:${naoClassificado ? '#4a554e' : 'var(--suave)'}">
+              ${esc(fii.segmento_rotulo || 'Não classificado')}</span>
+          </td>` : '';
+  return `
+        <tr class="linha${fii.pvp === null ? ' opacity-50' : ''}" data-ticker="${esc(fii.ticker)}">
+          <td class="p-1.5">
+            <div class="font-bold text-[12px]" style="color: var(--verde)">${esc(fii.ticker)}</div>
+            <div class="text-[9px] mono" style="color:#4a554e" title="${fonte}">P/VP ${num(fii.pvp)}</div>
+          </td>${celulaSegmento}
+          <td class="p-1.5 text-right mono">${num(fii.preco)}</td>
+          <td class="p-1.5 text-right mono" style="color: var(--suave)">${
+            fii.ponto_entrada === null || fii.ponto_entrada === undefined
+              ? '<span style="color:#4a554e">—</span>' : Number(fii.ponto_entrada).toFixed(2)}</td>
+          <td class="p-1.5 text-right mono sobe">${num(fii.dy, 2, '%')}</td>
+          <td class="p-1.5 text-center">
+            <span class="px-1.5 py-0.5 rounded text-[9px] font-bold" style="${estiloRecomendacaoFundo(fii.recomendacao)}"
+                  title="${esc(fii.racional || '')}">${esc(fii.recomendacao)}</span>
+          </td>
+        </tr>`;
+}
+
+// Estado da pesquisa de FIIs: a lista completa vem uma vez do radar e o
+// filtro roda em cima dela, no cliente.
+let FIIS_UNIVERSO = [];
+let SEGMENTO_ATIVO = 'todos';
+
+function filtrarSegmento(segmento) {
+  SEGMENTO_ATIVO = segmento;
+  document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('aba-ativa'));
+  const botao = document.getElementById(`seg-${segmento}`);
+  if (botao) botao.classList.add('aba-ativa');
+  renderizarPesquisaFiis();
+}
+
+function renderizarPesquisaFiis() {
+  const busca = (document.getElementById('buscaFii')?.value || '').trim().toUpperCase();
+  const filtrados = FIIS_UNIVERSO.filter(fii => {
+    const seg = fii.segmento || 'nao_classificado';
+    if (SEGMENTO_ATIVO !== 'todos' && seg !== SEGMENTO_ATIVO) return false;
+    return !busca || (fii.ticker || '').toUpperCase().includes(busca);
+  });
+
+  document.getElementById('tabelaPesquisaFiis').innerHTML =
+    filtrados.length
+      ? filtrados.map(f => renderLinhaFii(f, true)).join('')
+      : '<tr><td colspan="6" class="p-3 text-center text-[11px]" style="color:#4a554e">Nenhum FII com esse filtro.</td></tr>';
+
+  const semPvp = filtrados.filter(f => f.pvp === null || f.pvp === undefined).length;
+  document.getElementById('pesquisaFiisResumo').innerText =
+    `${filtrados.length} de ${FIIS_UNIVERSO.length} fundos`
+    + (semPvp ? ` · ${semPvp} sem P/VP` : '');
+}
+
 async function carregarFundos() {
   const btn = document.getElementById('btnFundos');
   btn.innerText = 'Analisando…'; btn.disabled = true;
@@ -1858,43 +1968,8 @@ async function carregarFundos() {
     if (!res.ok) { mostrarAviso('fundosAviso', `O servidor respondeu ${res.status}.`); return; }
     const data = await res.json();
 
-    // Rótulos descrevem a POSIÇÃO do preço, não uma ação. Um fundo negociando
-    // com desconto sobre o VP não é ordem de compra: é um fato sobre o preço.
-    const estilo = (rec) => {
-      if (rec === 'DESCONTO' || rec === 'ABAIXO DA MÉDIA') return 'background:var(--verde);color:#04120b';
-      if (rec === 'ÁGIO' || rec === 'ACIMA DA MÉDIA')      return 'background:#3a2c08;color:var(--ambar)';
-      if (rec === 'SEM DADOS') return 'background:#1a2320;color:#78877f';
-      return 'background:var(--ambar);color:#1a1200';
-    };
-
-    // toFixed direto quebrava a tabela inteira num único campo nulo.
-    const renderFii = (fii) => {
-      // A competência do informe importa: o valor patrimonial é mensal, e um
-      // P/VP de três meses atrás não é o de hoje.
-      // O nome do fundo entra no tooltip: se ele não bater com o papel, o
-      // vínculo ticker→CNPJ da CVM está errado, e é melhor você ver isso do
-      // que confiar num P/VP que na verdade é de outro fundo.
-      const fonte = (fii.competencia_vp
-        ? `VP de ${esc(fii.competencia_vp)}`
-        : (fii.origem_fundamentos ? esc(fii.origem_fundamentos) : 'sem P/VP na fonte'))
-        + (fii.nome_fundo_cvm ? ` · CVM: ${esc(fii.nome_fundo_cvm)}` : '');
-      return `
-        <tr class="linha${fii.pvp === null ? ' opacity-50' : ''}">
-          <td class="p-1.5">
-            <div class="font-bold text-[12px]" style="color: var(--verde)">${esc(fii.ticker)}</div>
-            <div class="text-[9px] mono" style="color:#4a554e" title="${fonte}">P/VP ${num(fii.pvp)}</div>
-          </td>
-          <td class="p-1.5 text-right mono">${num(fii.preco)}</td>
-          <td class="p-1.5 text-right mono" style="color: var(--suave)">${
-            fii.ponto_entrada === null || fii.ponto_entrada === undefined
-              ? '<span style="color:#4a554e">—</span>' : Number(fii.ponto_entrada).toFixed(2)}</td>
-          <td class="p-1.5 text-right mono sobe">${num(fii.dy, 2, '%')}</td>
-          <td class="p-1.5 text-center">
-            <span class="px-1.5 py-0.5 rounded text-[9px] font-bold" style="${estilo(fii.recomendacao)}"
-                  title="${esc(fii.racional || '')}">${esc(fii.recomendacao)}</span>
-          </td>
-        </tr>`;
-    };
+    const renderFii = (fii) => renderLinhaFii(fii, false);
+    const estilo = estiloRecomendacaoFundo;
 
     const renderEtf = (etf) => `
       <tr class="linha">
@@ -1909,17 +1984,21 @@ async function carregarFundos() {
         </td>
       </tr>`;
 
-    document.getElementById('tabelaTijolo').innerHTML     = (data.tijolo || []).map(renderFii).join('');
-    document.getElementById('tabelaPapel').innerHTML      = (data.papel  || []).map(renderFii).join('');
-    document.getElementById('tabelaOutrosFiis').innerHTML = (data.outros || []).map(renderFii).join('');
-    document.getElementById('tabelaETFs').innerHTML       = (data.etfs   || []).map(renderEtf).join('');
+    document.getElementById('tabelaTijolo').innerHTML = (data.tijolo || []).map(renderFii).join('');
+    document.getElementById('tabelaPapel').innerHTML  = (data.papel  || []).map(renderFii).join('');
+    document.getElementById('tabelaETFs').innerHTML   = (data.etfs   || []).map(renderEtf).join('');
+
+    // A pesquisa recebe o universo inteiro (inclusive FOF e não
+    // classificados, que não têm quadro próprio lá em cima) e filtra sozinha.
+    FIIS_UNIVERSO = data.todos_fiis || [];
+    filtrarSegmento(SEGMENTO_ATIVO);
 
     // Origem do universo do IFIX: rede, cache do dia ou lista embutida —
     // mesma linguagem já usada pro IBOV no scanner de ações.
     const origemTexto = { b3: 'ao vivo do B3', cache: 'cache do dia', fallback: 'lista de reserva' };
     document.getElementById('origemIfix').innerText = data.origem_composicao_ifix
-      ? `IFIX: ${(data.outros || []).length + (data.tijolo || []).length + (data.papel || []).length} fundos · `
-        + `composição ${origemTexto[data.origem_composicao_ifix] || data.origem_composicao_ifix}`
+      ? `${data.total_fiis || FIIS_UNIVERSO.length} fundos · composição `
+        + `${origemTexto[data.origem_composicao_ifix] || data.origem_composicao_ifix}`
       : '';
 
     // Alerta de desconto: chips curtos, cada um levando o olho direto pro

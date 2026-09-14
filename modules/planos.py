@@ -253,22 +253,25 @@ def cortar_fundos(payload, ctx: Contexto):
         return payload
     payload = dict(payload)
     total = 0
-    for bloco in ("tijolo", "papel", "outros", "etfs"):
+    for bloco in ("tijolo", "papel", "fof", "outros", "etfs"):
         lista = payload.get(bloco) or []
         total += len(lista)
         payload[bloco] = [
             {k: v for k, v in linha.items() if k != "recomendacao"}
             for linha in lista[:FUNDOS_FREE_LINHAS]
         ]
-    exibidos = sum(len(payload.get(b) or []) for b in ("tijolo", "papel", "outros", "etfs"))
+    exibidos = sum(len(payload.get(b) or [])
+                   for b in ("tijolo", "papel", "fof", "outros", "etfs"))
     # Mesma lógica do resto do corte: a lista instiga, a recomendação (aqui, o
-    # próprio alerta) é do Premium. Sem isso o alerta de desconto vazava a
-    # lista inteira sem cortar, driblando o corte de cima.
-    if "alertas_desconto_alto" in payload:
-        payload["alertas_desconto_alto"] = [
-            {k: v for k, v in linha.items() if k != "recomendacao"}
-            for linha in (payload.get("alertas_desconto_alto") or [])[:FUNDOS_FREE_LINHAS]
-        ]
+    # próprio alerta) é do Premium. Sem isso o alerta de desconto — e, pior, a
+    # lista `todos_fiis` que alimenta a pesquisa — vazavam o universo inteiro
+    # sem corte, driblando o corte de cima.
+    for bloco in ("alertas_desconto_alto", "todos_fiis"):
+        if bloco in payload:
+            payload[bloco] = [
+                {k: v for k, v in linha.items() if k != "recomendacao"}
+                for linha in (payload.get(bloco) or [])[:FUNDOS_FREE_LINHAS]
+            ]
     return _marcar(payload, total, exibidos,
                    "O plano gratuito mostra parte da lista, sem a recomendação.")
 
