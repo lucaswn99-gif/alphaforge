@@ -225,11 +225,16 @@ COLUNAS_FCA = {
     "versao": ("VERSAO",),
     "nome": ("NOME_COMPANHIA", "DENOM_CIA"),
     "tipo": ("TIPO_CAPITAL",),
-    "ordinarias": ("QUANTIDADE_ACOES_ORDINARIAS",),
-    "preferenciais": ("QUANTIDADE_ACOES_PREFERENCIAIS",),
-    "total": ("QUANTIDADE_TOTAL_ACOES",),
+    "ordinarias": ("QUANTIDADE_ACOES_ORDINARIAS", "QUANTIDADE_ACOES_ORDINARIAS_CIRCULACAO"),
+    "preferenciais": ("QUANTIDADE_ACOES_PREFERENCIAIS",
+                      "QUANTIDADE_ACOES_PREFERENCIAIS_CIRCULACAO"),
+    "total": ("QUANTIDADE_TOTAL_ACOES", "QUANTIDADE_TOTAL_ACOES_CIRCULACAO",
+              "QUANTIDADE_ACOES", "QUANTIDADE_TOTAL"),
 }
-OBRIGATORIAS_FCA = ("cnpj", "data", "tipo", "total")
+# Só cnpj e total são indispensáveis. Data, versão e tipo de capital melhoram o
+# desempate mas nem todo formulário os traz, e recusar o arquivo inteiro por
+# falta deles seria jogar fora a única fonte de quantidade de ações que existe.
+OBRIGATORIAS_FCA = ("cnpj", "total")
 
 # Ordem de preferência do tipo de capital. Integralizado é o que foi de fato
 # pago; autorizado é apenas o teto do estatuto e NÃO entra em hipótese alguma —
@@ -305,16 +310,22 @@ def ler_acoes_fca(arquivo_zip, nome_csv):
                     if len(cnpj) != 14:
                         continue
 
-                    tipo = _normalizar_texto(linha.get(mapa["tipo"]))
-                    if tipo not in TIPOS_CAPITAL:
-                        continue
-                    posto = TIPOS_CAPITAL.index(tipo)
+                    if "tipo" in mapa:
+                        tipo = _normalizar_texto(linha.get(mapa["tipo"]))
+                        if tipo not in TIPOS_CAPITAL:
+                            # Capital autorizado cai aqui, e é para cair: é o
+                            # teto do estatuto, não ação emitida.
+                            continue
+                        posto = TIPOS_CAPITAL.index(tipo)
+                    else:
+                        posto = 0
 
                     total = _quantidade(linha.get(mapa["total"]))
                     if total is None:
                         continue
 
-                    data = _data_referencia(linha.get(mapa["data"])) or ""
+                    data = (_data_referencia(linha.get(mapa["data"]))
+                            if "data" in mapa else "") or ""
                     versao = _versao(linha.get(mapa["versao"])) if "versao" in mapa else 0
 
                     atual = coletado.get(cnpj)
@@ -343,13 +354,83 @@ def ler_acoes_fca(arquivo_zip, nome_csv):
     return coletado
 
 
+def _csvs_candidatos_fca(arquivo_zip, ano):
+    """CSVs do FCA que podem trazer quantidade de ações, do mais provável ao menos.
+
+    O nome do arquivo dentro do ZIP não é estável entre versões do formulário,
+    e chutar um nome só custou uma coleta inteira. Aqui a lista do próprio ZIP
+    é que manda: primeiro os nomes que falam de capital, depois os que falam de
+    valor mobiliário, depois o principal do ano.
+    """
+    nomes = [n for n in arquivo_zip.namelist() if n.lower().endswith(".csv")]
+
+    def pontuar(nome):
+        baixo = _normalizar_texto(nome.rsplit("/", 1)[-1])
+        if "capital_social" in baixo or "capital social" in baixo:
+            return 0
+        if "capital" in baixo:
+            return 1
+        if "valor_mobiliario" in baixo or "valor mobiliario" in baixo:
+            return 2
+        if baixo == f"fca_cia_aberta_{ano}.csv":
+            return 3
+        return 9
+
+    pontuados = sorted(((pontuar(n), n) for n in nomes), key=lambda p: (p[0], p[1]))
+    return [nome for ponto, nome in pontuados if ponto < 9], nomes
+
+
 def processar_fca(ano):
     arquivo_zip = baixar_zip_fca(ano)
     if arquivo_zip is None:
         return {}
-    lido = ler_acoes_fca(arquivo_zip, f"fca_cia_aberta_capital_social_{ano}.csv")
-    print(f"   FCA {ano}: {len(lido)} companhias com quantidade de ações")
-    return lido
+
+    candidatos, todos = _csvs_candidatos_fca(arquivo_zip, ano)
+    if not candidatos:
+        print(f"   ! FCA {ano}: nenhum CSV com cara de capital social. "
+              f"Arquivos no zip:")
+        for nome in todos:
+            print(f"       {nome}")
+        return {}
+
+    for nome in candidatos:
+        lido = ler_acoes_fca(arquivo_zip, nome)
+        if lido:
+            print(f"   FCA {ano}: {len(lido)} companhias com quantidade de ações "
+                  f"(de {nome})")
+            return lido
+
+    print(f"   ! FCA {ano}: nenhum dos candidatos serviu. Arquivos no zip:")
+    for nome in todos:
+        print(f"       {nome}")
+    return {}
+
+
+def listar_fca(ano):
+    """Despeja o conteúdo do ZIP do FCA e o cabeçalho de cada CSV.
+
+        python atualizar_fundamentos_cvm.py --listar-fca 2026
+
+    Existe para não voltar a adivinhar nome de arquivo nem de coluna: isto
+    mostra o que a CVM publica de fato.
+    """
+    arquivo_zip = baixar_zip_fca(ano)
+    if arquivo_zip is None:
+        return
+    for nome in sorted(arquivo_zip.namelist()):
+        if not nome.lower().endswith(".csv"):
+            print(f"\n{nome}  (não é csv)")
+            continue
+        try:
+            with arquivo_zip.open(nome) as fluxo:
+                cabecalho = fluxo.readline().decode("iso-8859-1", errors="replace")
+                primeira = fluxo.readline().decode("iso-8859-1", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            print(f"\n{nome}  ! {type(exc).__name__}: {exc}")
+            continue
+        print(f"\n{nome}")
+        print(f"   colunas: {cabecalho.strip()[:400]}")
+        print(f"   1a linha: {primeira.strip()[:400]}")
 
 
 def gravar_acoes(registros, banco=BANCO):
@@ -919,6 +1000,51 @@ def coletar_fca(anos):
     relatorio_qualidade_acoes()
 
 
+def inspecionar_itr(cnpj_alvo, ano):
+    """Despeja o balanço de UMA companhia no ITR, consolidado e individual.
+
+        python atualizar_fundamentos_cvm.py --inspecionar-itr 33592510000154 2026
+
+    Serve para as divergências do relatório de qualidade: mostra qual linha foi
+    lida, de qual arquivo e em que escala, em vez de deixar a explicação no
+    campo da hipótese.
+    """
+    cnpj_alvo = "".join(ch for ch in str(cnpj_alvo) if ch.isdigit())
+    arquivo_zip = baixar_zip_itr(ano)
+    if arquivo_zip is None:
+        return
+    for grupo in ("BPA", "BPP"):
+        for base in ("con", "ind"):
+            nome_csv = f"itr_cia_aberta_{grupo}_{base}_{ano}.csv"
+            print(f"\n===== {grupo} {base} =====")
+            try:
+                with arquivo_zip.open(nome_csv) as fluxo:
+                    blocos = pd.read_csv(fluxo, sep=";", encoding="iso-8859-1",
+                                         dtype=str, chunksize=TAMANHO_BLOCO)
+                    achou = False
+                    for bloco in blocos:
+                        alvo = bloco[bloco["CNPJ_CIA"].str.replace(r"\D", "", regex=True)
+                                     == cnpj_alvo]
+                        alvo = alvo[alvo["ORDEM_EXERC"].str.strip().str.upper() == "ÚLTIMO"]
+                        for linha in alvo.itertuples(index=False):
+                            conta = str(linha.CD_CONTA).strip()
+                            if conta.count(".") > 1:
+                                continue
+                            try:
+                                valor = float(str(linha.VL_CONTA).replace(",", "."))
+                            except (TypeError, ValueError):
+                                continue
+                            achou = True
+                            versao = getattr(linha, "VERSAO", "?")
+                            print(f"   {str(linha.DT_FIM_EXERC)[:10]}  v{versao}  "
+                                  f"{conta:<8} {str(linha.DS_CONTA)[:44]:<44} "
+                                  f"{valor:>18,.0f}  [{linha.ESCALA_MOEDA}]")
+                    if not achou:
+                        print("   (nada para este CNPJ)")
+            except Exception as exc:  # noqa: BLE001
+                print(f"   ! {type(exc).__name__}: {exc}")
+
+
 def main(anos, anos_itr=None, com_dfp=True, com_itr=True, com_fca=True):
     if com_dfp:
         coletar_dfp(anos)
@@ -941,6 +1067,21 @@ if __name__ == "__main__":
 
     from datetime import date
     atual = date.today().year
+
+    if "--inspecionar-itr" in sys.argv:
+        posicao = sys.argv.index("--inspecionar-itr")
+        restante = [a for a in sys.argv[posicao + 1:] if not a.startswith("--")]
+        if not restante:
+            raise SystemExit("uso: --inspecionar-itr <cnpj> [ano]")
+        inspecionar_itr(restante[0],
+                        int(restante[1]) if len(restante) > 1 else atual)
+        raise SystemExit(0)
+
+    if "--listar-fca" in sys.argv:
+        posicao = sys.argv.index("--listar-fca")
+        restante = [a for a in sys.argv[posicao + 1:] if a.isdigit()]
+        listar_fca(int(restante[0]) if restante else atual)
+        raise SystemExit(0)
 
     argumentos = [a for a in sys.argv[1:] if a.isdigit()]
     if argumentos:

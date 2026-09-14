@@ -1099,5 +1099,56 @@ class TestAcoesNoVpa(unittest.TestCase):
         self.assertAlmostEqual(m["pvp"], self.PRECO / (2.2e11 / 4.55e9), places=6)
 
 
+class TestDescobertaDoCsvFca(unittest.TestCase):
+    """O nome do CSV dentro do ZIP do FCA não é estável entre versões do
+    formulário. Chutar um nome custou uma coleta inteira; agora a lista do
+    próprio ZIP é que decide."""
+
+    @staticmethod
+    def _zipar(arquivos):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as arquivo:
+            for nome, texto in arquivos.items():
+                arquivo.writestr(nome, texto.encode("iso-8859-1"))
+        buffer.seek(0)
+        return zipfile.ZipFile(buffer)
+
+    def test_capital_social_vem_antes_dos_outros(self):
+        arquivo = self._zipar({
+            "fca_cia_aberta_2026.csv": "a;b\n1;2\n",
+            "fca_cia_aberta_endereco_2026.csv": "a;b\n1;2\n",
+            "fca_cia_aberta_capital_social_2026.csv": "a;b\n1;2\n",
+            "fca_cia_aberta_valor_mobiliario_2026.csv": "a;b\n1;2\n",
+        })
+        candidatos, _ = coletor._csvs_candidatos_fca(arquivo, 2026)
+        self.assertTrue(candidatos[0].endswith("capital_social_2026.csv"), candidatos)
+        self.assertTrue(candidatos[1].endswith("valor_mobiliario_2026.csv"), candidatos)
+        self.assertEqual(candidatos[2], "fca_cia_aberta_2026.csv")
+
+    def test_arquivo_sem_relacao_fica_de_fora(self):
+        arquivo = self._zipar({"fca_cia_aberta_endereco_2026.csv": "a;b\n1;2\n"})
+        candidatos, todos = coletor._csvs_candidatos_fca(arquivo, 2026)
+        self.assertEqual(candidatos, [])
+        self.assertEqual(len(todos), 1, "a lista completa volta para o diagnóstico")
+
+    def test_sem_coluna_de_tipo_de_capital_ainda_le(self):
+        """Só CNPJ e quantidade são indispensáveis: recusar o arquivo por falta
+        de tipo jogaria fora a única fonte de quantidade que existe."""
+        cabecalho = "CNPJ_Companhia;Data_Referencia;Quantidade_Total_Acoes"
+        arquivo = self._zipar({"fca_cia_aberta_capital_social_2026.csv":
+                               f"{cabecalho}\n{CNPJ_VALE};2026-05-30;4550000000\n"})
+        lido = coletor.ler_acoes_fca(arquivo, "fca_cia_aberta_capital_social_2026.csv")
+        self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
+
+    def test_nome_alternativo_da_coluna_de_quantidade(self):
+        cabecalho = ("CNPJ_Companhia;Data_Referencia;Tipo_Capital;"
+                     "Quantidade_Total_Acoes_Circulacao")
+        arquivo = self._zipar({"fca_cia_aberta_capital_social_2026.csv":
+                               f"{cabecalho}\n{CNPJ_VALE};2026-05-30;"
+                               f"Capital Integralizado;4550000000\n"})
+        lido = coletor.ler_acoes_fca(arquivo, "fca_cia_aberta_capital_social_2026.csv")
+        self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
