@@ -28,6 +28,27 @@ from routers import filosofias as rota_filosofias
 
 
 class MotorDeTeste:
+    def setor_besst(self, ticker):
+        return {"TAEE11": "energia"}.get(ticker)
+
+    def _avaliar_barsi(self, ticker, setor, aplicar_momentum=True):
+        return {"ticker": ticker, "aprovado": True, "motivos": [],
+                "preco_teto": 45.0, "margem_seguranca": 0.25,
+                "yield_sobre_preco": 7.2, "payout": 62.0,
+                "tendencia_dpa": {"classificacao": "crescente"}}
+
+    def _avaliar_bazin(self, ticker):
+        # PETR4 com payout estourado: deteriora em Bazin tambem, para o smoke
+        # provar que a troca de regua muda o veredito e nao so o rotulo.
+        ruim = ticker == "PETR4"
+        criterios = {"dy_suficiente": True,
+                     "payout_saudavel": not ruim,
+                     "alavancagem_ok": True, "abaixo_do_teto": True}
+        return {"ticker": ticker, "preco_teto": 40.0, "margem_seguranca": 0.15,
+                "dy_12m": 7.0, "payout": 95.0 if ruim else 55.0, "dl_ebit": 1.1,
+                "criterios": criterios, "criterios_nao_apurados": [],
+                "aprovado": all(criterios.values())}
+
     def _avaliar_graham(self, ticker, aplicar_momentum=True):
         alerta = "Prejuizo em pelo menos um dos 3 exercicios apurados."
         base = {"ticker": ticker, "aprovado": False, "motivos": [],
@@ -163,9 +184,9 @@ if __name__ == "__main__":
 
         # -------- edição na própria linha (substituiu o prompt) --------
         pagina.click("tr[data-ticker='PETR4'] button:has-text('Corrigir')")
-        pagina.wait_for_selector("tr[data-ticker='PETR4'] .campo-linha", timeout=5000)
+        pagina.wait_for_selector("tr[data-ticker='PETR4'] [data-campo]", timeout=5000)
         checar("edição abre dois campos na linha",
-               pagina.eval_on_selector_all("tr[data-ticker='PETR4'] .campo-linha",
+               pagina.eval_on_selector_all("tr[data-ticker='PETR4'] [data-campo]",
                                            "els => els.length") == 2)
         pagina.fill("tr[data-ticker='PETR4'] [data-campo='quantidade']", "50")
         pagina.fill("tr[data-ticker='PETR4'] [data-campo='preco']", "20")
@@ -176,13 +197,13 @@ if __name__ == "__main__":
         checar("edição inline gravou (50 x 20 = 1.000 + ZZZZ3 50)",
                "1.050" in pagina.inner_text("#custoTotal"), pagina.inner_text("#custoTotal"))
         checar("campos somem depois de salvar",
-               pagina.eval_on_selector_all(".campo-linha", "els => els.length") == 0)
+               pagina.eval_on_selector_all("[data-campo]", "els => els.length") == 0)
 
         pagina.click("tr[data-ticker='PETR4'] button:has-text('Corrigir')")
-        pagina.wait_for_selector(".campo-linha", timeout=5000)
+        pagina.wait_for_selector("[data-campo]", timeout=5000)
         pagina.click("tr[data-ticker='PETR4'] button:has-text('Cancelar')")
         checar("cancelar fecha a edição sem gravar",
-               pagina.eval_on_selector_all(".campo-linha", "els => els.length") == 0)
+               pagina.eval_on_selector_all("[data-campo]", "els => els.length") == 0)
 
         # -------- importação de planilha --------
         import io
@@ -238,6 +259,22 @@ if __name__ == "__main__":
                "importada" in pagina.inner_text("#avisoImportacao"),
                pagina.inner_text("#avisoImportacao"))
 
+        # A regua precisa estar declarada antes de qualquer veredito de acao:
+        # sem filosofia escolhida, acao sai como "nao apurado" DE PROPOSITO.
+        pagina.wait_for_selector("#opcoesFilosofia button", timeout=8000)
+        checar("sem filosofia escolhida a tela avisa em vez de medir por Graham",
+               "apurado" in pagina.inner_text("#avisoFilosofia").lower(),
+               pagina.inner_text("#avisoFilosofia"))
+        checar("e nenhuma acao foi medida antes da escolha",
+               "Escolha a filosofia" in pagina.eval_on_selector(
+                   "tr[data-ticker='PETR4'] td[data-celula='diagnostico'] span",
+                   "el => el.title"),
+               pagina.eval_on_selector(
+                   "tr[data-ticker='PETR4'] td[data-celula='diagnostico'] span",
+                   "el => el.title"))
+        pagina.click("#opcoesFilosofia button >> nth=2")     # Graham
+        pagina.wait_for_timeout(1200)
+
         # -------- diagnóstico --------
         pagina.wait_for_selector("#painelDiagnostico:not(.hidden)", timeout=10000)
         cartoes = pagina.inner_text("#cartoesDiagnostico")
@@ -252,15 +289,15 @@ if __name__ == "__main__":
         # PETR4 deteriorou (prejuízo) -> desconformidade; VALE3 só está caro
         # -> atenção. Confundir os dois mandaria vender no topo do que deu certo.
         estado_petr = pagina.eval_on_selector(
-            "tr[data-ticker='PETR4'] td:nth-child(6) span", "el => el.innerText")
+            "tr[data-ticker='PETR4'] td[data-celula='diagnostico'] span", "el => el.innerText")
         estado_vale = pagina.eval_on_selector(
-            "tr[data-ticker='VALE3'] td:nth-child(6) span", "el => el.innerText")
+            "tr[data-ticker='VALE3'] td[data-celula='diagnostico'] span", "el => el.innerText")
         checar("papel que deteriorou vira Desconformidade",
                estado_petr.strip() == "Desconformidade", estado_petr)
         checar("papel só caro vira Atenção, não Desconformidade",
                estado_vale.strip() == "Atenção", estado_vale)
         estado_zzz = pagina.eval_on_selector(
-            "tr[data-ticker='ZZZZ3'] td:nth-child(6) span", "el => el.innerText")
+            "tr[data-ticker='ZZZZ3'] td[data-celula='diagnostico'] span", "el => el.innerText")
         checar("papel fora dos registros vira Não apurado",
                estado_zzz.strip() == "Não apurado", estado_zzz)
 
@@ -280,6 +317,38 @@ if __name__ == "__main__":
                "PETR4" not in pagina.inner_text("#tabelaPosicoes"),
                pagina.inner_text("#tabelaPosicoes")[:150])
         pagina.fill("#buscaPosicao", "")
+
+        # -------- filosofia declarada --------
+        # O motor tem 40 testes proprios; aqui o que se prova e que a escolha
+        # existe na tela, faz a volta pelo servidor e some do caminho das
+        # linhas que nao sao acao.
+        checar("o seletor de filosofia aparece",
+               pagina.is_visible("#opcoesFilosofia"))
+        checar("as tres filosofias aparecem com resumo",
+               pagina.eval_on_selector_all("#opcoesFilosofia button", "els => els.length") == 3)
+
+        pagina.click("#opcoesFilosofia button >> nth=1")     # Bazin
+        pagina.wait_for_timeout(900)
+        checar("a filosofia escolhida fica marcada",
+               "Bazin" in pagina.inner_text("#opcoesFilosofia"))
+
+        pagina.reload(wait_until="networkidle")
+        pagina.wait_for_timeout(1500)
+        marcada = pagina.eval_on_selector_all(
+            "#opcoesFilosofia button",
+            "els => els.filter(e => e.style.background && e.style.background !== 'transparent')"
+            ".map(e => e.innerText)")
+        checar("a filosofia persiste entre recargas",
+               any("Bazin" in t for t in marcada), marcada)
+
+        # A regua por papel so existe para acao.
+        colunas = pagina.eval_on_selector_all(
+            "#tabelaPosicoes tr", "els => els.map(e => e.children.length)")
+        checar("toda linha tem o mesmo numero de colunas do cabecalho",
+               len(set(colunas)) <= 1, colunas)
+        reguas = pagina.eval_on_selector_all(
+            "#tabelaPosicoes select", "els => els.length")
+        checar("linha de acao tem seletor de regua", reguas >= 1, reguas)
 
         # -------- Pilar 3: rebalanceamento por aporte --------
         # O motor tem 42 testes proprios; o que so o browser prova e que o
@@ -313,7 +382,12 @@ if __name__ == "__main__":
         soma = pagina.inner_text("#somaAlvos")
         checar("soma fecha 100 depois da correcao", "100" in soma, soma)
         pagina.click("#btnSalvarAlvos")
-        pagina.wait_for_selector("#avisoAlvos:not(.hidden)", timeout=5000)
+        # Espera o TEXTO mudar, nao a visibilidade: o aviso ja estava na tela
+        # desde a recusa anterior, entao esperar por :not(.hidden) volta na
+        # hora e le a mensagem velha.
+        pagina.wait_for_function(
+            "() => document.getElementById('avisoAlvos').innerText.toLowerCase()"
+            ".includes('salvo')", timeout=8000)
         checar("alvo valido e aceito", "salvo" in pagina.inner_text("#avisoAlvos").lower(),
                pagina.inner_text("#avisoAlvos"))
 

@@ -275,12 +275,25 @@
         </div>
         <button class="btn-fantasma" id="btnDiagnostico" type="button">Reavaliar</button>
       </div>
+      <!-- A lente vem ANTES do retrato: é ela que decide o que os quatro
+           cartões abaixo significam. Sem escolha declarada, ação nenhuma é
+           medida — medir por Graham "porque é o padrão" é o que produzia
+           desconformidade para quem tem mandato de renda. -->
+      <div class="rounded p-4 mb-4" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+        <p class="rotulo mb-1">Filosofia da carteira</p>
+        <p class="text-[10px] mb-3 leading-relaxed" style="color: #3d4a43">
+          Escolhe a régua pela qual as <b>ações</b> são medidas. FII continua
+          indo por desconto patrimonial, que é o gatilho de entrada do ativo.
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5" id="opcoesFilosofia"></div>
+        <p id="avisoFilosofia" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mt-3"></p>
+      </div>
+
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3" id="cartoesDiagnostico"></div>
       <p class="text-[10px] mt-3.5 leading-relaxed" style="color: #3d4a43">
-        Ação é medida pelos sete critérios do investidor defensivo de Graham; FII, pelo
-        desconto sobre o valor patrimonial. <b>Preço alto não é desconformidade</b> —
-        papel caro pede esperar, papel que piorou pede rever a tese, e só o segundo
-        entra em desconformidade.
+        FII é medido pelo desconto sobre o valor patrimonial; ação, pela filosofia
+        acima. <b>Preço alto não é desconformidade</b> — papel caro pede esperar,
+        papel que piorou pede rever a tese, e só o segundo entra em desconformidade.
       </p>
     </section>
 
@@ -482,6 +495,7 @@
               <th class="px-3 py-2.5 font-semibold text-right">Preço médio</th>
               <th class="px-3 py-2.5 font-semibold text-right">Custo</th>
               <th class="px-3 py-2.5 font-semibold text-right" style="min-width:110px">Peso</th>
+              <th class="px-3 py-2.5 font-semibold">Régua</th>
               <th class="px-3 py-2.5 font-semibold">Diagnóstico</th>
               <th class="px-5 py-2.5 font-semibold text-right">Ações</th>
             </tr>
@@ -618,6 +632,7 @@ async function carregar() {
     // deixaria a tela em branco por segundos sem necessidade.
     if (POSICOES.length) carregarDiagnostico(false);
     else { DIAGNOSTICO = {}; $('painelDiagnostico').classList.add('hidden'); }
+    carregarFilosofia();
     carregarAlvos();
   } catch (e) {
     aviso('avisoItem', `Falha ao carregar: ${esc(e.message || e)}`);
@@ -654,7 +669,8 @@ function renderizar() {
         <div class="mono text-[11px]">${p.peso_pct == null ? '—' : p.peso_pct.toFixed(1) + '%'}</div>
         <div class="barra-peso mt-1 ml-auto" style="width: ${Math.max(2, Math.min(100, p.peso_pct || 0))}%"></div>
       </td>
-      <td class="px-3 py-3">${selo(DIAGNOSTICO[p.ticker])}</td>
+      <td class="px-3 py-3">${regua(p)}</td>
+      <td class="px-3 py-3" data-celula="diagnostico">${selo(DIAGNOSTICO[p.ticker])}</td>
       <td class="px-5 py-3 text-right whitespace-nowrap">
         ${editando
           ? `<button class="btn-fantasma" onclick="salvarEdicao('${esc(p.ticker)}')"
@@ -926,7 +942,11 @@ let EDITANDO = null;
 function abrirEdicao(ticker) {
   EDITANDO = ticker;
   renderizar();
-  const campo = document.querySelector(`tr[data-ticker="${ticker}"] .campo-linha`);
+  // Pelo data-campo, e não pela primeira `.campo-linha` da linha: o seletor de
+  // régua usa a mesma classe, e depender da ordem do DOM para achar o campo de
+  // quantidade quebraria no dia em que uma coluna mudar de lugar.
+  const campo = document.querySelector(
+    `tr[data-ticker="${ticker}"] [data-campo="quantidade"]`);
   if (campo) { campo.focus(); campo.select(); }
 }
 
@@ -971,6 +991,115 @@ async function remover(ticker) {
     aviso('avisoItem', `<b>${esc(ticker)}</b> removido.`, 'sucesso');
     carregar();
   } catch (e) { aviso('avisoItem', `Falha ao remover: ${esc(e.message || e)}`); }
+}
+
+// ===================== filosofia declarada =====================
+let FILOSOFIA = null;
+let OPCOES_FILOSOFIA = [];
+
+function regua(p) {
+  // Só ação tem régua a escolher: FII vai por desconto patrimonial e ETF é
+  // cesta de índice. Mostrar um seletor inerte nessas linhas sugeriria uma
+  // escolha que não existe.
+  if (p.classe !== 'acao') {
+    return '<span class="text-[10px]" style="color:#3d4a43">—</span>';
+  }
+  const opcoes = OPCOES_FILOSOFIA.map((o) => {
+    const curto = o.rotulo.split('—')[0].trim();
+    return `<option value="${esc(o.chave)}"${p.filosofia === o.chave ? ' selected' : ''}>${esc(curto)}</option>`;
+  }).join('');
+  const herdada = FILOSOFIA
+    ? (OPCOES_FILOSOFIA.find((o) => o.chave === FILOSOFIA) || {}).rotulo || FILOSOFIA
+    : 'nenhuma escolhida';
+  return `<select class="campo-linha" style="min-width:108px"
+                  title="Em branco, esta posição segue a filosofia da carteira (${esc(herdada.split('—')[0].trim())})."
+                  onchange="trocarReguaDoPapel('${esc(p.ticker)}', this.value)">
+            <option value=""${p.filosofia ? '' : ' selected'}>Herda</option>
+            ${opcoes}
+          </select>`;
+}
+
+function renderizarFilosofia() {
+  $('opcoesFilosofia').innerHTML = OPCOES_FILOSOFIA.map((o) => {
+    const ativa = o.chave === FILOSOFIA;
+    const borda = ativa ? 'var(--verde-esc)' : 'var(--borda)';
+    const fundo = ativa ? 'rgba(0,229,122,.06)' : 'transparent';
+    return `
+      <button type="button" onclick="escolherFilosofia('${esc(o.chave)}')"
+              class="text-left rounded p-3 transition"
+              style="background:${fundo}; border:1px solid ${borda}">
+        <p class="text-[11px] font-bold" style="color:${ativa ? 'var(--verde)' : 'var(--texto)'}">
+          ${esc(o.rotulo)}</p>
+        <p class="text-[10px] mt-1.5 leading-relaxed" style="color: var(--suave)">
+          ${esc(o.resumo)}</p>
+      </button>`;
+  }).join('');
+}
+
+async function carregarFilosofia() {
+  try {
+    const res = await fetch('/api/v1/carteira/filosofia');
+    if (!res.ok) return;
+    const dados = await res.json();
+    FILOSOFIA = dados.filosofia;
+    OPCOES_FILOSOFIA = dados.opcoes || [];
+    renderizarFilosofia();
+    if (!dados.definida) {
+      aviso('avisoFilosofia',
+            'Nenhuma filosofia escolhida — suas ações aparecem como <b>não apurado</b> '
+            + 'até você escolher. Não medimos por uma régua que você não pediu.', 'alerta');
+    } else { aviso('avisoFilosofia', ''); }
+  } catch (e) { /* a tela funciona sem isto */ }
+}
+
+async function escolherFilosofia(chave) {
+  if (chave === FILOSOFIA) return;
+  const anterior = FILOSOFIA;
+  FILOSOFIA = chave;
+  renderizarFilosofia();
+  try {
+    const res = await fetch('/api/v1/carteira/filosofia', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filosofia: chave }),
+    });
+    if (!res.ok) {
+      const corpo = await res.json().catch(() => ({}));
+      FILOSOFIA = anterior; renderizarFilosofia();
+      aviso('avisoFilosofia', esc((corpo.detail && corpo.detail.motivo)
+        || `O servidor respondeu ${res.status}.`));
+      return;
+    }
+    aviso('avisoFilosofia', '');
+    // Trocar a lente muda todo veredito: reavalia forçando, porque o cache do
+    // servidor é por assinatura das posições e elas não mudaram.
+    renderizar();
+    carregarDiagnostico(true);
+  } catch (e) {
+    FILOSOFIA = anterior; renderizarFilosofia();
+    aviso('avisoFilosofia', `Falha ao salvar: ${esc(e.message || e)}`);
+  }
+}
+
+async function trocarReguaDoPapel(ticker, chave) {
+  try {
+    const res = await fetch(`/api/v1/carteira/item/${encodeURIComponent(ticker)}/filosofia`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filosofia: chave || null }),
+    });
+    if (!res.ok) {
+      const corpo = await res.json().catch(() => ({}));
+      aviso('avisoItem', esc((corpo.detail && corpo.detail.motivo)
+        || `O servidor respondeu ${res.status}.`));
+      return;
+    }
+    const posicao = POSICOES.find((p) => p.ticker === ticker);
+    if (posicao) posicao.filosofia = chave || null;
+    carregarDiagnostico(true);
+  } catch (e) {
+    aviso('avisoItem', `Falha ao trocar a régua: ${esc(e.message || e)}`);
+  }
 }
 
 // ===================== rebalanceamento por aporte =====================
