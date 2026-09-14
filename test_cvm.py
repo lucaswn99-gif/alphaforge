@@ -1050,13 +1050,56 @@ class TestAcoesNoVpa(unittest.TestCase):
         self.assertIsNotNone(m["pvp"])
         self.assertAlmostEqual(m["roe"], -4.0, places=6)
 
-    def test_divergencia_de_ordem_de_grandeza_recusa_a_declarada(self):
-        """Dez vezes mais ações é coluna trocada, não recompra."""
+    def test_divergencia_entre_fontes_plausiveis_nao_apura(self):
+        """As duas dentro da faixa do possível e discordando por ordem de
+        grandeza: uma errou, e não dá para saber qual. Escolher no palpite
+        produziria um P/VP plausível e falso — o usuário não teria como
+        desconfiar. Melhor não apurar."""
         self._gravar_dfp()
-        self._gravar_acoes(4.55e10)
+        self._gravar_acoes(4.55e10)   # 45,5 bi contra 4,3 bi deduzidos
+        m = self._multiplos()
+        self.assertEqual(m["acoes_origem"], "divergente")
+        self.assertIsNone(m["acoes"])
+        self.assertIsNone(m["pvp"], "sem contagem confiável não há P/VP")
+        self.assertIsNone(m["vpa"])
+        self.assertAlmostEqual(m["roe"], 20.0, places=6,
+                               msg="ROE não depende da contagem de ações")
+
+    def test_declarada_absurda_cai_para_a_deduzida(self):
+        """1,9 quadrilhão de ações apareceu na primeira coleta real do FRE.
+        Fora da faixa não é divergência: é outra grandeza, e aí dá para saber
+        qual das duas está errada."""
+        self._gravar_dfp()
+        self._gravar_acoes(1.9e15)
         m = self._multiplos()
         self.assertEqual(m["acoes_origem"], "lpa")
         self.assertAlmostEqual(m["acoes"], self.ACOES_DEDUZIDAS, places=2)
+
+    def test_deduzida_absurda_cai_para_a_declarada(self):
+        """O outro lado, que eu tinha errado: LPA vem arredondado em duas ou
+        quatro casas e vira denominador. LPA pequeno faz lucro/LPA explodir —
+        na coleta real, uma companhia de ~900 milhões de ações saiu com 45
+        bilhões por esse caminho."""
+        self._gravar_dfp(lpa_on=0.0002)      # 1e9 / 0,0002 = 5 trilhões
+        self._gravar_acoes(9.2e8)
+        m = self._multiplos()
+        self.assertEqual(m["acoes_origem"], "fre")
+        self.assertEqual(m["acoes"], 9.2e8)
+
+    def test_as_duas_absurdas_nao_apuram(self):
+        self._gravar_dfp(lpa_on=0.0002)
+        self._gravar_acoes(1.9e15)
+        m = self._multiplos()
+        self.assertIsNone(m["acoes_origem"])
+        self.assertIsNone(m["pvp"])
+
+    def test_faixa_absoluta_de_acoes(self):
+        self.assertIsNone(fundamentos_cvm.acoes_plausivel(1.9e15))
+        self.assertIsNone(fundamentos_cvm.acoes_plausivel(5_000.0))
+        self.assertIsNone(fundamentos_cvm.acoes_plausivel(None))
+        self.assertIsNone(fundamentos_cvm.acoes_plausivel(-4.55e9))
+        # Petrobras tem pouco mais de 13 bilhões: o teto precisa aceitar isso.
+        self.assertEqual(fundamentos_cvm.acoes_plausivel(13.0e9), 13.0e9)
 
     def test_divergencia_pequena_e_aceita(self):
         """Recompra e follow-on são reais: só o extremo é recusado."""

@@ -1020,26 +1020,29 @@ class PhilosophyEngine:
         """
         cnpj = balanco.get("cnpj")
         registro = fundamentos_cvm.acoes_por_cnpj(cnpj) if cnpj else None
-        declarado = fontes.positivo(registro.get("total")) if registro else None
+        declarado = (fundamentos_cvm.acoes_plausivel(registro.get("total"))
+                     if registro else None)
 
         lucro = fontes.numero(balanco.get("lucro_liquido"))
         lpa = fontes.numero(balanco.get("lpa_on"))
-        deduzido = None
-        if lucro and lpa:
-            candidato = lucro / lpa
-            if candidato > 0:
-                deduzido = candidato
+        deduzido = (fundamentos_cvm.acoes_plausivel(lucro / lpa)
+                    if (lucro and lpa) else None)
 
-        if declarado:
-            # Mesma trava do outro módulo: ordem de grandeza diferente entre as
-            # duas é coluna trocada, e aí vale a deduzida, que sai do balanço
-            # auditado.
-            divergente = deduzido and (
+        if declarado and deduzido:
+            # Mesma regra do outro módulo, e pelo mesmo motivo: as duas
+            # plausíveis e discordando por ordem de grandeza significa que uma
+            # delas errou sem dizer qual. Aqui isso derruba o VPA, e o critério
+            # de P/VP cai em "não apurado" — que é o estado honesto, e que não
+            # reprova o papel.
+            divergente = (
                 declarado > fundamentos_cvm.DIVERGENCIA_MAXIMA_ACOES * deduzido
                 or deduzido > fundamentos_cvm.DIVERGENCIA_MAXIMA_ACOES * declarado)
-            if not divergente:
-                return declarado, "quantidade declarada (FRE 17.1)"
+            if divergente:
+                return None, "contagem divergente entre FRE e lucro/LPA"
+            return declarado, "quantidade declarada (FRE 17.1)"
 
+        if declarado:
+            return declarado, "quantidade declarada (FRE 17.1)"
         if deduzido:
             return deduzido, "lucro/LPA (DFP)"
 

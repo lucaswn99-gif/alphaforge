@@ -51,6 +51,12 @@ VARIACAO_MAXIMA_PATRIMONIO = 3.0
 # deslocado por um fator de dez, que produz um P/VP plausível e falso.
 DIVERGENCIA_MAXIMA_ACOES = 5.0
 
+# Faixa absoluta de quantidade de ações de companhia listada. Vale para as duas
+# fontes, e é aplicada ANTES da comparação entre elas: divergência diz que uma
+# das duas errou, não qual. A faixa resolve os casos em que dá para saber.
+ACOES_MINIMO_PLAUSIVEL = 100_000.0
+ACOES_MAXIMO_PLAUSIVEL = 100_000_000_000.0
+
 _lock = threading.Lock()
 _cache = {}
 _cache_itr = {}
@@ -298,6 +304,16 @@ def _patrimonio_para_pvp(balanco, itr):
     return trimestral, "itr", data_itr
 
 
+def acoes_plausivel(valor):
+    """Quantidade de ações dentro da faixa do possível, ou None."""
+    numero = _numero(valor)
+    if numero is None:
+        return None
+    if ACOES_MINIMO_PLAUSIVEL <= numero <= ACOES_MAXIMO_PLAUSIVEL:
+        return numero
+    return None
+
+
 def _acoes_em_circulacao(balanco, registro_acoes):
     """Quantas ações dividem o patrimônio. Devolve (quantidade, origem).
 
@@ -309,30 +325,40 @@ def _acoes_em_circulacao(balanco, registro_acoes):
     * `lpa` — lucro / LPA, a dedução que era a única fonte até aqui. Continua
       como segunda opção, porque nem toda companhia aparece no FRE.
 
-    Quando as duas existem e discordam por ordem de grandeza, a declarada é
-    recusada e vale a deduzida: lucro e LPA saem do mesmo demonstrativo
-    auditado, então elas erram juntas ou não erram.
+    Antes de comparar as duas, cada uma passa por uma faixa absoluta: companhia
+    listada na B3 tem entre cem mil e cem bilhões de papéis. O que cai fora não
+    é dado ruim, é outra grandeza. A primeira coleta do FRE trouxe uma
+    companhia com 1,9 QUADRILHÃO de ações declaradas — e lucro/LPA produz
+    números igualmente absurdos quando o LPA publicado é pequeno, porque ele
+    vem arredondado em duas ou quatro casas e vira denominador.
+
+    Quando as duas sobrevivem à faixa e ainda assim discordam por ordem de
+    grandeza, NENHUMA é usada e o P/VP sai não apurado. É deliberado: não há
+    como saber qual está certa, e escolher no palpite produz exatamente o que
+    este projeto não entrega — um múltiplo plausível e falso, que o usuário não
+    tem como desconfiar. Perder o P/VP de algumas dezenas de papéis é o preço,
+    e sai mais barato que publicar um número errado.
     """
+    declarado = (acoes_plausivel(registro_acoes.get("total"))
+                 if registro_acoes else None)
+
     lucro = _numero(balanco.get("lucro_liquido"))
     lpa = _numero(balanco.get("lpa_on"))
-    deduzido = None
-    if lucro is not None and lpa:
-        candidato = lucro / lpa
-        if candidato > 0:
-            deduzido = candidato
+    deduzido = acoes_plausivel(lucro / lpa) if (lucro is not None and lpa) else None
 
-    declarado = None
-    if registro_acoes:
-        declarado = _positivo(registro_acoes.get("total"))
-
+    if declarado is None and deduzido is None:
+        return None, None
     if declarado is None:
-        return deduzido, ("lpa" if deduzido else None)
+        return deduzido, "lpa"
     if deduzido is None:
         return declarado, "fre"
 
     if (declarado > DIVERGENCIA_MAXIMA_ACOES * deduzido
             or deduzido > DIVERGENCIA_MAXIMA_ACOES * declarado):
-        return deduzido, "lpa"
+        return None, "divergente"
+    # Concordando, vale a declarada: é afirmação direta da companhia sobre um
+    # saldo em data, enquanto a deduzida é quociente de dois números
+    # arredondados e representa média ponderada do exercício.
     return declarado, "fre"
 
 

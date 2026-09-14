@@ -620,10 +620,25 @@ def principal():
     checar("Graham: sem FRE o VPA é o de antes",
            perto(sem_fre["vpa"], 10e9 / 1e9), sem_fre["vpa"])
 
-    # Dez vezes mais ações que a dedução é coluna trocada, não recompra.
+    # As duas plausíveis e discordando por ordem de grandeza: uma errou sem
+    # dizer qual. O VPA cai, e o P/VP vira não apurado — sem reprovar o papel.
     divergente = _montar_motor_fre({"total": 1e10})
-    checar("Graham: contagem declarada fora de ordem de grandeza é recusada",
-           "lucro/LPA" in (divergente["origem_acoes"] or ""), divergente["origem_acoes"])
+    checar("Graham: contagem divergente não apura o VPA",
+           divergente["vpa"] is None, divergente["vpa"])
+    checar("Graham: a divergência é declarada na origem",
+           "divergente" in (divergente["origem_acoes"] or ""),
+           divergente["origem_acoes"])
+    checar("Graham: P/VP sem contagem vira não apurado, não reprovação",
+           any("P/VP" in n for n in divergente["nao_apurados"])
+           and not any("P/VP" in m for m in divergente["motivos"]),
+           divergente["nao_apurados"])
+
+    # Fora da faixa do possível dá para saber quem errou: vale a outra.
+    absurda = _montar_motor_fre({"total": 1.9e15})
+    checar("Graham: contagem declarada absurda cai para lucro/LPA",
+           "lucro/LPA" in (absurda["origem_acoes"] or ""), absurda["origem_acoes"])
+    checar("Graham: e o VPA volta a sair",
+           perto(absurda["vpa"], 10e9 / 1e9), absurda["vpa"])
 
     # Papel sem LPA publicado: antes caía no valor de mercado, que é aproximado
     # para quem tem ON e PN. Agora tem uma quantidade declarada.

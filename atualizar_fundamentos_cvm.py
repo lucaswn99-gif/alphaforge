@@ -262,7 +262,15 @@ EXCLUIR_DO_CAPITAL = ("distribuicao", "circulacao", "aumento", "reducao",
 # usar o teto como se fosse capital existente infla as ações, esvazia o VPA e
 # faz a companhia parecer barata.
 TIPOS_CAPITAL = ("capital integralizado", "capital subscrito", "capital emitido")
-ACOES_MINIMO_PLAUSIVEL = 1_000.0
+
+# Faixa absoluta de quantidade de ações de companhia listada na B3. A maior do
+# mercado tem pouco mais de 13 bilhões de papéis; o teto de 100 bilhões dá
+# folga de quase oito vezes sobre isso e ainda assim derruba o que a primeira
+# coleta trouxe — uma companhia com 1,9 QUADRILHÃO de ações declaradas e outra
+# com 1,8 trilhão. Números assim não são recompra nem diluição: são o campo
+# preenchido em outra unidade, ou em outra coisa que não ação.
+ACOES_MINIMO_PLAUSIVEL = 100_000.0
+ACOES_MAXIMO_PLAUSIVEL = 100_000_000_000.0
 
 
 def _mapear_colunas_capital(cabecalho):
@@ -297,7 +305,9 @@ def _quantidade(bruto):
         numero = float(texto)
     except (TypeError, ValueError):
         return None
-    return numero if numero >= ACOES_MINIMO_PLAUSIVEL else None
+    if ACOES_MINIMO_PLAUSIVEL <= numero <= ACOES_MAXIMO_PLAUSIVEL:
+        return numero
+    return None
 
 
 def ler_acoes_capital(arquivo_zip, nome_csv):
@@ -516,15 +526,39 @@ def relatorio_qualidade_acoes(banco=BANCO):
         print("\nFRE x LPA: nada para cruzar.")
         return
 
-    fora = [(nome, declarado, deduzido) for nome, declarado, deduzido in linhas
-            if declarado > 5.0 * deduzido or deduzido > 5.0 * declarado]
-    print(f"\nFRE x lucro/LPA — {len(linhas)} companhias cruzadas, "
-          f"{len(fora)} fora de proporção:")
-    if not fora:
-        print("   nenhuma  <-- esperado")
-    for nome, declarado, deduzido in sorted(fora, key=lambda x: -x[1])[:15]:
-        print(f"   {(nome or '')[:30]:<30} FRE {declarado:>16,.0f}   "
-              f"LPA {deduzido:>16,.0f}   <-- revisar")
+    def plausivel(valor):
+        return ACOES_MINIMO_PLAUSIVEL <= valor <= ACOES_MAXIMO_PLAUSIVEL
+
+    ambiguos = []
+    so_lpa_ruim = []
+    for nome, declarado, deduzido in linhas:
+        if declarado <= 5.0 * deduzido and deduzido <= 5.0 * declarado:
+            continue
+        # A divergência sozinha não diz QUEM errou. A faixa absoluta diz, nos
+        # casos em que um dos dois está fora do universo do possível.
+        if plausivel(declarado) and not plausivel(deduzido):
+            so_lpa_ruim.append((nome, declarado, deduzido))
+        elif plausivel(declarado) and plausivel(deduzido):
+            ambiguos.append((nome, declarado, deduzido))
+
+    print(f"\nFRE x lucro/LPA — {len(linhas)} companhias cruzadas.")
+
+    if so_lpa_ruim:
+        print(f"\n   {len(so_lpa_ruim)} em que lucro/LPA é que está fora da faixa "
+              f"(o FRE resolve):")
+        for nome, declarado, deduzido in sorted(so_lpa_ruim, key=lambda x: -x[1])[:10]:
+            print(f"      {(nome or '')[:30]:<30} FRE {declarado:>15,.0f}   "
+                  f"LPA {deduzido:>18,.0f}")
+
+    print(f"\n   {len(ambiguos)} em que os DOIS são plausíveis e mesmo assim "
+          f"discordam — nestas o P/VP sai NÃO APURADO,")
+    print("   porque não há como saber qual está certo sem olhar o documento:")
+    if not ambiguos:
+        print("      nenhuma  <-- esperado")
+    for nome, declarado, deduzido in sorted(ambiguos, key=lambda x: -x[1])[:15]:
+        razao = declarado / deduzido if deduzido else float("inf")
+        print(f"      {(nome or '')[:30]:<30} FRE {declarado:>15,.0f}   "
+              f"LPA {deduzido:>15,.0f}   {razao:>8.1f}x")
 
 
 def _escala(valor):
