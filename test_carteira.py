@@ -21,10 +21,18 @@ from modules import carteira, contas
 
 def _banco_limpo():
     """Banco novo por classe de teste. Estado compartilhado entre testes de
-    dinheiro é como se descobre um bug só quando ele já está em produção."""
+    dinheiro é como se descobre um bug só quando ele já está em produção.
+
+    Zera também o contador de tentativas de login: ele é global por IP, e o
+    TestClient usa sempre o mesmo endereço. Sem isto, a décima primeira conta
+    criada na suíte leva 429 — e o teste falha por um limite de produção que
+    está funcionando certo.
+    """
     contas.CAMINHO_BANCO = os.path.join(tempfile.mkdtemp(), "contas_teste.db")
     contas._iniciado = False
     contas.iniciar()
+    from routers import conta as rota_conta
+    rota_conta._tentativas.clear()
 
 
 class TestValidacaoDeTicker(unittest.TestCase):
@@ -242,3 +250,232 @@ class TestRotas(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ==========================================================================
+# Importação de planilha
+# ==========================================================================
+
+class TestLeituraDePlanilha(unittest.TestCase):
+    """O parser é o ponto mais frágil do módulo: o arquivo vem de fora, cada
+    corretora exporta diferente, e o que ele produz vira posição de verdade."""
+
+    @staticmethod
+    def _xlsx(linhas):
+        import io
+        from openpyxl import Workbook
+        livro = Workbook()
+        for linha in linhas:
+            livro.active.append(linha)
+        buffer = io.BytesIO()
+        livro.save(buffer)
+        return buffer.getvalue()
+
+    def test_planilha_simples(self):
+        from modules import importacao
+        dados = self._xlsx([["Ticker", "Quantidade", "Preço médio"],
+                            ["PETR4", 100, 32.5]])
+        linhas = importacao.ler(dados, "carteira.xlsx")
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["ticker"], "PETR4")
+        self.assertEqual(linhas[0]["quantidade"], 100)
+        self.assertAlmostEqual(linhas[0]["preco_medio"], 32.5)
+        self.assertIsNone(linhas[0]["erro"])
+
+    def test_cabecalho_fora_da_primeira_linha(self):
+        # Export de corretora vem com título, CNPJ e data antes da tabela.
+        from modules import importacao
+        dados = self._xlsx([["Posição consolidada"], ["CNPJ 00.000.000/0001-00"], [],
+                            ["Papel", "Qtde", "PM"], ["VALE3", 50, 60.0]])
+        linhas = importacao.ler(dados, "extrato.xlsx")
+        self.assertEqual(linhas[0]["ticker"], "VALE3")
+
+    def test_nomes_de_coluna_alternativos(self):
+        from modules import importacao
+        for cabecalho in (["Código", "Quantidade", "Preço Médio (R$)"],
+                          ["Produto", "Qtd. Disponível", "Preco medio"],
+                          ["ATIVO", "QUANT", "CUSTO MEDIO"]):
+            dados = self._xlsx([cabecalho, ["ITUB4", 10, 30.0]])
+            linhas = importacao.ler(dados, "x.xlsx")
+            self.assertEqual(linhas[0]["ticker"], "ITUB4", cabecalho)
+            self.assertEqual(linhas[0]["quantidade"], 10, cabecalho)
+
+    def test_ticker_com_descricao_junto(self):
+        from modules import importacao
+        dados = self._xlsx([["Papel", "Qtde", "PM"],
+                            ["PETR4 - PETROBRAS PN N2", 100, 32.5]])
+        self.assertEqual(importacao.ler(dados, "x.xlsx")[0]["ticker"], "PETR4")
+
+    def test_fracionario_vira_o_papel_cheio(self):
+        # PETR4F é o mesmo ativo que PETR4; separar os dois criaria duas
+        # posições do mesmo papel na carteira.
+        from modules import importacao
+        dados = self._xlsx([["Papel", "Qtde", "PM"], ["PETR4F", 7, 32.5]])
+        self.assertEqual(importacao.ler(dados, "x.xlsx")[0]["ticker"], "PETR4")
+
+    def test_numero_no_formato_brasileiro(self):
+        from modules import importacao
+        dados = self._xlsx([["Papel", "Qtde", "PM"],
+                            ["TAEE11", "1.200", "R$ 34,10"]])
+        linha = importacao.ler(dados, "x.xlsx")[0]
+        self.assertEqual(linha["quantidade"], 1200)
+        self.assertAlmostEqual(linha["preco_medio"], 34.10)
+
+    def test_linha_ruim_nao_derruba_o_arquivo(self):
+        from modules import importacao
+        dados = self._xlsx([["Papel", "Qtde", "PM"],
+                            ["PETR4", 100, 32.5],
+                            ["XXXX9", 10, 5.0],      # forma inválida
+                            ["VALE3", "-", 60.0],    # quantidade ilegível
+                            ["ITUB4", 20, 30.0]])
+        linhas = importacao.ler(dados, "x.xlsx")
+        self.assertEqual(len(linhas), 4)
+        self.assertEqual([l["erro"] is None for l in linhas], [True, False, False, True])
+
+    def test_linha_de_total_sem_ticker_e_ignorada_em_silencio(self):
+        from modules import importacao
+        dados = self._xlsx([["Papel", "Qtde", "PM"], ["PETR4", 100, 32.5],
+                            ["", 100, ""], ["TOTAL", "", 3250.0]])
+        linhas = importacao.ler(dados, "x.xlsx")
+        self.assertEqual(len(linhas), 1)
+
+    def test_planilha_sem_preco_avisa_em_vez_de_inventar(self):
+        from modules import importacao
+        dados = self._xlsx([["Papel", "Quantidade"], ["PETR4", 100]])
+        linha = importacao.ler(dados, "x.xlsx")[0]
+        self.assertIsNotNone(linha["erro"])
+        self.assertIn("preço", linha["erro"].lower())
+
+    def test_csv_com_ponto_e_virgula(self):
+        from modules import importacao
+        conteudo = "Papel;Quantidade;Preço médio\nPETR4;100;32,50\n".encode("utf-8")
+        linha = importacao.ler(conteudo, "carteira.csv")[0]
+        self.assertEqual(linha["ticker"], "PETR4")
+        self.assertAlmostEqual(linha["preco_medio"], 32.50)
+
+    def test_csv_em_latin1_nao_quebra(self):
+        from modules import importacao
+        conteudo = "Papel;Quantidade;Preço médio\nVALE3;10;60,00\n".encode("latin-1")
+        self.assertEqual(importacao.ler(conteudo, "x.csv")[0]["ticker"], "VALE3")
+
+    def test_arquivo_sem_cabecalho_reconhecivel_levanta(self):
+        from modules import importacao
+        dados = self._xlsx([["Coluna A", "Coluna B"], ["xxx", "yyy"]])
+        with self.assertRaises(importacao.ErroImportacao):
+            importacao.ler(dados, "x.xlsx")
+
+    def test_extensao_nao_aceita_levanta(self):
+        from modules import importacao
+        with self.assertRaises(importacao.ErroImportacao):
+            importacao.ler(b"qualquer", "carteira.pdf")
+
+    def test_arquivo_grande_demais_levanta(self):
+        from modules import importacao
+        with self.assertRaises(importacao.ErroImportacao):
+            importacao.ler(b"x" * (importacao.MAXIMO_BYTES + 1), "x.csv")
+
+    def test_planilha_modelo_e_lida_pelo_proprio_parser(self):
+        # O modelo que entregamos precisa passar na nossa própria leitura —
+        # senão estaríamos ensinando um formato que não aceitamos.
+        from modules import importacao
+        linhas = importacao.ler(importacao.planilha_modelo(), "modelo.xlsx")
+        self.assertTrue(linhas)
+        self.assertTrue(all(l["erro"] is None for l in linhas), linhas)
+
+
+class TestRotasDeImportacao(unittest.TestCase):
+    def setUp(self):
+        _banco_limpo()
+        import api
+        self.cliente = TestClient(api.app)
+        self.cliente.post("/conta/registrar",
+                          json={"email": "imp@teste.com", "senha": "senha-boa-123"})
+        contas.definir_plano(contas.autenticar("imp@teste.com", "senha-boa-123")["id"],
+                             "premium")
+
+    def _enviar(self, linhas, nome="carteira.xlsx"):
+        dados = TestLeituraDePlanilha._xlsx(linhas)
+        return self.cliente.post("/api/v1/carteira/importar/previa",
+                                 files={"arquivo": (nome, dados, "application/vnd.ms-excel")})
+
+    def test_previa_nao_grava_nada(self):
+        resposta = self._enviar([["Papel", "Qtde", "PM"], ["PETR4", 100, 32.5]])
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta.json()["validas"], 1)
+        # O ponto inteiro da prévia: a carteira continua vazia.
+        self.assertEqual(self.cliente.get("/api/v1/carteira").json()["posicoes_total"], 0)
+
+    def test_previa_diz_o_que_e_novo_e_o_que_ja_existe(self):
+        self.cliente.post("/api/v1/carteira/item",
+                          json={"ticker": "PETR4", "quantidade": 50, "preco_medio": 20.0})
+        corpo = self._enviar([["Papel", "Qtde", "PM"],
+                              ["PETR4", 100, 32.5], ["VALE3", 10, 60.0]]).json()
+        self.assertEqual(corpo["existentes"], 1)
+        self.assertEqual(corpo["novos"], 1)
+        petr = next(l for l in corpo["linhas"] if l["ticker"] == "PETR4")
+        self.assertEqual(petr["acao"], "atualiza")
+        self.assertEqual(petr["quantidade_atual"], 50.0)
+
+    def test_importar_substituindo_usa_a_planilha_como_verdade(self):
+        self.cliente.post("/api/v1/carteira/item",
+                          json={"ticker": "PETR4", "quantidade": 50, "preco_medio": 20.0})
+        resposta = self.cliente.post("/api/v1/carteira/importar", json={
+            "modo": "substituir",
+            "linhas": [{"ticker": "PETR4", "quantidade": 100, "preco_medio": 32.5}]})
+        self.assertEqual(resposta.status_code, 200)
+        posicao = self.cliente.get("/api/v1/carteira").json()["posicoes"][0]
+        self.assertEqual(posicao["quantidade"], 100.0)
+        self.assertAlmostEqual(posicao["preco_medio"], 32.5)
+
+    def test_importar_somando_faz_media_ponderada(self):
+        self.cliente.post("/api/v1/carteira/item",
+                          json={"ticker": "PETR4", "quantidade": 100, "preco_medio": 30.0})
+        self.cliente.post("/api/v1/carteira/importar", json={
+            "modo": "somar",
+            "linhas": [{"ticker": "PETR4", "quantidade": 100, "preco_medio": 40.0}]})
+        posicao = self.cliente.get("/api/v1/carteira").json()["posicoes"][0]
+        self.assertEqual(posicao["quantidade"], 200.0)
+        self.assertAlmostEqual(posicao["preco_medio"], 35.0)
+
+    def test_substituir_cria_papel_que_ainda_nao_existe(self):
+        self.cliente.post("/api/v1/carteira/importar", json={
+            "modo": "substituir",
+            "linhas": [{"ticker": "VALE3", "quantidade": 10, "preco_medio": 60.0}]})
+        self.assertEqual(self.cliente.get("/api/v1/carteira").json()["posicoes_total"], 1)
+
+    def test_linha_ruim_no_lote_nao_impede_as_boas(self):
+        resposta = self.cliente.post("/api/v1/carteira/importar", json={
+            "modo": "substituir",
+            "linhas": [{"ticker": "PETR4", "quantidade": 100, "preco_medio": 32.5},
+                       {"ticker": "XXXX9", "quantidade": 10, "preco_medio": 5.0}]})
+        corpo = resposta.json()
+        self.assertEqual(corpo["gravadas"], 1)
+        self.assertEqual(len(corpo["recusadas"]), 1)
+
+    def test_modo_invalido_e_recusado(self):
+        resposta = self.cliente.post("/api/v1/carteira/importar", json={
+            "modo": "apagar_tudo",
+            "linhas": [{"ticker": "PETR4", "quantidade": 1, "preco_medio": 1}]})
+        self.assertEqual(resposta.status_code, 422)
+
+    def test_planilha_invalida_devolve_422_com_motivo(self):
+        resposta = self.cliente.post(
+            "/api/v1/carteira/importar/previa",
+            files={"arquivo": ("x.pdf", b"conteudo", "application/pdf")})
+        self.assertEqual(resposta.status_code, 422)
+        self.assertIn("Formato", resposta.json()["detail"]["motivo"])
+
+    def test_modelo_sai_como_xlsx(self):
+        resposta = self.cliente.get("/api/v1/carteira/modelo")
+        self.assertEqual(resposta.status_code, 200)
+        self.assertTrue(resposta.content.startswith(b"PK"))  # zip = xlsx
+
+    def test_rotas_de_importacao_exigem_premium(self):
+        self.cliente.post("/conta/sair")
+        self.cliente.post("/conta/registrar",
+                          json={"email": "free-imp@teste.com", "senha": "senha-boa-123"})
+        self.assertEqual(self.cliente.get("/api/v1/carteira/modelo").status_code, 402)
+        self.assertEqual(self.cliente.post("/api/v1/carteira/importar", json={
+            "modo": "substituir",
+            "linhas": [{"ticker": "PETR4", "quantidade": 1, "preco_medio": 1}]}).status_code, 402)
+        self.assertEqual(self._enviar([["Papel", "Qtde", "PM"], ["PETR4", 1, 1]]).status_code, 402)

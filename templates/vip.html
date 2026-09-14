@@ -123,6 +123,28 @@
       border: 1px solid rgba(0,229,122,.24);
     }
     .barra-peso { height: 3px; border-radius: 2px; background: var(--verde-esc); }
+
+    /* Alvo de arrastar-e-soltar. A borda tracejada é a única no design
+       inteiro: ela diz "isto recebe coisa", e nada mais na tela faz isso. */
+    .alvo {
+      border: 1.5px dashed var(--borda-viva); border-radius: 8px;
+      background: var(--painel-alt); transition: border-color .15s, background .15s;
+      cursor: pointer;
+    }
+    .alvo:hover, .alvo.ativo { border-color: var(--verde-esc); background: #08130d; }
+    .alvo.ativo { box-shadow: 0 0 0 3px rgba(0,229,122,.08); }
+
+    /* Edição na própria linha: o campo ocupa o lugar exato do número que
+       substitui, para o olho não precisar reencontrar a coluna. */
+    .campo-linha {
+      background: var(--fundo); border: 1px solid var(--verde-esc); border-radius: 4px;
+      padding: 4px 7px; color: var(--texto); font-size: 12px; width: 92px;
+      text-align: right; outline: none;
+      font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums;
+    }
+    .campo-linha:focus { box-shadow: 0 0 0 3px rgba(0,229,122,.10); }
+
+    .fita { position: sticky; top: 56px; z-index: 15; }
   </style>
 </head>
 <body>
@@ -239,6 +261,69 @@
           Peso calculado sobre <b>custo de aquisição</b>, não sobre valor de mercado —
           a cotação entra no diagnóstico, no próximo módulo.
         </p>
+      </div>
+    </section>
+
+    <!-- Importação de planilha -->
+    <section class="painel p-5 entra" style="animation-delay:.04s">
+      <div class="flex items-start justify-between gap-3 flex-wrap mb-3.5">
+        <div>
+          <h2 class="rotulo">Importar planilha da corretora</h2>
+          <p class="text-[10px] mt-1.5" style="color: #3d4a43">
+            .xlsx ou .csv · o cabeçalho pode estar em qualquer linha, e os nomes das
+            colunas são reconhecidos automaticamente
+          </p>
+        </div>
+        <button class="btn-fantasma" id="btnModelo" type="button">Baixar modelo</button>
+      </div>
+
+      <div class="alvo px-5 py-7 text-center" id="alvoArquivo">
+        <input type="file" id="arquivo" accept=".xlsx,.xlsm,.csv,.txt" class="hidden">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" class="mx-auto mb-2.5" aria-hidden="true">
+          <path d="M12 16V4m0 0L8 8m4-4 4 4" stroke="var(--verde-esc)" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16"
+                stroke="var(--borda-viva)" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <p class="text-[12px] font-semibold" id="rotuloArquivo">Arraste a planilha aqui ou clique para escolher</p>
+        <p class="text-[10px] mt-1" style="color: var(--suave)">Nada é gravado antes de você conferir a prévia</p>
+      </div>
+
+      <p id="avisoImportacao" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mt-3"></p>
+
+      <!-- Prévia: o que aconteceria. Só depois disto alguma coisa é gravada. -->
+      <div id="painelPrevia" class="hidden mt-4">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <p class="text-[11px]" id="resumoPrevia" style="color: var(--suave)"></p>
+          <div class="flex items-center gap-2 flex-wrap">
+            <label class="flex items-center gap-1.5 text-[11px] cursor-pointer" style="color: var(--suave)">
+              <input type="radio" name="modoImportacao" value="substituir" checked> substituir posições
+            </label>
+            <label class="flex items-center gap-1.5 text-[11px] cursor-pointer" style="color: var(--suave)">
+              <input type="radio" name="modoImportacao" value="somar"> somar como aporte
+            </label>
+          </div>
+        </div>
+        <p class="text-[10px] mb-3" id="explicaModo" style="color: #3d4a43"></p>
+        <div class="overflow-x-auto max-h-[300px] overflow-y-auto rounded"
+             style="border: 1px solid var(--borda)">
+          <table class="w-full text-[11px]">
+            <thead class="sticky top-0" style="background: var(--painel-alt)">
+              <tr class="rotulo text-left">
+                <th class="px-3 py-2 font-semibold">Linha</th>
+                <th class="px-3 py-2 font-semibold">Papel</th>
+                <th class="px-3 py-2 font-semibold text-right">Quantidade</th>
+                <th class="px-3 py-2 font-semibold text-right">Preço médio</th>
+                <th class="px-3 py-2 font-semibold">O que acontece</th>
+              </tr>
+            </thead>
+            <tbody id="tabelaPrevia" class="divide-y" style="border-color: var(--borda)"></tbody>
+          </table>
+        </div>
+        <div class="flex gap-2.5 mt-3.5 flex-wrap">
+          <button class="btn" id="btnConfirmarImportacao" type="button">Confirmar importação</button>
+          <button class="btn-fantasma" id="btnCancelarImportacao" type="button">Cancelar</button>
+        </div>
       </div>
     </section>
 
@@ -427,7 +512,9 @@ function renderizar() {
   $('estadoVazio').classList.toggle('hidden', lista.length > 0);
   const rotulos = { acao: 'Ação', fii: 'FII', etf: 'ETF', desconhecida: 'Não verificado' };
 
-  $('tabelaPosicoes').innerHTML = lista.map((p) => `
+  $('tabelaPosicoes').innerHTML = lista.map((p) => {
+    const editando = EDITANDO === p.ticker;
+    return `
     <tr class="linha" data-ticker="${esc(p.ticker)}">
       <td class="px-5 py-3">
         <div class="font-bold mono text-[12px]" style="color: var(--verde)">${esc(p.ticker)}</div>
@@ -435,20 +522,182 @@ function renderizar() {
              title="${p.verificado ? '' : 'Não encontrado nos nossos registros — confira o código.'}">
           ${esc(rotulos[p.classe] || p.classe)}</div>
       </td>
-      <td class="px-3 py-3 text-right mono">${qtd(p.quantidade)}</td>
-      <td class="px-3 py-3 text-right mono" style="color: var(--suave)">${brl(p.preco_medio)}</td>
+      <td class="px-3 py-3 text-right mono">${editando
+        ? `<input class="campo-linha" data-campo="quantidade" type="number" step="any" min="0"
+                  value="${p.quantidade}" onkeydown="teclaEdicao(event, '${esc(p.ticker)}')">`
+        : qtd(p.quantidade)}</td>
+      <td class="px-3 py-3 text-right mono" style="color: var(--suave)">${editando
+        ? `<input class="campo-linha" data-campo="preco" type="number" step="any" min="0"
+                  value="${p.preco_medio}" onkeydown="teclaEdicao(event, '${esc(p.ticker)}')">`
+        : brl(p.preco_medio)}</td>
       <td class="px-3 py-3 text-right mono">${brl(p.custo_total)}</td>
       <td class="px-3 py-3 text-right">
         <div class="mono text-[11px]">${p.peso_pct == null ? '—' : p.peso_pct.toFixed(1) + '%'}</div>
         <div class="barra-peso mt-1 ml-auto" style="width: ${Math.max(2, Math.min(100, p.peso_pct || 0))}%"></div>
       </td>
       <td class="px-5 py-3 text-right whitespace-nowrap">
-        <button class="btn-fantasma" onclick="editar('${esc(p.ticker)}')">Corrigir</button>
-        <button class="btn-fantasma" onclick="remover('${esc(p.ticker)}')"
-                style="color: var(--vermelho); border-color: rgba(255,77,94,.25)">Remover</button>
+        ${editando
+          ? `<button class="btn-fantasma" onclick="salvarEdicao('${esc(p.ticker)}')"
+                     style="color: var(--verde); border-color: rgba(0,229,122,.28)">Salvar</button>
+             <button class="btn-fantasma" onclick="cancelarEdicao()">Cancelar</button>`
+          : `<button class="btn-fantasma" onclick="abrirEdicao('${esc(p.ticker)}')">Corrigir</button>
+             <button class="btn-fantasma" onclick="remover('${esc(p.ticker)}')"
+                     style="color: var(--vermelho); border-color: rgba(255,77,94,.25)">Remover</button>`}
       </td>
-    </tr>`).join('');
+    </tr>`; }).join('');
 }
+
+// ===================== importação de planilha =====================
+let PREVIA = [];
+
+const EXPLICA_MODO = {
+  substituir: 'Substituir: a planilha vira a verdade. Papel que já existe fica com a '
+            + 'quantidade e o preço da planilha. É o certo para extrato de corretora, '
+            + 'que é um retrato da carteira.',
+  somar:      'Somar: cada linha entra como aporte, com preço médio recalculado por '
+            + 'média ponderada sobre o que já existe. É o certo para uma lista de '
+            + 'compras novas — usar isto com um extrato dobraria suas posições.',
+};
+
+function modoImportacao() {
+  const marcado = document.querySelector('input[name="modoImportacao"]:checked');
+  return marcado ? marcado.value : 'substituir';
+}
+
+function atualizarExplicacaoModo() {
+  $('explicaModo').innerText = EXPLICA_MODO[modoImportacao()];
+  renderizarPrevia();
+}
+document.querySelectorAll('input[name="modoImportacao"]').forEach((radio) => {
+  radio.addEventListener('change', atualizarExplicacaoModo);
+});
+
+$('btnModelo').addEventListener('click', async () => {
+  // Sem <a download> apontando para a rota: ela exige sessão premium, e um
+  // link direto abriria a resposta 402 como página em branco para o gratuito.
+  try {
+    const res = await fetch('/api/v1/carteira/modelo');
+    if (!res.ok) { aviso('avisoImportacao', `O servidor respondeu ${res.status}.`); return; }
+    const url = URL.createObjectURL(await res.blob());
+    const link = document.createElement('a');
+    link.href = url; link.download = 'modelo-carteira.xlsx';
+    document.body.appendChild(link); link.click(); link.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) { aviso('avisoImportacao', `Falha ao baixar: ${esc(e.message || e)}`); }
+});
+
+const alvo = $('alvoArquivo');
+alvo.addEventListener('click', () => $('arquivo').click());
+alvo.addEventListener('dragover', (e) => { e.preventDefault(); alvo.classList.add('ativo'); });
+alvo.addEventListener('dragleave', () => alvo.classList.remove('ativo'));
+alvo.addEventListener('drop', (e) => {
+  e.preventDefault();
+  alvo.classList.remove('ativo');
+  if (e.dataTransfer.files && e.dataTransfer.files[0]) enviarPlanilha(e.dataTransfer.files[0]);
+});
+$('arquivo').addEventListener('change', (e) => {
+  if (e.target.files && e.target.files[0]) enviarPlanilha(e.target.files[0]);
+});
+
+async function enviarPlanilha(arquivo) {
+  $('rotuloArquivo').innerText = `Lendo ${arquivo.name}…`;
+  aviso('avisoImportacao', '');
+  $('painelPrevia').classList.add('hidden');
+  const dados = new FormData();
+  dados.append('arquivo', arquivo);
+  try {
+    const res = await fetch('/api/v1/carteira/importar/previa', { method: 'POST', body: dados });
+    const corpo = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      aviso('avisoImportacao',
+            esc((corpo.detail && corpo.detail.motivo) || `O servidor respondeu ${res.status}.`),
+            res.status === 422 ? 'alerta' : 'erro');
+      $('rotuloArquivo').innerText = 'Arraste a planilha aqui ou clique para escolher';
+      return;
+    }
+    PREVIA = corpo.linhas || [];
+    $('rotuloArquivo').innerText = arquivo.name;
+    $('resumoPrevia').innerText =
+      `${corpo.validas} linha(s) prontas · ${corpo.novos} papel(is) novo(s), `
+      + `${corpo.existentes} já na carteira`
+      + (corpo.com_erro ? ` · ${corpo.com_erro} com problema (serão ignoradas)` : '');
+    atualizarExplicacaoModo();
+    $('painelPrevia').classList.remove('hidden');
+  } catch (e) {
+    aviso('avisoImportacao', `Falha ao enviar: ${esc(e.message || e)}`);
+    $('rotuloArquivo').innerText = 'Arraste a planilha aqui ou clique para escolher';
+  } finally {
+    $('arquivo').value = '';   // permite reenviar o mesmo arquivo depois de corrigir
+  }
+}
+
+function renderizarPrevia() {
+  const somando = modoImportacao() === 'somar';
+  $('tabelaPrevia').innerHTML = PREVIA.map((l) => {
+    let acao, cor;
+    if (l.erro) { acao = esc(l.erro); cor = 'var(--vermelho)'; }
+    else if (l.acao === 'novo') { acao = 'Entra como posição nova'; cor = 'var(--verde)'; }
+    else if (somando) {
+      acao = `Aporte sobre ${qtd(l.quantidade_atual)} @ ${brl(l.preco_medio_atual)}`;
+      cor = 'var(--ambar)';
+    } else {
+      acao = `Substitui ${qtd(l.quantidade_atual)} @ ${brl(l.preco_medio_atual)}`;
+      cor = 'var(--ambar)';
+    }
+    return `
+      <tr class="linha${l.erro ? ' opacity-60' : ''}">
+        <td class="px-3 py-2 mono" style="color:#3d4a43">${l.linha}</td>
+        <td class="px-3 py-2 mono font-bold" style="color: var(--verde)">${esc(l.ticker || '—')}</td>
+        <td class="px-3 py-2 text-right mono">${l.quantidade == null ? '—' : qtd(l.quantidade)}</td>
+        <td class="px-3 py-2 text-right mono">${l.preco_medio == null ? '—' : brl(l.preco_medio)}</td>
+        <td class="px-3 py-2 text-[10px]" style="color:${cor}">${acao}</td>
+      </tr>`;
+  }).join('');
+}
+
+$('btnCancelarImportacao').addEventListener('click', () => {
+  PREVIA = [];
+  $('painelPrevia').classList.add('hidden');
+  $('rotuloArquivo').innerText = 'Arraste a planilha aqui ou clique para escolher';
+  aviso('avisoImportacao', '');
+});
+
+$('btnConfirmarImportacao').addEventListener('click', async () => {
+  const validas = PREVIA.filter((l) => !l.erro);
+  if (!validas.length) { aviso('avisoImportacao', 'Nenhuma linha válida para importar.', 'alerta'); return; }
+  const btn = $('btnConfirmarImportacao');
+  btn.disabled = true; btn.innerText = 'Importando…';
+  try {
+    const res = await fetch('/api/v1/carteira/importar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        modo: modoImportacao(),
+        linhas: validas.map((l) => ({
+          ticker: l.ticker, quantidade: l.quantidade, preco_medio: l.preco_medio })),
+      }),
+    });
+    const corpo = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      aviso('avisoImportacao',
+            esc((corpo.detail && corpo.detail.motivo) || `O servidor respondeu ${res.status}.`));
+      return;
+    }
+    let texto = `<b>${corpo.gravadas}</b> posição(ões) importada(s).`;
+    if ((corpo.recusadas || []).length) {
+      texto += ` ${corpo.recusadas.length} recusada(s): `
+             + corpo.recusadas.map((r) => esc(r.ticker)).join(', ') + '.';
+      aviso('avisoImportacao', texto, 'alerta');
+    } else {
+      aviso('avisoImportacao', texto, 'sucesso');
+    }
+    PREVIA = [];
+    $('painelPrevia').classList.add('hidden');
+    $('rotuloArquivo').innerText = 'Arraste a planilha aqui ou clique para escolher';
+    carregar();
+  } catch (e) {
+    aviso('avisoImportacao', `Falha ao importar: ${esc(e.message || e)}`);
+  } finally { btn.disabled = false; btn.innerText = 'Confirmar importação'; }
+});
 
 $('formItem').addEventListener('submit', async (evento) => {
   evento.preventDefault();
@@ -488,17 +737,34 @@ $('formItem').addEventListener('submit', async (evento) => {
   } finally { btn.disabled = false; btn.innerText = 'Adicionar'; }
 });
 
-async function editar(ticker) {
-  const atual = POSICOES.find((p) => p.ticker === ticker);
-  if (!atual) return;
-  const quantidade = prompt(`Nova quantidade de ${ticker} (substitui, não soma):`, atual.quantidade);
-  if (quantidade === null) return;
-  const preco = prompt(`Novo preço médio de ${ticker}:`, atual.preco_medio);
-  if (preco === null) return;
+// Edição na própria linha. Substituiu o prompt() do navegador: prompt não
+// valida, não mostra o valor atual ao lado do novo, e empilha duas caixas
+// para dois campos. Aqui os dois campos ficam onde os números estavam.
+let EDITANDO = null;
+
+function abrirEdicao(ticker) {
+  EDITANDO = ticker;
+  renderizar();
+  const campo = document.querySelector(`tr[data-ticker="${ticker}"] .campo-linha`);
+  if (campo) { campo.focus(); campo.select(); }
+}
+
+function cancelarEdicao() { EDITANDO = null; renderizar(); }
+
+function teclaEdicao(evento, ticker) {
+  if (evento.key === 'Enter') { evento.preventDefault(); salvarEdicao(ticker); }
+  if (evento.key === 'Escape') { evento.preventDefault(); cancelarEdicao(); }
+}
+
+async function salvarEdicao(ticker) {
+  const linha = document.querySelector(`tr[data-ticker="${ticker}"]`);
+  if (!linha) return;
+  const quantidade = Number(linha.querySelector('[data-campo="quantidade"]').value);
+  const preco = Number(linha.querySelector('[data-campo="preco"]').value);
   try {
     const res = await fetch(`/api/v1/carteira/item/${encodeURIComponent(ticker)}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticker, quantidade: Number(quantidade), preco_medio: Number(preco) }),
+      body: JSON.stringify({ ticker, quantidade, preco_medio: preco }),
     });
     const corpo = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -506,6 +772,7 @@ async function editar(ticker) {
             res.status === 422 ? 'alerta' : 'erro');
       return;
     }
+    EDITANDO = null;
     aviso('avisoItem', `<b>${esc(ticker)}</b> corrigido.`, 'sucesso');
     carregar();
   } catch (e) { aviso('avisoItem', `Falha ao corrigir: ${esc(e.message || e)}`); }

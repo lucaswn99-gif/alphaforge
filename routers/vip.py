@@ -18,11 +18,11 @@ import os
 import time
 from collections import defaultdict, deque
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from modules import carteira, planos
+from modules import carteira, importacao, planos
 
 router = APIRouter(tags=["VIP & Carteira"])
 
@@ -157,6 +157,109 @@ def editar_item(ticker: str, item: ItemCarteira,
             "erro": "nao_encontrado",
             "motivo": f"{carteira.normalizar_ticker(ticker)} não está na carteira."})
     return {"posicao": linha}
+
+
+class LinhaImportada(BaseModel):
+    ticker: str = Field(..., max_length=12)
+    quantidade: float
+    preco_medio: float
+
+
+class Importacao(BaseModel):
+    linhas: list[LinhaImportada] = Field(..., max_length=importacao.MAXIMO_LINHAS)
+    # "substituir" trata a planilha como RETRATO da carteira (é o que um
+    # extrato de corretora é); "somar" trata como lista de aportes. O padrão
+    # é substituir porque importar extrato somando dobraria toda posição que
+    # já existe — e dobrar quantidade calado é o pior erro possível aqui.
+    modo: str = Field("substituir", pattern="^(substituir|somar)$")
+
+
+def _planilha(arquivo: UploadFile):
+    conteudo = arquivo.file.read(importacao.MAXIMO_BYTES + 1)
+    try:
+        return importacao.ler(conteudo, arquivo.filename)
+    except importacao.ErroImportacao as erro:
+        raise HTTPException(status_code=422, detail={
+            "erro": "planilha_invalida", "motivo": str(erro)})
+
+
+@router.get("/api/v1/carteira/modelo")
+def modelo_planilha(ctx: planos.Contexto = Depends(_vip)):
+    """Planilha de exemplo com o formato aceito."""
+    return Response(
+        content=importacao.planilha_modelo(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="modelo-carteira.xlsx"'})
+
+
+@router.post("/api/v1/carteira/importar/previa")
+def previa_importacao(arquivo: UploadFile = File(...),
+                      ctx: planos.Contexto = Depends(_vip)):
+    """Lê a planilha e diz o que ACONTECERIA — sem gravar nada.
+
+    A prévia não é cortesia: importar direto substituiria posições reais a
+    partir de um arquivo que ninguém conferiu, e "desfazer" não existe. Aqui a
+    pessoa vê linha a linha o que entra, o que muda e o que foi recusado, e só
+    então confirma.
+    """
+    linhas = _planilha(arquivo)
+    atuais = {p["ticker"]: p for p in carteira.listar(ctx.usuario["id"])["posicoes"]}
+
+    for item in linhas:
+        if item["erro"]:
+            item["acao"] = "erro"
+            continue
+        atual = atuais.get(item["ticker"])
+        item["acao"] = "atualiza" if atual else "novo"
+        if atual:
+            item["quantidade_atual"] = atual["quantidade"]
+            item["preco_medio_atual"] = atual["preco_medio"]
+
+    validas = [l for l in linhas if not l["erro"]]
+    return {
+        "linhas": linhas,
+        "total": len(linhas),
+        "validas": len(validas),
+        "com_erro": len(linhas) - len(validas),
+        "novos": sum(1 for l in validas if l["acao"] == "novo"),
+        "existentes": sum(1 for l in validas if l["acao"] == "atualiza"),
+    }
+
+
+@router.post("/api/v1/carteira/importar")
+def confirmar_importacao(dados: Importacao, ctx: planos.Contexto = Depends(_vip)):
+    """Grava as linhas que a pessoa confirmou na prévia.
+
+    Recebe as LINHAS, não o arquivo de novo: o que entra é exatamente o que
+    foi mostrado na tela. Reenviar o arquivo abriria a porta para a prévia
+    mostrar uma coisa e a gravação fazer outra.
+    """
+    _limitar_escrita(ctx)
+    usuario_id = ctx.usuario["id"]
+    gravadas, recusadas = [], []
+
+    for linha in dados.linhas:
+        try:
+            if dados.modo == "substituir":
+                # Substituir posição que não existe é criar: `atualizar`
+                # devolve None nesse caso, e aí caímos em `adicionar`.
+                posicao = carteira.atualizar(usuario_id, linha.ticker,
+                                             linha.quantidade, linha.preco_medio)
+                if posicao is None:
+                    posicao, _ = carteira.adicionar(usuario_id, linha.ticker,
+                                                    linha.quantidade, linha.preco_medio)
+            else:
+                posicao, _ = carteira.adicionar(usuario_id, linha.ticker,
+                                                linha.quantidade, linha.preco_medio)
+            gravadas.append(posicao["ticker"])
+        except carteira.ErroCarteira as erro:
+            # Uma linha ruim não derruba o lote: o resto entra e a tela diz
+            # qual falhou. Abortar tudo por causa de uma linha obrigaria a
+            # pessoa a corrigir a planilha e recomeçar do zero.
+            recusadas.append({"ticker": linha.ticker, "motivo": str(erro)})
+
+    return {"gravadas": len(gravadas), "tickers": gravadas,
+            "recusadas": recusadas, "modo": dados.modo}
 
 
 @router.delete("/api/v1/carteira/item/{ticker}")

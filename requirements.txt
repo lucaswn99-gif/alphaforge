@@ -11,6 +11,12 @@ jinja2==3.1.6
 python-multipart==0.0.32
 python-dotenv==1.2.3
 
+# Leitura das planilhas que o assinante importa no console VIP
+# (modules/importacao.py). Usado direto, e nao via pandas.read_excel: o modo
+# read_only do openpyxl le a planilha em streaming, sem materializar a aba
+# inteira na memoria — que e o que se quer de um arquivo enviado por usuario.
+openpyxl==3.1.5
+
 pandas==3.0.5
 numpy==2.2.6
 scikit-learn==1.9.0

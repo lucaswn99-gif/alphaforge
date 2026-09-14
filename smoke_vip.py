@@ -136,6 +136,92 @@ if __name__ == "__main__":
         checar("nada foi gravado do ticker inválido",
                "PETR9" not in pagina.inner_text("#tabelaPosicoes"))
 
+        # -------- edição na própria linha (substituiu o prompt) --------
+        pagina.click("tr[data-ticker='PETR4'] button:has-text('Corrigir')")
+        pagina.wait_for_selector("tr[data-ticker='PETR4'] .campo-linha", timeout=5000)
+        checar("edição abre dois campos na linha",
+               pagina.eval_on_selector_all("tr[data-ticker='PETR4'] .campo-linha",
+                                           "els => els.length") == 2)
+        pagina.fill("tr[data-ticker='PETR4'] [data-campo='quantidade']", "50")
+        pagina.fill("tr[data-ticker='PETR4'] [data-campo='preco']", "20")
+        pagina.click("tr[data-ticker='PETR4'] button:has-text('Salvar')")
+        pagina.wait_for_function(
+            "() => document.getElementById('custoTotal').innerText.includes('1.050')",
+            timeout=8000)
+        checar("edição inline gravou (50 x 20 = 1.000 + ZZZZ3 50)",
+               "1.050" in pagina.inner_text("#custoTotal"), pagina.inner_text("#custoTotal"))
+        checar("campos somem depois de salvar",
+               pagina.eval_on_selector_all(".campo-linha", "els => els.length") == 0)
+
+        pagina.click("tr[data-ticker='PETR4'] button:has-text('Corrigir')")
+        pagina.wait_for_selector(".campo-linha", timeout=5000)
+        pagina.click("tr[data-ticker='PETR4'] button:has-text('Cancelar')")
+        checar("cancelar fecha a edição sem gravar",
+               pagina.eval_on_selector_all(".campo-linha", "els => els.length") == 0)
+
+        # -------- importação de planilha --------
+        import io
+        from openpyxl import Workbook
+        livro = Workbook()
+        livro.active.append(["Posicao consolidada"])          # lixo antes do cabecalho
+        livro.active.append([])
+        livro.active.append(["Papel", "Qtde", "Preco medio"])
+        livro.active.append(["PETR4 - PETROBRAS PN", 300, "32,50"])   # ja existe
+        livro.active.append(["VALE3", 40, 60.0])                      # novo
+        livro.active.append(["XXXX9", 10, 5.0])                       # invalido
+        livro.active.append(["TOTAL", "", 1234.0])                    # rodape
+        buffer = io.BytesIO(); livro.save(buffer)
+
+        pagina.set_input_files("#arquivo", {
+            "name": "extrato.xlsx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "buffer": buffer.getvalue()})
+        pagina.wait_for_selector("#painelPrevia:not(.hidden)", timeout=8000)
+
+        previa = pagina.inner_text("#tabelaPrevia")
+        checar("prévia mostra o papel novo", "VALE3" in previa, previa[:250])
+        checar("prévia extrai o ticker da descrição", "PETR4" in previa)
+        checar("prévia marca a linha inválida", "XXXX9" in previa and "forma de ticker" in previa)
+        checar("rodapé TOTAL não vira linha", "TOTAL" not in previa, previa[:250])
+        checar("prévia diz que PETR4 será substituído",
+               "Substitui" in previa, previa[:250])
+        checar("resumo conta novos e existentes",
+               "1 papel(is) novo(s)" in pagina.inner_text("#resumoPrevia"),
+               pagina.inner_text("#resumoPrevia"))
+
+        # A prévia não pode ter gravado nada ainda.
+        checar("prévia não gravou VALE3",
+               "VALE3" not in pagina.inner_text("#tabelaPosicoes"))
+
+        # Trocar para "somar" muda o texto da ação sem novo upload.
+        pagina.check("input[name='modoImportacao'][value='somar']")
+        checar("modo somar muda a leitura da linha existente",
+               "Aporte sobre" in pagina.inner_text("#tabelaPrevia"),
+               pagina.inner_text("#tabelaPrevia")[:250])
+        pagina.check("input[name='modoImportacao'][value='substituir']")
+
+        pagina.click("#btnConfirmarImportacao")
+        pagina.wait_for_function(
+            "() => document.getElementById('tabelaPosicoes').innerText.includes('VALE3')",
+            timeout=8000)
+        checar("importação gravou o papel novo",
+               "VALE3" in pagina.inner_text("#tabelaPosicoes"))
+        checar("substituir trocou PETR4 por 300 @ 32,50",
+               "32,50" in pagina.inner_text("#tabelaPosicoes"),
+               pagina.inner_text("#tabelaPosicoes")[:300])
+        checar("aviso diz quantas entraram",
+               "importada" in pagina.inner_text("#avisoImportacao"),
+               pagina.inner_text("#avisoImportacao"))
+
+        # -------- planilha em formato não aceito --------
+        pagina.set_input_files("#arquivo", {
+            "name": "extrato.pdf", "mimeType": "application/pdf", "buffer": b"nao e planilha"})
+        pagina.wait_for_function(
+            "() => document.getElementById('avisoImportacao').innerText.includes('Formato')",
+            timeout=8000)
+        checar("formato não aceito explica o que enviar",
+               "Formato" in pagina.inner_text("#avisoImportacao"))
+
         # -------- filtro --------
         pagina.fill("#buscaPosicao", "ZZZ")
         pagina.wait_for_timeout(200)
