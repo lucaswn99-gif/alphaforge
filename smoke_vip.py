@@ -281,6 +281,49 @@ if __name__ == "__main__":
                pagina.inner_text("#tabelaPosicoes")[:150])
         pagina.fill("#buscaPosicao", "")
 
+        # -------- Pilar 3: rebalanceamento por aporte --------
+        # O motor tem 42 testes proprios; o que so o browser prova e que o
+        # painel existe, que o alvo faz a volta completa pelo servidor e que
+        # a recusa por alvo ausente aparece NA TELA em vez de sumir.
+        checar("painel de rebalanceamento existe",
+               pagina.is_visible("#btnCalcularAporte"))
+
+        pagina.fill("#alvoAcao", "60")
+        pagina.fill("#alvoFii", "30")
+        pagina.fill("#alvoEtf", "5")
+        soma = pagina.inner_text("#somaAlvos")
+        checar("a soma dos alvos aparece enquanto se digita", "95" in soma, soma)
+
+        # Alvo que nao fecha 100 e recusado pelo servidor, com motivo na tela.
+        pagina.click("#btnSalvarAlvos")
+        pagina.wait_for_selector("#avisoAlvos:not(.hidden)", timeout=5000)
+        texto = pagina.inner_text("#avisoAlvos")
+        checar("alvo que nao soma 100 e recusado com motivo", "100" in texto, texto)
+
+        # Sem alvo valido gravado, rebalancear tem que explicar em vez de
+        # escolher uma alocacao por conta propria.
+        pagina.fill("#valorAporte", "1000")
+        pagina.click("#btnCalcularAporte")
+        pagina.wait_for_selector("#avisoAporte:not(.hidden)", timeout=8000)
+        texto = pagina.inner_text("#avisoAporte")
+        checar("sem alvo definido a tela explica em vez de inventar alocacao",
+               "alvo" in texto.lower(), texto)
+
+        pagina.fill("#alvoEtf", "10")
+        soma = pagina.inner_text("#somaAlvos")
+        checar("soma fecha 100 depois da correcao", "100" in soma, soma)
+        pagina.click("#btnSalvarAlvos")
+        pagina.wait_for_selector("#avisoAlvos:not(.hidden)", timeout=5000)
+        checar("alvo valido e aceito", "salvo" in pagina.inner_text("#avisoAlvos").lower(),
+               pagina.inner_text("#avisoAlvos"))
+
+        # Recarrega: o alvo tem que voltar do servidor, nao do formulario.
+        pagina.reload(wait_until="networkidle")
+        pagina.wait_for_timeout(1200)
+        checar("alvo persiste entre recargas",
+               pagina.input_value("#alvoAcao") in ("60", "60.0"),
+               pagina.input_value("#alvoAcao"))
+
         # -------- sair --------
         pagina.click("#btnSair")
         pagina.wait_for_url("**/vip/login", timeout=8000)

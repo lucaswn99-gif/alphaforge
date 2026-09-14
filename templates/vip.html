@@ -284,6 +284,98 @@
       </p>
     </section>
 
+    <!-- Rebalanceamento por aporte. Fica DEPOIS do diagnóstico de propósito:
+         a desconformidade que ele mostra é exatamente o que bloqueia aporte
+         aqui, e ver o motivo antes da sugestão evita a pergunta "por que este
+         papel não apareceu na lista de compra?". -->
+    <section class="painel p-5 entra" style="animation-delay:.035s">
+      <div class="mb-4">
+        <h2 class="rotulo">Rebalanceamento por aporte</h2>
+        <p class="text-[10px] mt-1.5 leading-relaxed" style="color: #3d4a43">
+          Só compra. Classe acima do alvo não recebe nada e volta sozinha —
+          vender pagaria imposto e corretagem para corrigir o que o próximo
+          aporte corrige de graça.
+        </p>
+      </div>
+
+      <div class="rounded p-4 mb-4" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <p class="rotulo">Percentual-alvo por classe</p>
+          <p class="text-[11px] mono" id="somaAlvos" style="color: var(--suave)">—</p>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end">
+          <div>
+            <label class="rotulo block mb-1.5" for="alvoAcao">Ações %</label>
+            <input class="campo mono" id="alvoAcao" type="number" min="0" max="100"
+                   step="0.01" placeholder="60" oninput="atualizarSomaAlvos()">
+          </div>
+          <div>
+            <label class="rotulo block mb-1.5" for="alvoFii">FIIs %</label>
+            <input class="campo mono" id="alvoFii" type="number" min="0" max="100"
+                   step="0.01" placeholder="30" oninput="atualizarSomaAlvos()">
+          </div>
+          <div>
+            <label class="rotulo block mb-1.5" for="alvoEtf">ETFs %</label>
+            <input class="campo mono" id="alvoEtf" type="number" min="0" max="100"
+                   step="0.01" placeholder="10" oninput="atualizarSomaAlvos()">
+          </div>
+          <button class="btn h-[38px]" id="btnSalvarAlvos" type="button">Salvar alvo</button>
+        </div>
+        <p id="avisoAlvos" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mt-3"></p>
+        <p class="text-[10px] mt-3 leading-relaxed" style="color: #3d4a43">
+          Não sugerimos uma alocação por você: alvo é decisão de quem investe,
+          não configuração de software.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
+        <div>
+          <label class="rotulo block mb-1.5" for="valorAporte">Valor do aporte (R$)</label>
+          <input class="campo mono" id="valorAporte" type="number" min="0" step="0.01"
+                 placeholder="1000,00" onkeydown="if(event.key==='Enter')calcularAporte()">
+        </div>
+        <button class="btn h-[38px]" id="btnCalcularAporte" type="button">Calcular ordens</button>
+      </div>
+      <p id="avisoAporte" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mt-3"></p>
+
+      <div id="painelPlano" class="hidden mt-5 space-y-5">
+        <div class="overflow-x-auto">
+          <table class="w-full text-[12px]">
+            <thead>
+              <tr class="text-left" style="color: var(--suave)">
+                <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider">Classe</th>
+                <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider text-right">Alvo</th>
+                <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider text-right">Hoje</th>
+                <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider text-right">Depois</th>
+                <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider text-right">Aporte</th>
+              </tr>
+            </thead>
+            <tbody id="tabelaClasses" class="divide-y" style="border-color: var(--borda)"></tbody>
+          </table>
+        </div>
+
+        <div>
+          <p class="rotulo mb-2">Ordens de compra</p>
+          <div class="overflow-x-auto">
+            <table class="w-full text-[12px]">
+              <thead>
+                <tr class="text-left" style="color: var(--suave)">
+                  <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider">Papel</th>
+                  <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider text-right">Preço</th>
+                  <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider text-right">Quantidade</th>
+                  <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider text-right">Valor</th>
+                </tr>
+              </thead>
+              <tbody id="tabelaOrdens" class="divide-y" style="border-color: var(--borda)"></tbody>
+            </table>
+          </div>
+          <p id="semOrdens" class="hidden text-[11px] px-3 py-4" style="color: var(--suave)"></p>
+        </div>
+
+        <div id="ressalvasPlano" class="space-y-2"></div>
+      </div>
+    </section>
+
     <!-- Importação de planilha -->
     <section class="painel p-5 entra" style="animation-delay:.04s">
       <div class="flex items-start justify-between gap-3 flex-wrap mb-3.5">
@@ -526,6 +618,7 @@ async function carregar() {
     // deixaria a tela em branco por segundos sem necessidade.
     if (POSICOES.length) carregarDiagnostico(false);
     else { DIAGNOSTICO = {}; $('painelDiagnostico').classList.add('hidden'); }
+    carregarAlvos();
   } catch (e) {
     aviso('avisoItem', `Falha ao carregar: ${esc(e.message || e)}`);
   }
@@ -879,6 +972,156 @@ async function remover(ticker) {
     carregar();
   } catch (e) { aviso('avisoItem', `Falha ao remover: ${esc(e.message || e)}`); }
 }
+
+// ===================== rebalanceamento por aporte =====================
+const CAMPOS_ALVO = { acao: 'alvoAcao', fii: 'alvoFii', etf: 'alvoEtf' };
+
+function lerAlvos() {
+  const alvos = {};
+  Object.entries(CAMPOS_ALVO).forEach(([classe, id]) => {
+    const valor = parseFloat($(id).value);
+    alvos[classe] = Number.isFinite(valor) ? valor : 0;
+  });
+  return alvos;
+}
+
+function atualizarSomaAlvos() {
+  const soma = Object.values(lerAlvos()).reduce((a, b) => a + b, 0);
+  const el = $('somaAlvos');
+  const fecha = Math.abs(soma - 100) <= 0.01;
+  el.innerText = `soma ${soma.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`;
+  // O aviso é imediato porque o erro é trivial de cometer e chato de descobrir
+  // só depois de clicar em salvar.
+  el.style.color = fecha ? 'var(--verde)' : 'var(--ambar)';
+}
+
+async function carregarAlvos() {
+  try {
+    const res = await fetch('/api/v1/carteira/alvos');
+    if (!res.ok) return;
+    const dados = await res.json();
+    if (dados.definido && dados.alvos) {
+      Object.entries(CAMPOS_ALVO).forEach(([classe, id]) => {
+        $(id).value = dados.alvos[classe] ?? 0;
+      });
+    }
+    atualizarSomaAlvos();
+  } catch (e) { /* alvo é opcional para a tela funcionar */ }
+}
+
+async function salvarAlvos() {
+  const btn = $('btnSalvarAlvos');
+  btn.disabled = true; btn.innerText = 'Salvando…';
+  try {
+    const res = await fetch('/api/v1/carteira/alvos', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alvos: lerAlvos() }),
+    });
+    const corpo = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      aviso('avisoAlvos', esc((corpo.detail && corpo.detail.motivo)
+        || `O servidor respondeu ${res.status}.`));
+      return;
+    }
+    aviso('avisoAlvos', 'Alvo salvo.', 'sucesso');
+  } catch (e) {
+    aviso('avisoAlvos', `Falha ao salvar: ${esc(e.message || e)}`);
+  } finally { btn.disabled = false; btn.innerText = 'Salvar alvo'; }
+}
+
+async function calcularAporte() {
+  const btn = $('btnCalcularAporte');
+  const valor = parseFloat($('valorAporte').value) || 0;
+  btn.disabled = true; btn.innerText = 'Calculando…';
+  aviso('avisoAporte', '');
+  try {
+    const res = await fetch(`/api/v1/carteira/rebalanceamento?aporte=${encodeURIComponent(valor)}`);
+    const dados = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $('painelPlano').classList.add('hidden');
+      aviso('avisoAporte', esc((dados.detail && dados.detail.motivo)
+        || `O servidor respondeu ${res.status}.`), 'alerta');
+      return;
+    }
+    renderizarPlano(dados);
+  } catch (e) {
+    aviso('avisoAporte', `Falha ao calcular: ${esc(e.message || e)}`);
+  } finally { btn.disabled = false; btn.innerText = 'Calcular ordens'; }
+}
+
+function renderizarPlano(dados) {
+  const rotulos = dados.rotulos || {};
+
+  $('tabelaClasses').innerHTML = (dados.classes || []).map((c) => {
+    const acima = c.excesso > 0;
+    // Acima do alvo não é erro — é a instrução de não aportar ali agora.
+    const corPeso = acima ? 'var(--ambar)' : 'var(--texto)';
+    return `
+      <tr class="linha">
+        <td class="px-3 py-2.5">${esc(rotulos[c.classe] || c.classe)}</td>
+        <td class="px-3 py-2.5 text-right mono" style="color: var(--suave)">${c.alvo_pct.toFixed(1)}%</td>
+        <td class="px-3 py-2.5 text-right mono" style="color:${corPeso}">${c.peso_atual_pct.toFixed(1)}%</td>
+        <td class="px-3 py-2.5 text-right mono">${c.peso_depois_pct.toFixed(1)}%</td>
+        <td class="px-3 py-2.5 text-right mono" style="color:${c.aporte > 0 ? 'var(--verde)' : '#3d4a43'}">
+          ${c.aporte > 0 ? 'R$ ' + brl(c.aporte) : '—'}</td>
+      </tr>`;
+  }).join('');
+
+  const ordens = dados.ordens || [];
+  $('tabelaOrdens').innerHTML = ordens.map((o) => `
+      <tr class="linha">
+        <td class="px-3 py-2.5 mono font-semibold">${esc(o.ticker)}</td>
+        <td class="px-3 py-2.5 text-right mono" style="color: var(--suave)">R$ ${brl(o.preco)}</td>
+        <td class="px-3 py-2.5 text-right mono font-semibold" style="color: var(--verde)">${qtd(o.quantidade)}</td>
+        <td class="px-3 py-2.5 text-right mono">R$ ${brl(o.valor)}</td>
+      </tr>`).join('');
+
+  const vazio = $('semOrdens');
+  if (ordens.length) { vazio.classList.add('hidden'); }
+  else {
+    vazio.innerText = dados.aporte > 0
+      ? 'O aporte não fecha uma ação inteira em nenhum papel elegível.'
+      : 'Informe o valor do aporte para ver as ordens. Acima está o desvio atual.';
+    vazio.classList.remove('hidden');
+  }
+
+  // Cada ressalva diz o que FAZER, não só o que houve — dinheiro sem destino
+  // com motivo vago é o tipo de tela que o usuário fecha sem entender.
+  const ressalvas = [];
+  (dados.nao_alocado || []).forEach((n) => ressalvas.push([
+    'alerta',
+    `<b>R$ ${brl(n.valor)}</b> sem destino em ${esc(rotulos[n.classe] || n.classe)}: ${esc(n.motivo)}`]));
+  if (dados.sobra > 0) ressalvas.push([
+    'alerta',
+    `<b>R$ ${brl(dados.sobra)}</b> de troco: não fecha mais nenhuma ação inteira.`]);
+  if ((dados.bloqueados || []).length) ressalvas.push([
+    'alerta',
+    `Sem aporte por desconformidade: <b>${dados.bloqueados.map(esc).join(', ')}</b>. `
+    + 'Aportar em cima de deterioração medida é o erro que o diagnóstico existe para evitar.']);
+  if ((dados.posicoes_sem_preco || []).length) ressalvas.push([
+    'alerta',
+    `Sem cotação agora: <b>${dados.posicoes_sem_preco.map(esc).join(', ')}</b>. `
+    + 'Entram no peso pelo custo e não recebem ordem — sem preço não dá para calcular quantas ações comprar.']);
+  if ((dados.fora_do_alvo || []).length) ressalvas.push([
+    'alerta',
+    `<b>R$ ${brl(dados.valor_fora_do_alvo)}</b> em papéis fora dos nossos registros `
+    + `(${dados.fora_do_alvo.map((l) => esc(l.ticker)).join(', ')}). `
+    + 'Ficam fora do cálculo de percentual porque não há classe para eles.']);
+
+  $('ressalvasPlano').innerHTML = ressalvas.map(([tipo, texto]) => {
+    const cores = tipo === 'alerta'
+      ? ['rgba(255,176,32,.07)', 'rgba(255,176,32,.22)', 'var(--ambar)']
+      : ['rgba(0,229,122,.06)', 'rgba(0,229,122,.20)', 'var(--verde)'];
+    return `<p class="text-[11px] leading-relaxed rounded px-3 py-2.5"
+      style="background:${cores[0]};border:1px solid ${cores[1]};color:${cores[2]}">${texto}</p>`;
+  }).join('');
+
+  $('painelPlano').classList.remove('hidden');
+}
+
+$('btnSalvarAlvos').addEventListener('click', salvarAlvos);
+$('btnCalcularAporte').addEventListener('click', calcularAporte);
 
 iniciar();
 </script>
