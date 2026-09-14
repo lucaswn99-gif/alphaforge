@@ -30,7 +30,8 @@ from datetime import datetime
 
 import pandas as pd
 
-from modules import cadastro_b3, composicao_ibov, fontes, fundamentos_cvm, taxas
+from modules import (cadastro_b3, composicao_ibov, fontes, fundamentos_cvm,
+                     quant, taxas)
 
 registro = logging.getLogger(__name__)
 
@@ -493,6 +494,61 @@ class PhilosophyEngine:
             "ressalvas": ressalvas,
             **_carimbo(),
         }
+
+    @staticmethod
+    def setor_besst(ticker):
+        """Setor da tese BESST a que o papel pertence, ou None.
+
+        A pertinência é decidida pela LISTA, não pelo setor que o Yahoo
+        devolve. É a mesma escolha que o resto do módulo já fazia: BESST não é
+        uma classificação setorial da bolsa, é uma tese sobre setores perenes e
+        regulados, e derivar isso de um campo que muda de nome entre consultas
+        colocaria papel errado dentro do método.
+
+        O custo dessa escolha é que a lista é curada: uma transmissora legítima
+        fora dela fica de fora. Por isso quem não pertence sai como FORA DO
+        ESCOPO, com o motivo — e não como reprovado.
+        """
+        alvo = str(ticker or "").strip().upper()
+        for setor, tickers in UNIVERSO_BESST.items():
+            if alvo in tickers:
+                return setor
+        return None
+
+    def _avaliar_bazin(self, ticker):
+        """Bazin sobre UM papel: preço-teto por yield, payout e alavancagem.
+
+        Existe para o diagnóstico da carteira poder medir uma posição pela
+        filosofia que o investidor declarou, em vez de medir tudo por Graham.
+
+        O DPA é ancorado em HOJE, não na data do último provento: empresa que
+        parou de pagar precisa aparecer com yield zero, e não congelada no
+        yield do ano em que ainda pagava.
+
+        Bazin sozinho tem um buraco conhecido — DY alto costuma ser sintoma de
+        provento que vai cair, ou de dividendo extraordinário que não se
+        repete. Por isso esta implementação não olha só o yield: exige payout
+        dentro de faixa e dívida líquida sobre EBIT abaixo do teto, e não
+        aprova nada com critério não apurado.
+        """
+        simbolo = f"{ticker}.SA"
+        perfil = self.fonte.perfil(simbolo) or {}
+        preco = fontes.positivo(perfil.get("preco"))
+        if preco is None:
+            return None
+
+        dpa = quant.dividendos_12m(self.fonte.dividendos(simbolo))
+        rendimento = (dpa / preco * 100.0) if (dpa is not None and preco > 0) else None
+
+        balanco = self._balanco_cvm(ticker) or {}
+        divida = quant.divida_liquida(balanco.get("divida_curto_prazo"),
+                                      balanco.get("divida_longo_prazo"),
+                                      balanco.get("caixa"))
+        avaliacao = quant.avaliar_bazin(preco, dpa, rendimento,
+                                        balanco.get("lpa_on"), divida,
+                                        balanco.get("ebit"))
+        return {"ticker": ticker, "nome": perfil.get("nome"), "preco": preco,
+                "exercicio_cvm": balanco.get("ano"), **avaliacao}
 
     def _avaliar_barsi(self, ticker, setor, aplicar_momentum):
         simbolo = f"{ticker}.SA"

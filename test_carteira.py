@@ -502,7 +502,7 @@ class TestDiagnostico(unittest.TestCase):
 
     def test_papel_que_cumpre_tudo_e_conforme(self):
         from modules import diagnostico
-        estado, _, _ = diagnostico._veredito_acao(
+        estado, _, _ = diagnostico._veredito_graham(
             self._linha_graham(aprovado=True))
         self.assertEqual(estado, diagnostico.CONFORME)
 
@@ -511,7 +511,7 @@ class TestDiagnostico(unittest.TestCase):
         # pede ESPERAR, não reciclar. Tratar preço como desconformidade
         # mandaria vender no topo do que deu certo.
         from modules import diagnostico
-        estado, resumo, _ = diagnostico._veredito_acao(self._linha_graham(
+        estado, resumo, _ = diagnostico._veredito_graham(self._linha_graham(
             motivos=["P/L x P/VP = 44.6 — teto 22.5 (P/L 15.7x, P/VP 2.83x)."]))
         self.assertEqual(estado, diagnostico.ATENCAO)
         self.assertIn("P/L", resumo)
@@ -521,14 +521,14 @@ class TestDiagnostico(unittest.TestCase):
         # varredura do IBOV mostrou isso. Se isso virasse desconformidade, a
         # carteira inteira apareceria vermelha e o sinal perderia o sentido.
         from modules import diagnostico
-        estado, _, _ = diagnostico._veredito_acao(self._linha_graham(
+        estado, _, _ = diagnostico._veredito_graham(self._linha_graham(
             motivos=["Liquidez corrente de 0.96x — mínimo 2.0x."]))
         self.assertEqual(estado, diagnostico.ATENCAO)
 
     def test_prejuizo_e_desconformidade(self):
         from modules import diagnostico
         alerta = "Prejuízo em pelo menos um dos 3 exercícios apurados."
-        estado, resumo, detalhes = diagnostico._veredito_acao(self._linha_graham(
+        estado, resumo, detalhes = diagnostico._veredito_graham(self._linha_graham(
             motivos=[alerta], alertas_qualidade=[alerta]))
         self.assertEqual(estado, diagnostico.DESCONFORME)
         self.assertEqual(resumo, alerta)
@@ -537,14 +537,14 @@ class TestDiagnostico(unittest.TestCase):
     def test_divida_acima_do_capital_de_giro_e_desconformidade(self):
         from modules import diagnostico
         alerta = "Dívida de longo prazo (R$ 5.00 bi) maior que o capital de giro (R$ 1.00 bi)."
-        estado, _, _ = diagnostico._veredito_acao(self._linha_graham(
+        estado, _, _ = diagnostico._veredito_graham(self._linha_graham(
             motivos=[alerta], alertas_qualidade=[alerta]))
         self.assertEqual(estado, diagnostico.DESCONFORME)
 
     def test_qualidade_vence_preco_quando_os_dois_reprovam(self):
         from modules import diagnostico
         alerta = "Capital de giro negativo."
-        estado, resumo, _ = diagnostico._veredito_acao(self._linha_graham(
+        estado, resumo, _ = diagnostico._veredito_graham(self._linha_graham(
             motivos=["P/L x P/VP = 90.0 — teto 22.5.", alerta],
             alertas_qualidade=[alerta]))
         self.assertEqual(estado, diagnostico.DESCONFORME)
@@ -552,14 +552,14 @@ class TestDiagnostico(unittest.TestCase):
 
     def test_banco_fora_do_escopo_e_nao_apurado(self):
         from modules import diagnostico
-        estado, resumo, _ = diagnostico._veredito_acao(self._linha_graham(
+        estado, resumo, _ = diagnostico._veredito_graham(self._linha_graham(
             fora_do_escopo=True, motivo_escopo="Setor Financial Services: Graham..."))
         self.assertEqual(estado, diagnostico.NAO_APURADO)
         self.assertIn("Graham", resumo)
 
     def test_sem_balanco_e_nao_apurado_nunca_desconformidade(self):
         from modules import diagnostico
-        estado, _, _ = diagnostico._veredito_acao(None)
+        estado, _, _ = diagnostico._veredito_graham(None)
         self.assertEqual(estado, diagnostico.NAO_APURADO)
 
     def test_fii_com_desconto_e_conforme(self):
@@ -599,7 +599,8 @@ class TestDiagnostico(unittest.TestCase):
                 raise RuntimeError("Yahoo fora do ar")
 
         veredito = diagnostico.avaliar_posicao(
-            MotorQueExplode(), {"ticker": "PETR4", "classe": "acao", "preco_medio": 30.0})
+            MotorQueExplode(), {"ticker": "PETR4", "classe": "acao", "preco_medio": 30.0,
+                                "filosofia_efetiva": "graham"})
         self.assertEqual(veredito["estado"], diagnostico.NAO_APURADO)
         self.assertIn("Falha", veredito["resumo"])
 
@@ -618,7 +619,8 @@ class TestDiagnostico(unittest.TestCase):
             {"ticker": "BOA3", "classe": "acao", "preco_medio": 10.0, "custo_total": 9000.0},
             {"ticker": "RUIM3", "classe": "acao", "preco_medio": 10.0, "custo_total": 1000.0},
         ]
-        saida = diagnostico.diagnosticar(MotorFalso(), posicoes)
+        saida = diagnostico.diagnosticar(MotorFalso(), posicoes,
+                                         filosofia_carteira="graham")
 
         self.assertEqual(saida["resumo"][diagnostico.CONFORME], 1)
         self.assertEqual(saida["resumo"][diagnostico.DESCONFORME], 1)

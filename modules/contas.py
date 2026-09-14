@@ -169,7 +169,31 @@ def iniciar():
                     PRIMARY KEY (usuario_id, classe),
                     FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
                 );
+
+                -- Filosofia que o investidor declarou para a carteira. Uma
+                -- linha por usuário; a exceção por papel mora na coluna
+                -- `filosofia` de `carteiras` (migrada logo abaixo).
+                CREATE TABLE IF NOT EXISTS mandato_carteira (
+                    usuario_id    INTEGER PRIMARY KEY,
+                    filosofia     TEXT    NOT NULL,
+                    atualizado_em TEXT    NOT NULL,
+                    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+                );
             """)
+
+            # Migração de coluna. `CREATE TABLE IF NOT EXISTS` NÃO altera uma
+            # tabela que já existe, e a base de produção já tem `carteiras`
+            # com posições reais dentro. Sem este bloco, a coluna só apareceria
+            # em instalação nova — e a exceção por papel falharia calada em
+            # produção. O mesmo tropeço já custou uma coleta inteira no
+            # coletor da CVM.
+            colunas = {linha[1] for linha in cx.execute("PRAGMA table_info(carteiras)")}
+            if "filosofia" not in colunas:
+                # NULL significa herdar a filosofia da carteira — e é por isso
+                # que não há DEFAULT aqui: "não escolhi nada para este papel" e
+                # "escolhi Graham para este papel" precisam ser estados
+                # distinguíveis.
+                cx.execute("ALTER TABLE carteiras ADD COLUMN filosofia TEXT")
         _iniciado = True
 
 

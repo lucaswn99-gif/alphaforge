@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from modules import (alvos, carteira, diagnostico, importacao, planos,
+from modules import (alvos, carteira, diagnostico, importacao, mandato, planos,
                      rebalanceamento)
 
 router = APIRouter(tags=["VIP & Carteira"])
@@ -191,9 +191,68 @@ def diagnosticar_carteira(forcar: bool = False,
                 "idade_segundos": int(agora - guardado[0])}
 
     from routers import filosofias as rota_filosofias
-    resultado = diagnostico.diagnosticar(rota_filosofias.motor(), dados["posicoes"])
+    resultado = diagnostico.diagnosticar(
+        rota_filosofias.motor(), dados["posicoes"],
+        filosofia_carteira=mandato.obter(usuario_id))
     _cache_diagnostico[chave] = (time.time(), resultado)
     return {**resultado, "cache": False, "idade_segundos": 0}
+
+
+# ------------------------------------------- filosofia declarada pelo investidor
+
+class EscolhaFilosofia(BaseModel):
+    filosofia: str = Field(..., max_length=32)
+
+
+class FilosofiaDoPapel(BaseModel):
+    # "herdar" e None voltam a seguir a carteira. São estados distintos de
+    # "escolhi a mesma filosofia da carteira": trocar a da carteira depois
+    # precisa arrastar quem herda.
+    filosofia: str | None = Field(None, max_length=32)
+
+
+@router.get("/api/v1/carteira/filosofia")
+def obter_filosofia(ctx: planos.Contexto = Depends(_vip)):
+    escolhida = mandato.obter(ctx.usuario["id"])
+    return {
+        "filosofia": escolhida,
+        "definida": escolhida is not None,
+        "opcoes": [{"chave": chave, "rotulo": mandato.ROTULOS[chave],
+                    "resumo": mandato.RESUMOS[chave]}
+                   for chave in mandato.FILOSOFIAS],
+    }
+
+
+@router.put("/api/v1/carteira/filosofia")
+def definir_filosofia(corpo: EscolhaFilosofia,
+                      ctx: planos.Contexto = Depends(_vip)):
+    _limitar_escrita(ctx)
+    try:
+        escolhida = mandato.definir(ctx.usuario["id"], corpo.filosofia)
+    except mandato.ErroMandato as erro:
+        raise HTTPException(status_code=422, detail={
+            "erro": "filosofia_invalida", "motivo": str(erro)})
+    # Trocar a lente invalida todo veredito guardado: o cache é por assinatura
+    # das posições, que não muda quando só a filosofia muda.
+    _cache_diagnostico.clear()
+    return {"filosofia": escolhida, "definida": True}
+
+
+@router.put("/api/v1/carteira/item/{ticker}/filosofia")
+def definir_filosofia_do_papel(ticker: str, corpo: FilosofiaDoPapel,
+                               ctx: planos.Contexto = Depends(_vip)):
+    _limitar_escrita(ctx)
+    try:
+        achou = mandato.definir_do_papel(ctx.usuario["id"], ticker, corpo.filosofia)
+    except mandato.ErroMandato as erro:
+        raise HTTPException(status_code=422, detail={
+            "erro": "filosofia_invalida", "motivo": str(erro)})
+    if not achou:
+        raise HTTPException(status_code=404, detail={
+            "erro": "posicao_inexistente",
+            "motivo": f"{ticker.upper()} não está na sua carteira."})
+    _cache_diagnostico.clear()
+    return {"ticker": ticker.upper(), "filosofia": corpo.filosofia or None}
 
 
 # ------------------------------------------------------ Pilar 3: rebalanceamento

@@ -161,6 +161,9 @@ def _linha(registro):
         "custo_total": round(quantidade * preco_medio, 2),
         "classe": bruto.get("classe") or "desconhecida",
         "verificado": bool(bruto.get("verificado")),
+        # None significa herdar a filosofia da carteira. A tela precisa saber
+        # a diferença entre herdar e ter escolhido o mesmo valor por acaso.
+        "filosofia": bruto.get("filosofia"),
         "atualizado_em": bruto.get("atualizado_em"),
     }
 

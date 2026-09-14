@@ -34,6 +34,8 @@ produziria veredito com cara de rigor e conteúdo de ruído.
 import concurrent.futures
 import logging
 
+from modules import mandato
+
 registro = logging.getLogger(__name__)
 
 CONFORME = "conforme"
@@ -61,7 +63,7 @@ MAX_WORKERS = 6
 PVP_AGIO = 1.05
 
 
-def _veredito_acao(linha):
+def _veredito_graham(linha):
     """(estado, resumo, detalhes) a partir da avaliação de Graham."""
     if linha is None:
         return NAO_APURADO, "Sem preço ou sem balanço na base.", []
@@ -84,6 +86,120 @@ def _veredito_acao(linha):
     return ATENCAO, motivos[0] if motivos else "Não cumpre algum critério.", motivos
 
 
+# Motivos do Barsi que indicam DETERIORAÇÃO da empresa, e não preço alto. A
+# separação é a mesma de Graham e existe pelo mesmo motivo: "está caro" manda
+# esperar, "teve prejuízo" manda rever a tese, e só o segundo é desconformidade.
+# Margem de segurança e projeção de DPA ficam de fora — são preço.
+DETERIORACAO_BARSI = ("prejuízo", "payout", "dívida líquida")
+
+
+def _veredito_barsi(linha):
+    """(estado, resumo, detalhes) a partir da avaliação de Barsi."""
+    if linha is None:
+        return NAO_APURADO, "Sem preço na fonte de mercado.", []
+
+    if linha.get("fora_do_escopo"):
+        return NAO_APURADO, linha.get("motivo_escopo") or "Fora do escopo do método.", []
+
+    motivos = linha.get("motivos") or []
+    if linha.get("aprovado"):
+        teto = linha.get("preco_teto")
+        return CONFORME, (f"Abaixo do preço-teto de R$ {teto:.2f} com qualidade medida."
+                          if teto else "Cumpre os critérios da tese de renda."), []
+
+    graves = [m for m in motivos
+              if any(marca in m.lower() for marca in DETERIORACAO_BARSI)]
+    if graves:
+        return DESCONFORME, graves[0], graves
+    return ATENCAO, motivos[0] if motivos else "Não cumpre algum critério.", motivos
+
+
+# Mesma lógica para Bazin. `abaixo_do_teto` e `dy_suficiente` são preço; payout
+# e alavancagem são a empresa.
+DETERIORACAO_BAZIN = ("payout_saudavel", "alavancagem_ok")
+
+EXPLICA_BAZIN = {
+    "dy_suficiente": "Dividend yield abaixo dos 6% que o método exige.",
+    "payout_saudavel": "Payout fora da faixa de 30% a 80%.",
+    "alavancagem_ok": "Dívida líquida sobre EBIT acima de 2,5x.",
+    "abaixo_do_teto": "Preço acima do teto que entregaria 6% de yield.",
+}
+
+
+def _veredito_bazin(linha):
+    """(estado, resumo, detalhes) a partir da avaliação de Bazin."""
+    if linha is None:
+        return NAO_APURADO, "Sem preço na fonte de mercado.", []
+
+    criterios = linha.get("criterios") or {}
+    faltantes = linha.get("criterios_nao_apurados") or []
+
+    reprovados = [chave for chave, valor in criterios.items() if valor is False]
+    graves = [c for c in reprovados if c in DETERIORACAO_BAZIN]
+
+    if graves:
+        return DESCONFORME, EXPLICA_BAZIN[graves[0]], [EXPLICA_BAZIN[c] for c in graves]
+    if linha.get("aprovado"):
+        teto = linha.get("preco_teto")
+        return CONFORME, (f"Abaixo do preço-teto de R$ {teto:.2f}, com payout e "
+                          f"alavancagem dentro da faixa."
+                          if teto else "Cumpre os critérios do método."), []
+    if reprovados:
+        return ATENCAO, EXPLICA_BAZIN[reprovados[0]], [EXPLICA_BAZIN[c] for c in reprovados]
+    if faltantes:
+        # Sem aprovação por ausência: critério não medido não vira aprovação,
+        # e também não vira reprovação.
+        nomes = ", ".join(EXPLICA_BAZIN.get(c, c) for c in faltantes)
+        return NAO_APURADO, f"Critério sem dado para medir: {nomes}", []
+    return ATENCAO, "Não cumpre algum critério.", []
+
+
+def _avaliar_acao(motor, ticker, filosofia):
+    """(estado, resumo, detalhes, metodo, extras) pela filosofia declarada."""
+    if filosofia == mandato.BARSI:
+        setor = motor.setor_besst(ticker)
+        if setor is None:
+            # Barsi é uma tese sobre setores perenes e regulados. Aplicá-la a
+            # uma varejista não produz reprovação, produz uma pergunta que o
+            # método não faz — mesmo tratamento que Graham dá a banco.
+            return (NAO_APURADO,
+                    "Fora dos setores da tese BESST (bancos, energia, "
+                    "saneamento, seguros e telecomunicações).",
+                    [], "Barsi (renda por setor perene)", {})
+        linha = motor._avaliar_barsi(ticker, setor, aplicar_momentum=False)
+        estado, resumo, detalhes = _veredito_barsi(linha)
+        extras = {}
+        if linha:
+            extras = {"preco_teto": linha.get("preco_teto"),
+                      "margem_seguranca": linha.get("margem_seguranca"),
+                      "yield_sobre_preco": linha.get("yield_sobre_preco"),
+                      "payout": linha.get("payout"),
+                      "tendencia_dpa": (linha.get("tendencia_dpa") or {}).get("classificacao"),
+                      "setor_besst": setor}
+        return estado, resumo, detalhes, "Barsi (renda por setor perene)", extras
+
+    if filosofia == mandato.BAZIN:
+        linha = motor._avaliar_bazin(ticker)
+        estado, resumo, detalhes = _veredito_bazin(linha)
+        extras = {}
+        if linha:
+            extras = {"preco_teto": linha.get("preco_teto"),
+                      "margem_seguranca": linha.get("margem_seguranca"),
+                      "dy_12m": linha.get("dy_12m"),
+                      "payout": linha.get("payout"),
+                      "dl_ebit": linha.get("dl_ebit")}
+        return estado, resumo, detalhes, "Bazin (renda por preço-teto)", extras
+
+    linha = motor._avaliar_graham(ticker, aplicar_momentum=False)
+    estado, resumo, detalhes = _veredito_graham(linha)
+    extras = {}
+    if linha:
+        extras = {"numero_graham": linha.get("numero_graham"),
+                  "margem_seguranca": linha.get("margem_seguranca"),
+                  "criterios_medidos": linha.get("criterios_medidos")}
+    return estado, resumo, detalhes, "Graham (investidor defensivo)", extras
+
+
 def _veredito_fii(informe, preco):
     """(estado, resumo, detalhes) pelo desconto sobre o valor patrimonial."""
     pvp = (informe or {}).get("pvp")
@@ -102,18 +218,25 @@ def avaliar_posicao(motor, posicao):
     ticker = posicao["ticker"]
     classe = posicao.get("classe") or "desconhecida"
     base = {"ticker": ticker, "classe": classe, "metodo": None,
-            "estado": NAO_APURADO, "resumo": None, "detalhes": []}
+            "estado": NAO_APURADO, "resumo": None, "detalhes": [],
+            "filosofia": None}
 
     try:
         if classe == "acao":
-            linha = motor._avaliar_graham(ticker, aplicar_momentum=False)
-            estado, resumo, detalhes = _veredito_acao(linha)
-            base.update(metodo="Graham (investidor defensivo)", estado=estado,
-                        resumo=resumo, detalhes=detalhes)
-            if linha:
-                base["numero_graham"] = linha.get("numero_graham")
-                base["margem_seguranca"] = linha.get("margem_seguranca")
-                base["criterios_medidos"] = linha.get("criterios_medidos")
+            filosofia = posicao.get("filosofia_efetiva")
+            if filosofia is None:
+                # Sem filosofia declarada não há pergunta a fazer. Medir por
+                # Graham "porque é o padrão" foi exatamente o que produzia
+                # ruído para quem tem mandato de renda.
+                base.update(
+                    metodo="Não definido",
+                    resumo=("Escolha a filosofia da carteira para esta posição "
+                            "ser medida."))
+            else:
+                estado, resumo, detalhes, metodo, extras = _avaliar_acao(
+                    motor, ticker, filosofia)
+                base.update(metodo=metodo, estado=estado, resumo=resumo,
+                            detalhes=detalhes, filosofia=filosofia, **extras)
 
         elif classe == "fii":
             from modules import fundamentos_fii
@@ -147,14 +270,23 @@ def avaliar_posicao(motor, posicao):
     return base
 
 
-def diagnosticar(motor, posicoes):
+def diagnosticar(motor, posicoes, filosofia_carteira=None):
     """Veredito de cada posição e o retrato do conjunto.
 
     O peso de cada estado é sobre CUSTO, e é ele que importa mais que a
     contagem: três posições em desconformidade valendo 2% da carteira é um
     problema diferente de uma valendo 40%.
+
+    `filosofia_carteira` é a lente declarada pelo investidor. Cada posição pode
+    ter a sua, e a da posição vence — ver `modules/mandato.py`.
     """
     posicoes = list(posicoes or [])
+    # Resolvida UMA vez, aqui, e não dentro de cada avaliação: assim a posição
+    # que chega ao avaliador já sabe por qual régua vai ser medida, e o teste
+    # do avaliador não precisa do banco para existir.
+    posicoes = [{**p, "filosofia_efetiva":
+                 mandato.resolver(filosofia_carteira, p.get("filosofia"))}
+                for p in posicoes]
     if not posicoes:
         return {"posicoes": [], "resumo": {estado: 0 for estado in ROTULOS},
                 "peso_por_estado": {estado: 0.0 for estado in ROTULOS},
