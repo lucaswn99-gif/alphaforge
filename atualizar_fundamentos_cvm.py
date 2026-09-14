@@ -493,15 +493,19 @@ def gravar_acoes(registros, banco=BANCO):
             denom_cia TEXT,
             ordinarias REAL,
             preferenciais REAL,
-            total REAL NOT NULL
+            total REAL NOT NULL,
+            total_anterior REAL,
+            data_anterior TEXT
         )
     """)
     cursor.executemany(
         "INSERT OR REPLACE INTO acoes_cia "
-        "(cnpj, data_ref, versao, denom_cia, ordinarias, preferenciais, total) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "(cnpj, data_ref, versao, denom_cia, ordinarias, preferenciais, total, "
+        " total_anterior, data_anterior) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [[cnpj, v.get("data_ref"), v.get("versao"), v.get("nome"),
-          v.get("ordinarias"), v.get("preferenciais"), v.get("total")]
+          v.get("ordinarias"), v.get("preferenciais"), v.get("total"),
+          v.get("total_anterior"), v.get("data_anterior")]
          for cnpj, v in registros.items()],
     )
     conexao.commit()
@@ -520,7 +524,8 @@ def relatorio_qualidade_acoes(banco=BANCO):
     cursor = conexao.cursor()
     try:
         linhas = cursor.execute("""
-            SELECT a.denom_cia, a.total, f.lucro_liquido / f.lpa_on
+            SELECT a.denom_cia, a.total, f.lucro_liquido / f.lpa_on,
+                   a.data_ref, f.ano, a.total_anterior, a.data_anterior
             FROM acoes_cia a
             JOIN fundamentos f ON f.cnpj = a.cnpj
             WHERE f.ano = (SELECT MAX(ano) FROM fundamentos WHERE cnpj = f.cnpj)
@@ -543,34 +548,42 @@ def relatorio_qualidade_acoes(banco=BANCO):
 
     ambiguos = []
     so_lpa_ruim = []
-    for nome, declarado, deduzido in linhas:
+    for registro in linhas:
+        nome, declarado, deduzido = registro[0], registro[1], registro[2]
         if declarado <= 5.0 * deduzido and deduzido <= 5.0 * declarado:
             continue
         # A divergência sozinha não diz QUEM errou. A faixa absoluta diz, nos
         # casos em que um dos dois está fora do universo do possível.
         if plausivel(declarado) and not plausivel(deduzido):
-            so_lpa_ruim.append((nome, declarado, deduzido))
+            so_lpa_ruim.append(registro)
         elif plausivel(declarado) and plausivel(deduzido):
-            ambiguos.append((nome, declarado, deduzido))
+            ambiguos.append(registro)
 
     print(f"\nFRE x lucro/LPA — {len(linhas)} companhias cruzadas.")
 
     if so_lpa_ruim:
         print(f"\n   {len(so_lpa_ruim)} em que lucro/LPA é que está fora da faixa "
               f"(o FRE resolve):")
-        for nome, declarado, deduzido in sorted(so_lpa_ruim, key=lambda x: -x[1])[:10]:
-            print(f"      {(nome or '')[:30]:<30} FRE {declarado:>15,.0f}   "
-                  f"LPA {deduzido:>18,.0f}")
+        for registro in sorted(so_lpa_ruim, key=lambda x: -x[1])[:10]:
+            print(f"      {(registro[0] or '')[:30]:<30} FRE {registro[1]:>15,.0f}   "
+                  f"LPA {registro[2]:>18,.0f}")
 
     print(f"\n   {len(ambiguos)} em que os DOIS são plausíveis e mesmo assim "
-          f"discordam — nestas o P/VP sai NÃO APURADO,")
-    print("   porque não há como saber qual está certo sem olhar o documento:")
+          f"discordam. Hoje o P/VP sai NÃO APURADO nestas.")
+    print("   A coluna EVENTO diz se a quantidade MUDOU entre um formulário e")
+    print("   outro: se mudou, a divergência pode ser desdobramento ou emissão")
+    print("   real — as duas certas, em datas diferentes — e não erro.")
     if not ambiguos:
         print("      nenhuma  <-- esperado")
-    for nome, declarado, deduzido in sorted(ambiguos, key=lambda x: -x[1])[:15]:
+    for nome, declarado, deduzido, data_fre, ano_dfp, anterior, data_ant in \
+            sorted(ambiguos, key=lambda x: -x[1])[:20]:
         razao = declarado / deduzido if deduzido else float("inf")
-        print(f"      {(nome or '')[:30]:<30} FRE {declarado:>15,.0f}   "
-              f"LPA {deduzido:>15,.0f}   {razao:>8.1f}x")
+        if anterior:
+            evento = f"SIM {anterior:,.0f} em {data_ant or '?'}"
+        else:
+            evento = "nao mudou"
+        print(f"      {(nome or '')[:26]:<26} FRE {declarado:>15,.0f} ({data_fre})"
+              f"  LPA {deduzido:>15,.0f} ({ano_dfp})  {razao:>8.1f}x  {evento}")
 
 
 def _escala(valor):
@@ -1066,13 +1079,30 @@ def coletar_itr(anos):
 
 
 def coletar_capital(anos):
-    """Fica com a declaração mais recente de cada companhia entre os anos."""
+    """Fica com a declaração mais recente de cada companhia entre os anos.
+
+    Guarda também a quantidade ANTERIOR, quando ela existe e é diferente. Sem
+    isso não há como distinguir as duas causas de um FRE que discorda da DFP:
+
+    * erro de preenchimento, e aí a divergência é ruído;
+    * desdobramento, grupamento ou emissão entre uma data e outra, e aí as
+      DUAS estão certas, cada uma na sua data — e a do FRE é a que casa com o
+      preço de hoje.
+
+    A diferença entre os dois casos aparece na série: quantidade que mudou de
+    um formulário para o outro é evento; quantidade estável que mesmo assim
+    discorda da DFP é outra coisa.
+    """
     registros = {}
     for ano in sorted(anos):
         for cnpj, valores in processar_capital(ano).items():
             atual = registros.get(cnpj)
             if atual is None or (valores["data_ref"], valores["versao"]) >= \
                     (atual["data_ref"], atual["versao"]):
+                if atual is not None and atual.get("total") != valores.get("total"):
+                    valores = dict(valores)
+                    valores["total_anterior"] = atual.get("total")
+                    valores["data_anterior"] = atual.get("data_ref")
                 registros[cnpj] = valores
     if not registros:
         print("\n! Nenhuma quantidade de ações obtida — o VPA segue saindo de "

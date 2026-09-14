@@ -1018,6 +1018,58 @@ class TestColetorCapital(unittest.TestCase):
         self.assertIsNone(coletor._quantidade(""))
         self.assertIsNone(coletor._quantidade("n/a"))
 
+    def test_mudanca_de_quantidade_entre_anos_e_registrada(self):
+        """Desdobramento e emissão fazem a quantidade mudar de um formulário
+        para o outro, e aí FRE e lucro/LPA discordam sem nenhum dos dois estar
+        errado — cada um vale na sua data. Sem guardar a quantidade anterior
+        não há como separar esse caso de erro de preenchimento."""
+        chamadas = {
+            2025: {CNPJ_VALE: {"data_ref": "2025-12-31", "versao": 1,
+                               "nome": "VALE S.A.", "total": 6.84e8}},
+            2026: {CNPJ_VALE: {"data_ref": "2026-12-31", "versao": 8,
+                               "nome": "VALE S.A.", "total": 3.52e9}},
+        }
+        original_processar = coletor.processar_capital
+        original_gravar = coletor.gravar_acoes
+        original_relatorio = coletor.relatorio_qualidade_acoes
+        guardado = {}
+        coletor.processar_capital = lambda ano: chamadas.get(ano, {})
+        coletor.gravar_acoes = lambda registros, banco=None: guardado.update(registros)
+        coletor.relatorio_qualidade_acoes = lambda banco=None: None
+        try:
+            coletor.coletar_capital([2025, 2026])
+        finally:
+            coletor.processar_capital = original_processar
+            coletor.gravar_acoes = original_gravar
+            coletor.relatorio_qualidade_acoes = original_relatorio
+
+        registro = guardado[CNPJ_VALE]
+        self.assertEqual(registro["total"], 3.52e9)
+        self.assertEqual(registro["total_anterior"], 6.84e8)
+        self.assertEqual(registro["data_anterior"], "2025-12-31")
+
+    def test_quantidade_estavel_nao_marca_evento(self):
+        chamadas = {
+            2025: {CNPJ_VALE: {"data_ref": "2025-12-31", "versao": 1,
+                               "nome": "VALE", "total": 4.55e9}},
+            2026: {CNPJ_VALE: {"data_ref": "2026-12-31", "versao": 8,
+                               "nome": "VALE", "total": 4.55e9}},
+        }
+        original_processar = coletor.processar_capital
+        original_gravar = coletor.gravar_acoes
+        original_relatorio = coletor.relatorio_qualidade_acoes
+        guardado = {}
+        coletor.processar_capital = lambda ano: chamadas.get(ano, {})
+        coletor.gravar_acoes = lambda registros, banco=None: guardado.update(registros)
+        coletor.relatorio_qualidade_acoes = lambda banco=None: None
+        try:
+            coletor.coletar_capital([2025, 2026])
+        finally:
+            coletor.processar_capital = original_processar
+            coletor.gravar_acoes = original_gravar
+            coletor.relatorio_qualidade_acoes = original_relatorio
+        self.assertIsNone(guardado[CNPJ_VALE].get("total_anterior"))
+
     def test_gravacao_e_leitura(self):
         with tempfile.TemporaryDirectory() as pasta:
             banco = os.path.join(pasta, "teste.db")
