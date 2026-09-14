@@ -328,10 +328,6 @@ class TestMultiplosCvm(unittest.TestCase):
         self.assertAlmostEqual(m["roe"], 20.0, places=6)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
-
 class TestLeituraDaColunaDeVp(unittest.TestCase):
     """CONFIRMADO contra o informe de 2026: `Valor_Patrimonial_Cotas` é o valor
     POR COTA (92,2101), e o mesmo registro traz PL 258.202.136,67 e 2.800.149
@@ -590,3 +586,276 @@ class TestCreditoPelaCvm(unittest.TestCase):
         laudo = self.credito.laudo_por_ticker("WEGE3")
         self.assertEqual(laudo["veredito"], "INCONCLUSIVO")
         self.assertIsNone(laudo["alavancagem_dl_ebitda"])
+
+
+CABECALHO_ITR = ("CNPJ_CIA;DT_REFER;VERSAO;DENOM_CIA;DT_FIM_EXERC;ORDEM_EXERC;"
+                 "ESCALA_MOEDA;CD_CONTA;DS_CONTA;VL_CONTA")
+
+
+def _csv_itr(linhas):
+    return ("\n".join([CABECALHO_ITR] + linhas) + "\n").encode("iso-8859-1")
+
+
+def _linha_itr(conta, descricao, valor, data="2026-06-30", versao=1,
+               cnpj=CNPJ_VALE, nome="VALE S.A.", escala="MIL"):
+    return (f"{cnpj};{data};{versao};{nome};{data};ÚLTIMO;{escala};"
+            f"{conta};{descricao};{valor}")
+
+
+def _zip_itr(ano, bpa, bpp):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as arquivo:
+        arquivo.writestr(f"itr_cia_aberta_BPA_con_{ano}.csv", _csv_itr(bpa))
+        arquivo.writestr(f"itr_cia_aberta_BPP_con_{ano}.csv", _csv_itr(bpp))
+    buffer.seek(0)
+    return zipfile.ZipFile(buffer)
+
+
+class TestColetorItr(unittest.TestCase):
+    """Parsing do balanço trimestral. CSVs sintéticos, no layout documentado."""
+
+    def _ler_bpp(self, linhas):
+        arquivo = _zip_itr(2026, [], linhas)
+        return coletor.ler_balanco_itr(
+            arquivo, "itr_cia_aberta_BPP_con_2026.csv", coletor.CONTAS["BPP"])
+
+    def test_chave_e_a_data_nao_o_ano(self):
+        """Quatro trimestres no mesmo ano têm que virar quatro registros."""
+        lido = self._ler_bpp([
+            _linha_itr("2.03", "Patrimônio Líquido Consolidado", "100000000",
+                       data="2026-03-31"),
+            _linha_itr("2.03", "Patrimônio Líquido Consolidado", "120000000",
+                       data="2026-06-30"),
+        ])
+        self.assertEqual(sorted(data for _, data in lido),
+                         ["2026-03-31", "2026-06-30"])
+        self.assertEqual(lido[(CNPJ_VALE, "2026-06-30")]["patrimonio_liquido"],
+                         1.2e11)
+
+    def test_reapresentacao_substitui_a_versao_anterior(self):
+        lido = self._ler_bpp([
+            _linha_itr("2.03", "Patrimônio Líquido Consolidado", "100000000", versao=1),
+            _linha_itr("2.01", "Passivo Circulante", "90000000", versao=1),
+            _linha_itr("2.03", "Patrimônio Líquido Consolidado", "130000000", versao=2),
+        ])
+        registro = lido[(CNPJ_VALE, "2026-06-30")]
+        self.assertEqual(registro["_versao"], 2)
+        self.assertEqual(registro["patrimonio_liquido"], 1.3e11)
+        # A versão 1 inteira cai: o balanço republicado é outro documento, e
+        # herdar um passivo da versão anterior montaria um balanço que nunca
+        # foi publicado.
+        self.assertNotIn("passivo_circulante", registro)
+
+    def test_versao_antiga_depois_da_nova_nao_reverte(self):
+        lido = self._ler_bpp([
+            _linha_itr("2.03", "Patrimônio Líquido Consolidado", "130000000", versao=2),
+            _linha_itr("2.03", "Patrimônio Líquido Consolidado", "100000000", versao=1),
+        ])
+        self.assertEqual(lido[(CNPJ_VALE, "2026-06-30")]["patrimonio_liquido"], 1.3e11)
+
+    def test_layout_de_banco_e_lido_pela_descricao(self):
+        """Mesmo problema do Itaú na DFP: o código 2.03 do banco não é PL."""
+        lido = self._ler_bpp([
+            _linha_itr("2.08", "Patrimônio Líquido Consolidado", "200000000"),
+        ])
+        self.assertEqual(lido[(CNPJ_VALE, "2026-06-30")]["patrimonio_liquido"], 2e11)
+
+    def test_campo_de_dre_nao_entra_no_balanco(self):
+        """CAMPOS_ITR é a trava: a DRE do ITR é acumulada e não pode vazar."""
+        lido = self._ler_bpp([
+            _linha_itr("3.11", "Lucro/Prejuízo Consolidado do Período", "40000000"),
+            _linha_itr("2.03", "Patrimônio Líquido Consolidado", "200000000"),
+        ])
+        registro = lido[(CNPJ_VALE, "2026-06-30")]
+        self.assertNotIn("lucro_liquido", registro)
+        self.assertIn("patrimonio_liquido", registro)
+
+    def test_escala_mil_multiplica(self):
+        lido = self._ler_bpp([
+            _linha_itr("2.03", "Patrimônio Líquido Consolidado", "200000000",
+                       escala="UNIDADE"),
+        ])
+        self.assertEqual(lido[(CNPJ_VALE, "2026-06-30")]["patrimonio_liquido"], 2e8)
+
+    def test_penultimo_exercicio_e_ignorado(self):
+        linha = _linha_itr("2.03", "Patrimônio Líquido Consolidado", "100000000")
+        lido = self._ler_bpp([linha.replace(";ÚLTIMO;", ";PENÚLTIMO;")])
+        self.assertEqual(lido, {})
+
+    def test_layout_sem_versao_ainda_le(self):
+        """Se um ano vier sem a coluna, a leitura continua sem desempate."""
+        cabecalho = ("CNPJ_CIA;DT_REFER;DENOM_CIA;DT_FIM_EXERC;ORDEM_EXERC;"
+                     "ESCALA_MOEDA;CD_CONTA;DS_CONTA;VL_CONTA")
+        linha = (f"{CNPJ_VALE};2026-06-30;VALE S.A.;2026-06-30;ÚLTIMO;MIL;"
+                 f"2.03;Patrimônio Líquido Consolidado;200000000")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as arquivo:
+            arquivo.writestr("itr_cia_aberta_BPP_con_2026.csv",
+                             ("\n".join([cabecalho, linha]) + "\n").encode("iso-8859-1"))
+        buffer.seek(0)
+        lido = coletor.ler_balanco_itr(
+            zipfile.ZipFile(buffer), "itr_cia_aberta_BPP_con_2026.csv",
+            coletor.CONTAS["BPP"])
+        self.assertEqual(lido[(CNPJ_VALE, "2026-06-30")]["patrimonio_liquido"], 2e11)
+
+    def test_csv_ausente_no_zip_nao_estoura(self):
+        arquivo = _zip_itr(2026, [], [])
+        self.assertEqual(coletor.ler_balanco_itr(
+            arquivo, "itr_cia_aberta_BPP_ind_2026.csv", coletor.CONTAS["BPP"]), {})
+
+    def test_bpa_e_bpp_se_juntam_no_mesmo_trimestre(self):
+        registros = {}
+        coletor._fundir_itr(registros, (CNPJ_VALE, "2026-06-30"),
+                            {"_versao": 1, "ativo_total": 5e11})
+        coletor._fundir_itr(registros, (CNPJ_VALE, "2026-06-30"),
+                            {"_versao": 1, "patrimonio_liquido": 2e11})
+        registro = registros[(CNPJ_VALE, "2026-06-30")]
+        self.assertEqual(registro["ativo_total"], 5e11)
+        self.assertEqual(registro["patrimonio_liquido"], 2e11)
+
+    def test_fusao_respeita_a_versao_maior(self):
+        registros = {}
+        coletor._fundir_itr(registros, (CNPJ_VALE, "2026-06-30"),
+                            {"_versao": 1, "patrimonio_liquido": 1e11})
+        coletor._fundir_itr(registros, (CNPJ_VALE, "2026-06-30"),
+                            {"_versao": 2, "patrimonio_liquido": 2e11})
+        self.assertEqual(
+            registros[(CNPJ_VALE, "2026-06-30")]["patrimonio_liquido"], 2e11)
+
+    def test_data_invalida_e_descartada(self):
+        self.assertIsNone(coletor._data_referencia("31/12/2026"))
+        self.assertIsNone(coletor._data_referencia(""))
+        self.assertEqual(coletor._data_referencia("2026-06-30 00:00:00"), "2026-06-30")
+
+    def test_gravacao_e_leitura_do_balanco_trimestral(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            banco = os.path.join(pasta, "teste.db")
+            coletor.gravar_itr({(CNPJ_VALE, "2026-06-30"): {
+                "_versao": 2, "denom_cia": "VALE S.A.",
+                "patrimonio_liquido": 2.2e11, "ativo_total": 5e11}}, banco)
+            conexao = sqlite3.connect(banco)
+            linha = conexao.execute(
+                "SELECT versao, patrimonio_liquido FROM balanco_itr "
+                "WHERE cnpj = ?", (CNPJ_VALE,)).fetchone()
+            conexao.close()
+            self.assertEqual(linha, (2, 2.2e11))
+
+
+class TestPvpComItr(unittest.TestCase):
+    """Qual documento entra no denominador do P/VP, e o que fica de fora."""
+
+    PRECO = 79.02
+    LPA = 9.30
+    LUCRO = 4e10
+    PL_DFP = 2e11
+
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.banco = os.path.join(self.pasta.name, "fundamentos.db")
+        self.cadastro = os.path.join(self.pasta.name, "cadastro.json")
+        cadastro_b3.gravar({"VALE": {"cnpj": CNPJ_VALE, "nome": "VALE S.A.",
+                                     "nome_pregao": "VALE"}}, self.cadastro)
+        cadastro_b3.limpar_memoria()
+        fundamentos_cvm.limpar_cache()
+        coletor.gravar({(CNPJ_VALE, 2025): {
+            "denom_cia": "VALE S.A.", "patrimonio_liquido": self.PL_DFP,
+            "lucro_liquido": self.LUCRO, "receita_liquida": 2e11,
+            "lpa_on": self.LPA}}, self.banco)
+
+    def tearDown(self):
+        self.pasta.cleanup()
+        cadastro_b3.limpar_memoria()
+        fundamentos_cvm.limpar_cache()
+
+    def _gravar_itr(self, patrimonio, data="2026-06-30"):
+        coletor.gravar_itr({(CNPJ_VALE, data): {
+            "_versao": 1, "denom_cia": "VALE S.A.",
+            "patrimonio_liquido": patrimonio}}, self.banco)
+        fundamentos_cvm.limpar_cache()
+
+    def _multiplos(self):
+        return fundamentos_cvm.multiplos_do_ticker(
+            "VALE3", preco=self.PRECO, banco=self.banco,
+            caminho_cadastro=self.cadastro)
+
+    def _pvp_esperado(self, patrimonio):
+        acoes = self.LUCRO / self.LPA
+        return self.PRECO / (patrimonio / acoes)
+
+    def test_sem_tabela_itr_nada_muda(self):
+        """Regressão: base gerada pelo coletor antigo segue idêntica."""
+        self.assertFalse(fundamentos_cvm.base_itr_disponivel(self.banco))
+        m = self._multiplos()
+        self.assertEqual(m["patrimonio_origem"], "dfp")
+        self.assertEqual(m["patrimonio_data"], "2025-12-31")
+        self.assertAlmostEqual(m["pvp"], self._pvp_esperado(self.PL_DFP), places=6)
+
+    def test_trimestre_mais_novo_entra_no_pvp(self):
+        self._gravar_itr(2.2e11)
+        m = self._multiplos()
+        self.assertTrue(fundamentos_cvm.base_itr_disponivel(self.banco))
+        self.assertEqual(m["patrimonio_origem"], "itr")
+        self.assertEqual(m["patrimonio_data"], "2026-06-30")
+        self.assertAlmostEqual(m["pvp"], self._pvp_esperado(2.2e11), places=6)
+
+    def test_roe_e_margem_nao_usam_o_trimestre(self):
+        """Lucro é anual. Cruzar com patrimônio de meio de ano inventa um ROE."""
+        self._gravar_itr(2.2e11)
+        m = self._multiplos()
+        self.assertAlmostEqual(m["roe"], 20.0, places=6)        # 40 / 200, DFP
+        self.assertAlmostEqual(m["margem_liq"], 20.0, places=6)
+        self.assertEqual(m["exercicio"], 2025)
+
+    def test_trimestre_mais_velho_que_a_dfp_nao_entra(self):
+        self._gravar_itr(1.0e11, data="2025-09-30")
+        m = self._multiplos()
+        self.assertEqual(m["patrimonio_origem"], "dfp")
+        self.assertAlmostEqual(m["pvp"], self._pvp_esperado(self.PL_DFP), places=6)
+
+    def test_salto_implausivel_de_patrimonio_e_recusado(self):
+        """Patrimônio não quadruplica em seis meses: isso é conta mal mapeada."""
+        self._gravar_itr(8e11)
+        m = self._multiplos()
+        self.assertEqual(m["patrimonio_origem"], "dfp")
+        self.assertAlmostEqual(m["pvp"], self._pvp_esperado(self.PL_DFP), places=6)
+
+    def test_queda_implausivel_de_patrimonio_e_recusada(self):
+        self._gravar_itr(2e10)
+        m = self._multiplos()
+        self.assertEqual(m["patrimonio_origem"], "dfp")
+
+    def test_variacao_dentro_da_faixa_e_aceita(self):
+        """Dobrar é plausível — follow-on existe. Só o extremo é recusado."""
+        self._gravar_itr(4e11)
+        m = self._multiplos()
+        self.assertEqual(m["patrimonio_origem"], "itr")
+        self.assertAlmostEqual(m["pvp"], self._pvp_esperado(4e11), places=6)
+
+    def test_trimestre_sem_patrimonio_cai_para_a_dfp(self):
+        coletor.gravar_itr({(CNPJ_VALE, "2026-06-30"): {
+            "_versao": 1, "denom_cia": "VALE S.A.", "ativo_total": 5e11}}, self.banco)
+        fundamentos_cvm.limpar_cache()
+        m = self._multiplos()
+        self.assertEqual(m["patrimonio_origem"], "dfp")
+        self.assertAlmostEqual(m["pvp"], self._pvp_esperado(self.PL_DFP), places=6)
+
+    def test_trimestre_mais_recente_vence_entre_trimestres(self):
+        coletor.gravar_itr({
+            (CNPJ_VALE, "2026-03-31"): {"_versao": 1, "patrimonio_liquido": 2.1e11},
+            (CNPJ_VALE, "2026-06-30"): {"_versao": 1, "patrimonio_liquido": 2.2e11},
+        }, self.banco)
+        fundamentos_cvm.limpar_cache()
+        m = self._multiplos()
+        self.assertEqual(m["patrimonio_data"], "2026-06-30")
+        self.assertAlmostEqual(m["pvp"], self._pvp_esperado(2.2e11), places=6)
+
+    def test_companhia_sem_trimestre_usa_a_dfp(self):
+        coletor.gravar_itr({("11222333000144", "2026-06-30"): {
+            "_versao": 1, "patrimonio_liquido": 1e10}}, self.banco)
+        fundamentos_cvm.limpar_cache()
+        m = self._multiplos()
+        self.assertEqual(m["patrimonio_origem"], "dfp")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

@@ -8,6 +8,12 @@ Caminho do dado:
 
     ticker -> raiz (cadastro_b3) -> CNPJ -> balanço (CVM) -> múltiplos
 
+Duas tabelas, dois documentos. `fundamentos` é a DFP: exercício fechado, é o
+que responde pergunta que só existe em ano encerrado. `balanco_itr` é o saldo
+patrimonial trimestral, usado no P/VP para que o denominador acompanhe o preço
+com que é dividido. Base gerada por coletor antigo não tem a segunda tabela, e
+o módulo trata isso como ausência — o P/VP volta a sair só da DFP, como antes.
+
 Existe porque o Yahoo recusa o endpoint de múltiplos vindo de datacenter. Aqui
 o número sai de demonstração auditada, e o exercício de referência viaja junto
 para a tela poder dizer de quando ele é.
@@ -28,8 +34,18 @@ ROE_MAXIMO_PLAUSIVEL = 200.0
 PL_MAXIMO_PLAUSIVEL = 1000.0
 PVP_MAXIMO_PLAUSIVEL = 100.0
 
+# Quanto o patrimônio do trimestre pode se afastar do patrimônio do exercício
+# antes de deixar de ser notícia e passar a ser suspeita de mapeamento errado.
+# Patrimônio líquido não triplica em um trimestre; o plano de contas de banco,
+# lido errado, já fez o patrimônio do Itaú aparecer como o ativo dele. Se isso
+# entrar pelo ITR o P/VP despenca e o papel sobe ao topo dos descontados — o
+# tipo de erro que o usuário não tem como perceber. Fora da faixa, o trimestre
+# é descartado e vale a DFP, que é auditada.
+VARIACAO_MAXIMA_PATRIMONIO = 3.0
+
 _lock = threading.Lock()
 _cache = {}
+_cache_itr = {}
 
 
 def _conectar(banco=None):
@@ -96,6 +112,59 @@ def balanco_por_cnpj(cnpj, banco=None):
     return registro
 
 
+def base_itr_disponivel(banco=None):
+    """A base pode ter sido gerada por um coletor anterior ao ITR."""
+    conexao = _conectar(banco)
+    if conexao is None:
+        return False
+    try:
+        conexao.execute("SELECT 1 FROM balanco_itr LIMIT 1").fetchone()
+        return True
+    except sqlite3.Error:
+        return False
+    finally:
+        conexao.close()
+
+
+def balanco_itr_por_cnpj(cnpj, banco=None):
+    """Balanço trimestral mais recente da companhia, ou None.
+
+    Devolve None — e não um dicionário vazio — quando a tabela não existe, para
+    que uma base gerada antes do ITR siga funcionando exatamente como antes em
+    vez de passar a calcular P/VP com patrimônio ausente.
+    """
+    if not cnpj:
+        return None
+    with _lock:
+        if cnpj in _cache_itr:
+            return _cache_itr[cnpj]
+
+    conexao = _conectar(banco)
+    if conexao is None:
+        return None
+    try:
+        linha = conexao.execute(
+            "SELECT * FROM balanco_itr WHERE cnpj = ? "
+            "ORDER BY data_ref DESC LIMIT 1", (cnpj,)
+        ).fetchone()
+        if linha is None and len(cnpj) >= 8:
+            # Mesma raiz de CNPJ que `balanco_por_cnpj`: o B3 às vezes cadastra
+            # a filial e a CVM publica pela matriz.
+            linha = conexao.execute(
+                "SELECT * FROM balanco_itr WHERE cnpj LIKE ? "
+                "ORDER BY data_ref DESC LIMIT 1", (cnpj[:8] + "%",)
+            ).fetchone()
+    except sqlite3.Error:
+        linha = None
+    finally:
+        conexao.close()
+
+    registro = dict(linha) if linha else None
+    with _lock:
+        _cache_itr[cnpj] = registro
+    return registro
+
+
 def historico_por_cnpj(cnpj, banco=None):
     """Todos os exercícios da companhia, do mais antigo ao mais recente.
 
@@ -141,15 +210,58 @@ def _numero(valor):
     return numero if numero == numero else None
 
 
+def _patrimonio_para_pvp(balanco, itr):
+    """Escolhe o patrimônio do P/VP e diz de onde ele veio.
+
+    O P/VP divide preço de HOJE por patrimônio por ação. Deixar o numerador
+    andar todo dia e o denominador parado no último 31/12 é o que separa este
+    múltiplo do que qualquer fonte que acompanhe o trimestre publica — a
+    diferença chega a quinze meses logo antes de a DFP seguinte sair.
+
+    ROE e margem não entram nessa troca: os dois casam lucro com patrimônio, e
+    lucro aqui é anual. Cruzar lucro de doze meses com patrimônio de meio de
+    ano produz um ROE que nem a DFP nem o ITR sustentam.
+
+    Devolve (patrimonio, origem, data). Fora da faixa de plausibilidade, ou sem
+    trimestre mais novo, volta o da DFP.
+    """
+    anual = _positivo(balanco.get("patrimonio_liquido"))
+    ano = balanco.get("ano")
+    data_anual = f"{ano}-12-31" if ano else None
+
+    if not itr:
+        return anual, "dfp", data_anual
+
+    data_itr = str(itr.get("data_ref") or "")
+    if not data_itr or (data_anual and data_itr <= data_anual):
+        return anual, "dfp", data_anual
+
+    trimestral = _positivo(itr.get("patrimonio_liquido"))
+    if trimestral is None:
+        return anual, "dfp", data_anual
+
+    if anual and (trimestral > VARIACAO_MAXIMA_PATRIMONIO * anual
+                  or anual > VARIACAO_MAXIMA_PATRIMONIO * trimestral):
+        return anual, "dfp", data_anual
+
+    return trimestral, "itr", data_itr
+
+
 def multiplos_do_ticker(ticker, preco=None, banco=None, caminho_cadastro=None):
     """Múltiplos calculados a partir do balanço. Sempre devolve um dicionário.
 
     Campo que não fecha volta None — nunca zero. `preco` é necessário para P/L
     e P/VP; sem ele, ROE e margem ainda saem.
+
+    `patrimonio_origem` e `patrimonio_data` dizem de que documento saiu o
+    denominador do P/VP: "dfp" para exercício fechado, "itr" para trimestre.
+    Eles viajam junto para a tela poder declarar a data, como já faz com o
+    exercício — um múltiplo sem data é um múltiplo que não dá para conferir.
     """
     resultado = {"pl": None, "pvp": None, "roe": None, "margem_liq": None,
                  "origem": "cvm", "exercicio": None, "cnpj": None,
-                 "denominacao": None, "disponivel": False}
+                 "denominacao": None, "disponivel": False,
+                 "patrimonio_origem": None, "patrimonio_data": None}
 
     cnpj = cadastro_b3.cnpj_do_ticker(ticker, caminho_cadastro)
     if not cnpj:
@@ -163,6 +275,8 @@ def multiplos_do_ticker(ticker, preco=None, banco=None, caminho_cadastro=None):
     resultado["disponivel"] = True
     resultado["exercicio"] = balanco.get("ano")
     resultado["denominacao"] = balanco.get("denom_cia")
+
+    itr = balanco_itr_por_cnpj(cnpj, banco)
 
     patrimonio = _positivo(balanco.get("patrimonio_liquido"))
     lucro = _numero(balanco.get("lucro_liquido"))
@@ -186,14 +300,22 @@ def multiplos_do_ticker(ticker, preco=None, banco=None, caminho_cadastro=None):
             resultado["pl"] = pl
 
     # P/VP = preço / VPA, com o número de ações implícito em lucro/LPA — a DFP
-    # não publica a quantidade de ações diretamente.
-    if preco and patrimonio and lpa and lucro:
+    # não publica a quantidade de ações diretamente. O patrimônio vem do
+    # documento mais recente que resista à faixa de plausibilidade; a contagem
+    # de ações continua saindo da DFP, porque o ITR não publica LPA. Ações em
+    # circulação mudam devagar e recompra grande é rara, então o erro que isso
+    # deixa é muito menor que o de um patrimônio de até quinze meses atrás.
+    patrimonio_pvp, origem_pat, data_pat = _patrimonio_para_pvp(balanco, itr)
+    resultado["patrimonio_origem"] = origem_pat
+    resultado["patrimonio_data"] = data_pat
+
+    if preco and patrimonio_pvp and lpa and lucro:
         try:
             acoes = lucro / lpa
         except ZeroDivisionError:
             acoes = None
         if acoes and acoes > 0:
-            vpa = patrimonio / acoes
+            vpa = patrimonio_pvp / acoes
             if vpa > 0:
                 pvp = preco / vpa
                 if 0 < pvp <= PVP_MAXIMO_PLAUSIVEL:
@@ -205,3 +327,4 @@ def multiplos_do_ticker(ticker, preco=None, banco=None, caminho_cadastro=None):
 def limpar_cache():
     with _lock:
         _cache.clear()
+        _cache_itr.clear()

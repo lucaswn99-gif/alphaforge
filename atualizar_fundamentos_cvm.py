@@ -1,7 +1,23 @@
-"""Constrói a base de fundamentos a partir da DFP da CVM.
+"""Constrói a base de fundamentos a partir da DFP e do ITR da CVM.
 
-    python atualizar_fundamentos_cvm.py            # últimos 3 exercícios
-    python atualizar_fundamentos_cvm.py 2024 2025
+    python atualizar_fundamentos_cvm.py            # DFP (3 exercícios) + ITR
+    python atualizar_fundamentos_cvm.py 2024 2025  # esses anos, nas duas fontes
+    python atualizar_fundamentos_cvm.py --so-itr   # só o balanço trimestral
+    python atualizar_fundamentos_cvm.py --sem-itr  # comportamento antigo
+
+Duas fontes, duas tabelas, por um motivo:
+
+* `fundamentos`, da DFP, é anual e fechada. É o que sustenta pergunta que só
+  existe em exercício encerrado — lucro em todos os anos, crescimento de lucro,
+  constância de provento.
+* `balanco_itr`, do ITR, é o saldo patrimonial trimestral. É o que mantém o
+  P/VP atual: sem ele o patrimônio usado no cálculo pode estar até quinze meses
+  atrás do preço com que é dividido, o que faz o múltiplo divergir de qualquer
+  fonte que acompanhe o trimestre.
+
+A DRE do ITR fica de fora: ela é acumulada no ano, e casá-la com a DRE anual
+exige reconstruir 12 meses móveis. Enquanto isso não for feito, lucro, receita
+e EBIT — e portanto P/L, ROE e margem — continuam vindo só da DFP.
 
 Por que existe: o Yahoo recusa o endpoint de múltiplos (`quoteSummary`) quando
 a chamada vem de IP de datacenter — no Render, 0 de 100 papéis retornaram
@@ -9,8 +25,8 @@ fundamento. A CVM é fonte oficial, gratuita e não bloqueia servidor. E o núme
 passa a vir de balanço auditado em vez de um blob agregado.
 
 Este script é para rodar FORA do serviço web (na sua máquina, ou como job
-agendado). Ele grava `fundamentos_cvm.db`, que é lido pela API. A DFP é anual:
-regenerar uma vez por trimestre é mais que suficiente.
+agendado). Ele grava `fundamentos_cvm.db`, que é lido pela API. Rodar uma vez
+por trimestre, algumas semanas depois do fim do trimestre, pega o ITR novo.
 
 Duas coisas que a versão anterior do coletor errava e aqui são tratadas:
 
@@ -32,6 +48,7 @@ import pandas as pd
 import requests
 
 URL_DFP = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFP/DADOS/dfp_cia_aberta_{ano}.zip"
+URL_ITR = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/ITR/DADOS/itr_cia_aberta_{ano}.zip"
 BANCO = "fundamentos_cvm.db"
 TIMEOUT = 180
 TAMANHO_BLOCO = 200_000  # linhas por chunk: a DFP passa de 1 milhão
@@ -145,15 +162,31 @@ CAMPOS = ["ativo_total", "ativo_circulante", "passivo_circulante",
           # Item não recorrente: separa "empresa cara" de "ano atípico".
           "perdas_nao_recorrentes"]
 
+# Balanço do ITR. Só o que é FOTOGRAFIA DE DATA — saldo em 30/06, em 30/09.
+# A DRE do ITR é acumulada no ano (1º de janeiro até a data), então lucro,
+# receita e EBIT do trimestre NÃO são comparáveis com os da DFP sem reconstruir
+# 12 meses móveis. Misturar os dois produz um P/L que nenhuma das duas fontes
+# sustenta. Enquanto isso não existir, a DRE continua vindo só da DFP.
+CAMPOS_ITR = ["ativo_total", "ativo_circulante", "caixa", "passivo_circulante",
+              "passivo_nao_circulante", "patrimonio_liquido",
+              "divida_curto_prazo", "divida_longo_prazo", "lucros_acumulados"]
 
-def baixar_zip(ano):
-    url = URL_DFP.format(ano=ano)
-    print(f"[{ano}] baixando {url}")
+
+def _baixar(url, rotulo):
+    print(f"[{rotulo}] baixando {url}")
     resposta = requests.get(url, timeout=TIMEOUT)
     if resposta.status_code != 200:
-        print(f"[{ano}] CVM respondeu {resposta.status_code} — pulando")
+        print(f"[{rotulo}] CVM respondeu {resposta.status_code} — pulando")
         return None
     return zipfile.ZipFile(io.BytesIO(resposta.content))
+
+
+def baixar_zip(ano):
+    return _baixar(URL_DFP.format(ano=ano), ano)
+
+
+def baixar_zip_itr(ano):
+    return _baixar(URL_ITR.format(ano=ano), f"ITR {ano}")
 
 
 def _escala(valor):
@@ -260,6 +293,233 @@ def processar_ano(ano):
             registros[chave].update(individual[chave])
 
     return registros
+
+
+def _data_referencia(bruto):
+    """'2026-06-30 00:00:00' -> '2026-06-30'. Qualquer outra coisa -> None."""
+    texto = str(bruto or "")[:10]
+    if len(texto) != 10 or texto[4] != "-" or texto[7] != "-":
+        return None
+    if not (texto[:4].isdigit() and texto[5:7].isdigit() and texto[8:].isdigit()):
+        return None
+    return texto
+
+
+def _versao(bruto):
+    try:
+        return int(str(bruto).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def ler_balanco_itr(arquivo_zip, nome_csv, mapa_contas):
+    """Lê um CSV de balanço do ITR: {(cnpj, data): {_versao, campo: valor}}.
+
+    Tem função própria, em vez de um parâmetro em `ler_demonstrativo`, porque
+    três coisas mudam de uma vez e cada uma delas erraria em silêncio:
+
+    * A chave é a DATA de referência, não o ano. São quatro balanços por ano;
+      chavear por ano faria o 3T sobrescrever o 1T conforme a ordem do arquivo.
+    * O ITR tem VERSAO. Uma reapresentação republica o mesmo trimestre com
+      versão maior, e o arquivo carrega as duas. Sem comparar a versão, qual
+      delas vale passa a depender da ordem das linhas — que não é garantida.
+    * Só BPA e BPP entram (ver CAMPOS_ITR).
+
+    A coluna VERSAO é procurada no cabeçalho antes de ser pedida: se um ano
+    vier em layout sem ela, a leitura continua sem desempate em vez de morrer
+    no `usecols`.
+    """
+    coletado = {}
+
+    try:
+        with arquivo_zip.open(nome_csv) as fluxo:
+            cabecalho = fluxo.readline().decode("iso-8859-1", errors="replace")
+        colunas = list(COLUNAS)
+        tem_versao = "VERSAO" in cabecalho.upper()
+        if tem_versao:
+            colunas.append("VERSAO")
+
+        with arquivo_zip.open(nome_csv) as fluxo:
+            blocos = pd.read_csv(fluxo, sep=";", encoding="iso-8859-1",
+                                 usecols=colunas, dtype=str, chunksize=TAMANHO_BLOCO)
+            for bloco in blocos:
+                bloco = bloco[bloco["ORDEM_EXERC"].str.strip().str.upper() == "ÚLTIMO"]
+                por_codigo = bloco["CD_CONTA"].str.strip().isin(set(mapa_contas))
+                por_texto = bloco["DS_CONTA"].map(_normalizar_texto).isin(DESCRICAO_PARA_CAMPO)
+                bloco = bloco[por_codigo | por_texto]
+                if bloco.empty:
+                    continue
+
+                for linha in bloco.itertuples(index=False):
+                    cnpj = "".join(ch for ch in str(linha.CNPJ_CIA) if ch.isdigit())
+                    if len(cnpj) != 14:
+                        continue
+                    data = _data_referencia(linha.DT_FIM_EXERC)
+                    if data is None:
+                        continue
+
+                    try:
+                        valor = float(str(linha.VL_CONTA).replace(",", "."))
+                    except (TypeError, ValueError):
+                        continue
+
+                    descricao = _normalizar_texto(linha.DS_CONTA)
+                    campo = DESCRICAO_PARA_CAMPO.get(descricao)
+                    por_descricao = campo is not None
+                    if campo is None:
+                        campo = mapa_contas.get(str(linha.CD_CONTA).strip())
+                    if campo not in CAMPOS_ITR:
+                        continue
+
+                    versao = _versao(getattr(linha, "VERSAO", 0)) if tem_versao else 0
+                    chave = (cnpj, data)
+                    registro = coletado.get(chave)
+                    if registro is None:
+                        registro = {"_versao": versao}
+                        coletado[chave] = registro
+                    elif versao > registro["_versao"]:
+                        # Reapresentação: a versão anterior inteira é descartada,
+                        # não corrigida campo a campo — o balanço republicado é
+                        # um documento novo, e mesclar os dois cria um balanço
+                        # que nunca foi publicado.
+                        registro = {"_versao": versao}
+                        coletado[chave] = registro
+                    elif versao < registro["_versao"]:
+                        continue
+
+                    if campo in registro and not por_descricao:
+                        continue
+                    registro[campo] = valor * _escala(linha.ESCALA_MOEDA)
+                    registro.setdefault("denom_cia", str(linha.DENOM_CIA).strip())
+    except KeyError:
+        print(f"   ! {nome_csv} não está no zip")
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ! falha lendo {nome_csv}: {type(exc).__name__}: {exc}")
+
+    return coletado
+
+
+def _fundir_itr(registros, chave, valores):
+    """Junta BPA e BPP do mesmo trimestre, respeitando a versão de cada um."""
+    atual = registros.get(chave)
+    if atual is None or valores.get("_versao", 0) > atual.get("_versao", 0):
+        registros[chave] = dict(valores)
+        return
+    if valores.get("_versao", 0) < atual.get("_versao", 0):
+        return
+    for campo, valor in valores.items():
+        atual.setdefault(campo, valor)
+
+
+def processar_itr(ano):
+    arquivo_zip = baixar_zip_itr(ano)
+    if arquivo_zip is None:
+        return {}
+
+    registros = {}
+    for grupo in ("BPA", "BPP"):
+        mapa = CONTAS[grupo]
+        consolidado = ler_balanco_itr(
+            arquivo_zip, f"itr_cia_aberta_{grupo}_con_{ano}.csv", mapa)
+        print(f"   ITR {grupo} consolidado: {len(consolidado)} trimestres")
+
+        individual = ler_balanco_itr(
+            arquivo_zip, f"itr_cia_aberta_{grupo}_ind_{ano}.csv", mapa)
+        novas = set(individual) - set(consolidado)
+        if novas:
+            print(f"   ITR {grupo} individual:   +{len(novas)} sem consolidado")
+        for chave in novas:
+            consolidado[chave] = individual[chave]
+
+        for chave, valores in consolidado.items():
+            _fundir_itr(registros, chave, valores)
+
+    return registros
+
+
+def gravar_itr(registros, banco=BANCO):
+    """Grava `balanco_itr`, em tabela separada de propósito.
+
+    A tabela `fundamentos` é lida com `ORDER BY ano DESC LIMIT 1` e por
+    `historico_por_cnpj`, que responde "houve lucro em todos os exercícios" —
+    pergunta que só faz sentido sobre exercício fechado. Enfiar trimestre ali
+    dentro mudaria a resposta de Graham sem ninguém pedir.
+    """
+    conexao = sqlite3.connect(banco)
+    cursor = conexao.cursor()
+    colunas = ", ".join(f"{campo} REAL" for campo in CAMPOS_ITR)
+    cursor.execute("DROP TABLE IF EXISTS balanco_itr")
+    cursor.execute(f"""
+        CREATE TABLE balanco_itr (
+            cnpj TEXT NOT NULL,
+            data_ref TEXT NOT NULL,
+            versao INTEGER,
+            denom_cia TEXT,
+            {colunas},
+            PRIMARY KEY (cnpj, data_ref)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_itr_cnpj ON balanco_itr(cnpj)")
+
+    linhas = []
+    for (cnpj, data), valores in registros.items():
+        linhas.append([cnpj, data, valores.get("_versao", 0), valores.get("denom_cia")]
+                      + [valores.get(campo) for campo in CAMPOS_ITR])
+
+    marcadores = ", ".join("?" * (4 + len(CAMPOS_ITR)))
+    cursor.executemany(
+        f"INSERT OR REPLACE INTO balanco_itr "
+        f"(cnpj, data_ref, versao, denom_cia, {', '.join(CAMPOS_ITR)}) "
+        f"VALUES ({marcadores})",
+        linhas,
+    )
+    conexao.commit()
+
+    print(f"\n{len(linhas)} balanços trimestrais gravados em {banco}")
+    recente = cursor.execute("SELECT MAX(data_ref) FROM balanco_itr").fetchone()[0]
+    companhias = cursor.execute(
+        "SELECT COUNT(DISTINCT cnpj) FROM balanco_itr").fetchone()[0]
+    print(f"   companhias: {companhias}   data mais recente: {recente}")
+    conexao.close()
+
+
+def relatorio_qualidade_itr(banco=BANCO):
+    """O ITR só vale se bater com a DFP na ordem de grandeza.
+
+    O plano de contas de banco já fez o patrimônio do Itaú aparecer como o
+    ativo dele. Se o mesmo erro entrar pelo ITR, o P/VP despenca e o papel vai
+    para o topo do radar de descontados. Patrimônio não triplica em um
+    trimestre: divergência dessa ordem é mapeamento errado, não notícia.
+    """
+    conexao = sqlite3.connect(banco)
+    cursor = conexao.cursor()
+    try:
+        divergentes = cursor.execute("""
+            SELECT i.denom_cia, i.data_ref, i.patrimonio_liquido, f.ano,
+                   f.patrimonio_liquido
+            FROM balanco_itr i
+            JOIN fundamentos f ON f.cnpj = i.cnpj
+            WHERE i.data_ref = (SELECT MAX(data_ref) FROM balanco_itr
+                                WHERE cnpj = i.cnpj)
+              AND f.ano = (SELECT MAX(ano) FROM fundamentos WHERE cnpj = f.cnpj)
+              AND i.patrimonio_liquido > 0 AND f.patrimonio_liquido > 0
+              AND (i.patrimonio_liquido > 3.0 * f.patrimonio_liquido
+                   OR f.patrimonio_liquido > 3.0 * i.patrimonio_liquido)
+            ORDER BY i.patrimonio_liquido DESC LIMIT 15
+        """).fetchall()
+    except sqlite3.Error as exc:
+        print(f"\n! não deu para cruzar ITR com DFP: {exc}")
+        conexao.close()
+        return
+
+    print("\nITR x DFP — patrimônio fora de proporção "
+          f"({len(divergentes)} companhia(s)):")
+    if not divergentes:
+        print("   nenhuma  <-- esperado")
+    for nome, data, pl_itr, ano, pl_dfp in divergentes:
+        print(f"   {(nome or '')[:30]:<30} {data}  ITR {_bi(pl_itr):>8}bi   "
+              f"{ano}  DFP {_bi(pl_dfp):>8}bi   <-- revisar")
+    conexao.close()
 
 
 def gravar(registros, banco=BANCO):
@@ -387,7 +647,7 @@ def inspecionar(cnpj_alvo, ano):
             print(f"   ! {type(exc).__name__}: {exc}")
 
 
-def main(anos):
+def coletar_dfp(anos):
     registros = {}
     for ano in anos:
         parcial = processar_ano(ano)
@@ -397,6 +657,25 @@ def main(anos):
         raise SystemExit("Nenhum dado obtido da CVM.")
     gravar(registros)
     relatorio_qualidade()
+
+
+def coletar_itr(anos):
+    registros = {}
+    for ano in anos:
+        for chave, valores in processar_itr(ano).items():
+            _fundir_itr(registros, chave, valores)
+    if not registros:
+        print("\n! Nenhum balanço trimestral obtido — a base segue só com a DFP.")
+        return
+    gravar_itr(registros)
+    relatorio_qualidade_itr()
+
+
+def main(anos, anos_itr=None, com_dfp=True, com_itr=True):
+    if com_dfp:
+        coletar_dfp(anos)
+    if com_itr:
+        coletar_itr(anos_itr or anos)
 
 
 if __name__ == "__main__":
@@ -410,12 +689,27 @@ if __name__ == "__main__":
         inspecionar(cnpj, ano_alvo)
         raise SystemExit(0)
 
+    from datetime import date
+    atual = date.today().year
+
     argumentos = [a for a in sys.argv[1:] if a.isdigit()]
     if argumentos:
         anos_alvo = [int(a) for a in argumentos]
+        anos_itr_alvo = anos_alvo
     else:
-        from datetime import date
-        atual = date.today().year
         anos_alvo = [atual - 3, atual - 2, atual - 1]
-    print(f"Exercícios: {anos_alvo}")
-    main(anos_alvo)
+        # O ITR vale pelo trimestre mais recente. O ano anterior entra junto
+        # para que uma coleta rodada em janeiro, antes do 1T sair, ainda tenha
+        # o 3T do ano passado em vez de nada.
+        anos_itr_alvo = [atual - 1, atual]
+
+    so_itr = "--so-itr" in sys.argv
+    sem_itr = "--sem-itr" in sys.argv
+    if so_itr and sem_itr:
+        raise SystemExit("--so-itr e --sem-itr se cancelam: escolha um.")
+
+    if not so_itr:
+        print(f"Exercícios (DFP): {anos_alvo}")
+    if not sem_itr:
+        print(f"Trimestres (ITR): {anos_itr_alvo}")
+    main(anos_alvo, anos_itr_alvo, com_dfp=not so_itr, com_itr=not sem_itr)
