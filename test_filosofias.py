@@ -633,6 +633,21 @@ def principal():
            and not any("P/VP" in m for m in divergente["motivos"]),
            divergente["nao_apurados"])
 
+    # Evento societário: a deduzida bate com a quantidade ANTERIOR do FRE, e a
+    # atual saltou. As duas estão certas, em datas diferentes — vale a atual,
+    # que é a que casa com um preço de hoje.
+    evento = _montar_motor_fre({"total": 5.49e9, "total_anterior": 1.0e9})
+    checar("Graham: evento societário confirmado usa a declarada nova",
+           "pós-evento" in (evento["origem_acoes"] or ""), evento["origem_acoes"])
+    checar("Graham: e o VPA sai da quantidade nova",
+           perto(evento["vpa"], 10e9 / 5.49e9), evento["vpa"])
+
+    # Mudou, mas a dedução não corrobora o valor antigo: sem assinatura de
+    # evento, o palpite continua proibido.
+    sem_assinatura = _montar_motor_fre({"total": 1e10, "total_anterior": 1.0e6})
+    checar("Graham: mudança sem corroboração segue não apurada",
+           sem_assinatura["vpa"] is None, sem_assinatura["origem_acoes"])
+
     # Fora da faixa do possível dá para saber quem errou: vale a outra.
     absurda = _montar_motor_fre({"total": 1.9e15})
     checar("Graham: contagem declarada absurda cai para lucro/LPA",

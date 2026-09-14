@@ -1121,6 +1121,13 @@ class TestAcoesNoVpa(unittest.TestCase):
             "ordinarias": total, "preferenciais": None, "total": total}}, self.banco)
         fundamentos_cvm.limpar_cache()
 
+    def _gravar_acoes_com_anterior(self, total, anterior, cnpj=CNPJ_VALE):
+        coletor.gravar_acoes({cnpj: {
+            "data_ref": "2026-12-31", "versao": 8, "nome": "VALE S.A.",
+            "ordinarias": total, "preferenciais": None, "total": total,
+            "total_anterior": anterior, "data_anterior": "2025-12-31"}}, self.banco)
+        fundamentos_cvm.limpar_cache()
+
     def _multiplos(self):
         return fundamentos_cvm.multiplos_do_ticker(
             "VALE3", preco=self.PRECO, banco=self.banco,
@@ -1202,6 +1209,46 @@ class TestAcoesNoVpa(unittest.TestCase):
         m = self._multiplos()
         self.assertEqual(m["acoes_origem"], "fre")
         self.assertEqual(m["acoes"], 9.2e8)
+
+    def test_evento_societario_confirmado_usa_a_declarada(self):
+        """A assinatura que se valida sozinha, vista na Orizon: a deduzida bate
+        com a quantidade ANTERIOR do FRE (96,05 mi contra 96,13 mi, 0,07% de
+        diferença) e a atual saltou 5,7 vezes. Duas fontes independentes
+        concordando no valor antigo provam que o antigo estava certo e que o
+        novo é a atualização — as duas certas, em datas diferentes."""
+        self._gravar_dfp(lucro_liquido=9.6e7, lpa_on=1.0)   # 96 mi deduzidos
+        self._gravar_acoes_com_anterior(5.49e8, anterior=9.61e7)
+        m = self._multiplos()
+        self.assertEqual(m["acoes_origem"], "fre-evento")
+        self.assertEqual(m["acoes"], 5.49e8)
+        self.assertIsNotNone(m["pvp"])
+
+    def test_grupamento_tambem_e_evento(self):
+        """MPM Corpóreos: 361 milhões viraram 36,1 milhões, dez para um."""
+        self._gravar_dfp(lucro_liquido=3.02e8, lpa_on=1.0)
+        self._gravar_acoes_com_anterior(3.61e7, anterior=3.61e8)
+        m = self._multiplos()
+        self.assertEqual(m["acoes_origem"], "fre-evento")
+        self.assertEqual(m["acoes"], 3.61e7)
+
+    def test_sem_mudanca_de_quantidade_segue_nao_apurado(self):
+        """A Sabesp: FRE e DFP discordam 5x na MESMA data de referência, e a
+        quantidade não mudou entre formulários. Nada corrobora nenhum dos dois
+        lados, então continua não apurado."""
+        self._gravar_dfp()
+        self._gravar_acoes(4.55e10)
+        m = self._multiplos()
+        self.assertEqual(m["acoes_origem"], "divergente")
+        self.assertIsNone(m["pvp"])
+
+    def test_deduzida_que_nao_bate_com_a_anterior_nao_vira_evento(self):
+        """Quantidade mudou, mas a dedução não corrobora o valor antigo: não há
+        assinatura de evento, e o palpite continua proibido."""
+        self._gravar_dfp()                       # 4,3 bi deduzidos
+        self._gravar_acoes_com_anterior(4.55e10, anterior=1.0e6)
+        m = self._multiplos()
+        self.assertEqual(m["acoes_origem"], "divergente")
+        self.assertIsNone(m["pvp"])
 
     def test_as_duas_absurdas_nao_apuram(self):
         self._gravar_dfp(lpa_on=0.0002)

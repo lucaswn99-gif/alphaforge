@@ -1034,10 +1034,17 @@ class PhilosophyEngine:
             # delas errou sem dizer qual. Aqui isso derruba o VPA, e o critério
             # de P/VP cai em "não apurado" — que é o estado honesto, e que não
             # reprova o papel.
-            divergente = (
-                declarado > fundamentos_cvm.DIVERGENCIA_MAXIMA_ACOES * deduzido
-                or deduzido > fundamentos_cvm.DIVERGENCIA_MAXIMA_ACOES * declarado)
-            if divergente:
+            if fundamentos_cvm.divergem_acoes(declarado, deduzido):
+                # Mas divergência pode ser evento societário em vez de erro: se
+                # a deduzida bate com a quantidade ANTERIOR do FRE, houve
+                # desdobramento, grupamento ou emissão entre as duas datas, e
+                # vale a atual. Mesma checagem de `fundamentos_cvm` — se as
+                # duas se afastarem, o mesmo papel passa a mostrar P/VP
+                # diferente na aba de Graham e no scanner, no mesmo dia.
+                anterior = fundamentos_cvm.acoes_plausivel(
+                    registro.get("total_anterior"))
+                if anterior and not fundamentos_cvm.divergem_acoes(deduzido, anterior):
+                    return declarado, "quantidade declarada (FRE 17.1, pós-evento)"
                 return None, "contagem divergente entre FRE e lucro/LPA"
             return declarado, "quantidade declarada (FRE 17.1)"
 

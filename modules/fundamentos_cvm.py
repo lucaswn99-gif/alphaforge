@@ -304,6 +304,14 @@ def _patrimonio_para_pvp(balanco, itr):
     return trimestral, "itr", data_itr
 
 
+def divergem_acoes(uma, outra):
+    """Duas contagens discordam por ordem de grandeza?"""
+    if not uma or not outra:
+        return False
+    return (uma > DIVERGENCIA_MAXIMA_ACOES * outra
+            or outra > DIVERGENCIA_MAXIMA_ACOES * uma)
+
+
 def acoes_plausivel(valor):
     """Quantidade de ações dentro da faixa do possível, ou None."""
     numero = _numero(valor)
@@ -353,8 +361,23 @@ def _acoes_em_circulacao(balanco, registro_acoes):
     if deduzido is None:
         return declarado, "fre"
 
-    if (declarado > DIVERGENCIA_MAXIMA_ACOES * deduzido
-            or deduzido > DIVERGENCIA_MAXIMA_ACOES * declarado):
+    if divergem_acoes(declarado, deduzido):
+        # Antes de desistir: a divergência pode não ser erro de ninguém.
+        #
+        # A deduzida sai do exercício FECHADO; a declarada, do formulário mais
+        # recente. Se houve desdobramento, grupamento ou emissão entre as duas
+        # datas, as duas estão certas — cada uma na sua — e a que serve para
+        # dividir um preço de HOJE é a atual.
+        #
+        # A assinatura disso é específica e se valida sozinha: a deduzida bate
+        # com a quantidade ANTERIOR do próprio FRE. Duas fontes independentes
+        # concordando no valor antigo provam que o antigo estava certo, e que
+        # o novo é a atualização. Na Orizon a diferença entre as duas foi de
+        # 0,07%, com a quantidade saltando 5,7 vezes depois; na MPM Corpóreos
+        # foi um grupamento de dez para um.
+        anterior = acoes_plausivel(registro_acoes.get("total_anterior"))
+        if anterior and not divergem_acoes(deduzido, anterior):
+            return declarado, "fre-evento"
         return None, "divergente"
     # Concordando, vale a declarada: é afirmação direta da companhia sobre um
     # saldo em data, enquanto a deduzida é quociente de dois números
