@@ -7,6 +7,7 @@ o parsing e a aritmética — não que o arquivo real tenha esse formato.
 
     python -m unittest test_cvm -v
 """
+import contextlib
 import io
 import os
 import sqlite3
@@ -239,6 +240,49 @@ class TestColetorCvm(unittest.TestCase):
                 "WHERE cnpj = ?", (CNPJ_VALE,)).fetchone()
             conexao.close()
             self.assertEqual(linha, (2e11, 4e10))
+
+
+class TestInspetorDaDfp(unittest.TestCase):
+    """A ferramenta de diagnóstico precisa mostrar o número que se investiga."""
+
+    def _rodar(self, linhas):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as arquivo:
+            for grupo in ("BPA", "BPP", "DRE"):
+                arquivo.writestr(f"dfp_cia_aberta_{grupo}_con_2025.csv", _csv(linhas))
+        buffer.seek(0)
+        original = coletor.baixar_zip
+        coletor.baixar_zip = lambda ano: zipfile.ZipFile(buffer)
+        saida = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(saida):
+                coletor.inspecionar(CNPJ_VALE, 2025)
+        finally:
+            coletor.baixar_zip = original
+        return saida.getvalue()
+
+    def test_o_lpa_aparece_apesar_dos_tres_pontos(self):
+        """O corte por profundidade escondia a conta 3.99.01.01 — o LPA, que é
+        o denominador da contagem de ações deduzida. A ferramenta feita para
+        investigar a contagem era cega justamente para ele."""
+        saida = self._rodar([
+            f"{CNPJ_VALE};VALE S.A.;2025-12-31;ÚLTIMO;MIL;3.99.01.01;ON;22.27",
+        ])
+        self.assertIn("3.99.01.01", saida)
+
+    def test_o_valor_por_acao_mantem_a_casa_decimal(self):
+        """R$ 22,27 virava '22' no formato inteiro, e é a casa decimal que diz
+        se o LPA está em reais ou na escala do balanço."""
+        saida = self._rodar([
+            f"{CNPJ_VALE};VALE S.A.;2025-12-31;ÚLTIMO;MIL;3.99.01.01;ON;22.27",
+        ])
+        self.assertIn("22.2700", saida)
+
+    def test_conta_funda_que_nao_e_por_acao_segue_cortada(self):
+        saida = self._rodar([
+            f"{CNPJ_VALE};VALE S.A.;2025-12-31;ÚLTIMO;MIL;1.01.02.03;Detalhe;9",
+        ])
+        self.assertNotIn("1.01.02.03", saida)
 
 
 class TestMultiplosCvm(unittest.TestCase):

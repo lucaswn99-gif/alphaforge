@@ -1018,15 +1018,25 @@ def inspecionar(cnpj_alvo, ano):
                     alvo = alvo[alvo["ORDEM_EXERC"].str.strip().str.upper() == "ÚLTIMO"]
                     for linha in alvo.itertuples(index=False):
                         conta = str(linha.CD_CONTA).strip()
-                        # Só o topo da árvore: 1, 1.01, 2.03, 3.11, 3.99.01.01
-                        if conta.count(".") > 2:
+                        # Topo da árvore, MAIS o LPA. O comentário antigo dizia
+                        # incluir 3.99.01.01, mas o corte por número de pontos
+                        # derrubava justamente essa conta — três pontos. O LPA
+                        # é o denominador da contagem de ações deduzida, então
+                        # era o único número que esta ferramenta precisava
+                        # mostrar e era o único que ela escondia.
+                        if conta.count(".") > 2 and not conta.startswith("3.99"):
                             continue
                         try:
                             valor = float(str(linha.VL_CONTA).replace(",", "."))
                         except (TypeError, ValueError):
                             continue
+                        # Valor por ação sai com casa decimal: R$ 22,27 virava
+                        # "22" no formato inteiro, e é exatamente a casa que
+                        # diz se o LPA está na escala do balanço ou em reais.
+                        formatado = (f"{valor:>18,.4f}" if conta.startswith("3.99")
+                                     else f"{valor:>18,.0f}")
                         print(f"   {conta:<12} {str(linha.DS_CONTA)[:52]:<52} "
-                              f"{valor:>18,.0f}  [{linha.ESCALA_MOEDA}]")
+                              f"{formatado}  [{linha.ESCALA_MOEDA}]")
         except Exception as exc:  # noqa: BLE001
             print(f"   ! {type(exc).__name__}: {exc}")
 
