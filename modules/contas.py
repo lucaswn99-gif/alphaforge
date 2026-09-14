@@ -153,6 +153,22 @@ def iniciar():
                 );
                 CREATE INDEX IF NOT EXISTS idx_carteiras_usuario
                     ON carteiras(usuario_id);
+
+                -- Percentual-alvo por CLASSE (ação, FII, ETF). Uma linha por
+                -- classe em vez de uma coluna por classe: classe nova não
+                -- exige migração de esquema.
+                --
+                -- Não há alvo padrão, e isso é decisão de produto: inventar
+                -- uma alocação para o dinheiro de alguém é recomendação, não
+                -- configuração. Sem alvo definido, o rebalanceamento não roda.
+                CREATE TABLE IF NOT EXISTS alvos_carteira (
+                    usuario_id    INTEGER NOT NULL,
+                    classe        TEXT    NOT NULL,
+                    percentual    REAL    NOT NULL,
+                    atualizado_em TEXT    NOT NULL,
+                    PRIMARY KEY (usuario_id, classe),
+                    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+                );
             """)
         _iniciado = True
 

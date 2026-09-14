@@ -22,7 +22,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from modules import carteira, diagnostico, importacao, planos
+from modules import (alvos, carteira, diagnostico, importacao, planos,
+                     rebalanceamento)
 
 router = APIRouter(tags=["VIP & Carteira"])
 
@@ -193,6 +194,105 @@ def diagnosticar_carteira(forcar: bool = False,
     resultado = diagnostico.diagnosticar(rota_filosofias.motor(), dados["posicoes"])
     _cache_diagnostico[chave] = (time.time(), resultado)
     return {**resultado, "cache": False, "idade_segundos": 0}
+
+
+# ------------------------------------------------------ Pilar 3: rebalanceamento
+
+class DefinicaoAlvos(BaseModel):
+    # dict e não campos fixos de propósito: `alvos.validar` recusa classe que
+    # não existe, e um modelo com campos nomeados engoliria "cripto: 50" em
+    # silêncio em vez de devolver o erro para a tela.
+    alvos: dict[str, float]
+
+
+@router.get("/api/v1/carteira/alvos")
+def obter_alvos(ctx: planos.Contexto = Depends(_vip)):
+    definidos = alvos.obter(ctx.usuario["id"])
+    return {
+        "alvos": definidos,
+        "definido": definidos is not None,
+        "classes": list(alvos.CLASSES_ALVO),
+        "rotulos": alvos.ROTULOS,
+    }
+
+
+@router.put("/api/v1/carteira/alvos")
+def definir_alvos(corpo: DefinicaoAlvos, ctx: planos.Contexto = Depends(_vip)):
+    _limitar_escrita(ctx)
+    try:
+        gravados = alvos.definir(ctx.usuario["id"], corpo.alvos)
+    except alvos.ErroAlvo as erro:
+        raise HTTPException(status_code=422, detail={
+            "erro": "alvo_invalido", "motivo": str(erro)})
+    return {"alvos": gravados, "definido": True}
+
+
+def _precos_de_mercado(motor, tickers):
+    """{ticker: preço} da B3. Papel que falhar volta ausente, não zerado.
+
+    Consulta em paralelo com o mesmo teto do diagnóstico: é o `.info` do Yahoo
+    que limita, e paralelismo demais devolve tabela vazia.
+    """
+    import concurrent.futures
+
+    def buscar(ticker):
+        try:
+            perfil = motor.fonte.perfil(f"{ticker}.SA") or {}
+            preco = perfil.get("preco")
+            return ticker, (float(preco) if preco else None)
+        except Exception:  # noqa: BLE001
+            return ticker, None
+
+    precos = {}
+    if not tickers:
+        return precos
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=diagnostico.MAX_WORKERS) as pool:
+        for ticker, preco in pool.map(buscar, tickers):
+            if preco:
+                precos[ticker] = preco
+    return precos
+
+
+@router.get("/api/v1/carteira/rebalanceamento")
+def rebalancear(aporte: float = 0.0, forcar: bool = False,
+                ctx: planos.Contexto = Depends(_vip)):
+    """Para onde mandar o próximo aporte, sem vender nada.
+
+    `aporte=0` é caso de uso legítimo, não borda: devolve o retrato do desvio
+    atual para a tela mostrar antes de o usuário digitar qualquer valor.
+    """
+    usuario_id = ctx.usuario["id"]
+    definidos = alvos.obter(usuario_id)
+    if definidos is None:
+        raise HTTPException(status_code=422, detail={
+            "erro": "alvo_nao_definido",
+            "motivo": ("Defina o percentual-alvo de cada classe antes de "
+                       "rebalancear. Não sugerimos uma alocação por você.")})
+
+    dados = carteira.listar(usuario_id)
+    if not dados["posicoes"]:
+        raise HTTPException(status_code=422, detail={
+            "erro": "carteira_vazia",
+            "motivo": "Cadastre suas posições antes de rebalancear."})
+
+    from routers import filosofias as rota_filosofias
+    motor = rota_filosofias.motor()
+
+    # As posições em desconformidade não recebem aporte novo — foi a decisão
+    # de produto do Pilar 3. Reaproveita o cache do diagnóstico: medir a
+    # carteira inteira de novo a cada simulação de aporte seria caro e não
+    # mudaria nada, já que o diagnóstico não depende do valor aportado.
+    veredito = diagnosticar_carteira(forcar=forcar, ctx=ctx)
+    bloqueados = {linha["ticker"] for linha in veredito.get("posicoes", [])
+                  if linha.get("diagnostico", {}).get("estado") == diagnostico.DESCONFORME}
+
+    precos = _precos_de_mercado(motor, [p["ticker"] for p in dados["posicoes"]])
+    plano = rebalanceamento.planejar(
+        dados["posicoes"], precos, definidos, aporte, bloqueados)
+
+    return {**plano, "alvos": definidos, "rotulos": alvos.ROTULOS,
+            "custo_total": dados["custo_total"]}
 
 
 class LinhaImportada(BaseModel):
