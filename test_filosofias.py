@@ -584,6 +584,54 @@ def principal():
     checar("Graham: piso de critérios medidos é 5, não 4",
            filosofias.MINIMO_CRITERIOS_GRAHAM == 5, filosofias.MINIMO_CRITERIOS_GRAHAM)
 
+    # ------------------------------------------------------------------
+    # Quantidade de ações declarada no FCA. O VPA de Graham e o P/VP do
+    # scanner têm que sair da MESMA contagem: se divergirem, o mesmo papel
+    # aparece com dois P/VP diferentes no mesmo dia, em duas abas.
+    BALANCO_FCA = {"cnpj": "11222333000144", "ano": 2025, "denom_cia": "DECL SA",
+                   "receita_liquida": 5e9, "ativo_circulante": 5e9,
+                   "passivo_circulante": 2e9, "divida_longo_prazo": 1e9,
+                   "patrimonio_liquido": 10e9, "lucro_liquido": 1e9,
+                   "lpa_on": 1.0}
+
+    def _montar_motor_fca(registro_acoes, balanco=None):
+        motor = filosofias.PhilosophyEngine(fonte=FonteFalsa(perfis={
+            "DECL3.SA": perfil_simples(8.0, 8e9, "Decl SA")}))
+        motor._balanco_cvm = lambda t: (balanco or BALANCO_FCA)
+        motor._historico_de_lucro = lambda t: ([6e8, 8e8, 1e9], 3)
+        original = fundamentos_cvm.acoes_por_cnpj
+        fundamentos_cvm.acoes_por_cnpj = lambda cnpj, banco=None: registro_acoes
+        try:
+            saida = motor.satelite_graham(universo=["DECL3"], aplicar_momentum=False)
+        finally:
+            fundamentos_cvm.acoes_por_cnpj = original
+        return (saida["aprovados"] + saida["reprovados"] + saida["fora_do_escopo"])[0]
+
+    # lucro/LPA daria 1e9 / 1,0 = 1 bi de ações. O FCA declara 1,1 bi.
+    decl = _montar_motor_fca({"total": 1.1e9})
+    checar("Graham: a quantidade declarada no FCA vence a deduzida",
+           "FCA" in (decl["origem_acoes"] or ""), decl["origem_acoes"])
+    checar("Graham: o VPA usa a quantidade declarada",
+           perto(decl["vpa"], 10e9 / 1.1e9), decl["vpa"])
+
+    sem_fca = _montar_motor_fca(None)
+    checar("Graham: sem FCA a contagem volta a lucro/LPA",
+           "lucro/LPA" in (sem_fca["origem_acoes"] or ""), sem_fca["origem_acoes"])
+    checar("Graham: sem FCA o VPA é o de antes",
+           perto(sem_fca["vpa"], 10e9 / 1e9), sem_fca["vpa"])
+
+    # Dez vezes mais ações que a dedução é coluna trocada, não recompra.
+    divergente = _montar_motor_fca({"total": 1e10})
+    checar("Graham: contagem declarada fora de ordem de grandeza é recusada",
+           "lucro/LPA" in (divergente["origem_acoes"] or ""), divergente["origem_acoes"])
+
+    # Papel sem LPA publicado: antes caía no valor de mercado, que é aproximado
+    # para quem tem ON e PN. Agora tem uma quantidade declarada.
+    sem_lpa = _montar_motor_fca({"total": 1.1e9},
+                                balanco=dict(BALANCO_FCA, lpa_on=None))
+    checar("Graham: sem LPA, o FCA substitui o valor de mercado aproximado",
+           "FCA" in (sem_lpa["origem_acoes"] or ""), sem_lpa["origem_acoes"])
+
     # ======================================================================
     print("\n[Greenblatt — EUA]")
     def contabil(ebit, divida, caixa, circ, passivo, imob, div_pagos, recompras):

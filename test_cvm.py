@@ -857,5 +857,247 @@ class TestPvpComItr(unittest.TestCase):
         self.assertEqual(m["patrimonio_origem"], "dfp")
 
 
+CABECALHO_FCA = ("CNPJ_Companhia;Data_Referencia;Versao;Nome_Companhia;"
+                 "Tipo_Capital;Quantidade_Acoes_Ordinarias;"
+                 "Quantidade_Acoes_Preferenciais;Quantidade_Total_Acoes")
+
+
+def _linha_fca(tipo="Capital Integralizado", total="4550000000",
+               on="4550000000", pn="0", data="2026-05-30", versao=3,
+               cnpj=CNPJ_VALE, nome="VALE S.A."):
+    return f"{cnpj};{data};{versao};{nome};{tipo};{on};{pn};{total}"
+
+
+def _zip_fca(ano, linhas, cabecalho=CABECALHO_FCA):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as arquivo:
+        arquivo.writestr(f"fca_cia_aberta_capital_social_{ano}.csv",
+                         ("\n".join([cabecalho] + linhas) + "\n").encode("iso-8859-1"))
+    buffer.seek(0)
+    return zipfile.ZipFile(buffer)
+
+
+class TestColetorFca(unittest.TestCase):
+    """Quantidade de ações declarada: parsing, escolha de registro e recusas."""
+
+    def _ler(self, linhas, cabecalho=CABECALHO_FCA):
+        arquivo = _zip_fca(2026, linhas, cabecalho)
+        return coletor.ler_acoes_fca(
+            arquivo, "fca_cia_aberta_capital_social_2026.csv")
+
+    def test_le_a_quantidade_declarada(self):
+        lido = self._ler([_linha_fca()])
+        self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
+        self.assertEqual(lido[CNPJ_VALE]["ordinarias"], 4.55e9)
+        self.assertEqual(lido[CNPJ_VALE]["data_ref"], "2026-05-30")
+
+    def test_capital_autorizado_nao_entra(self):
+        """Autorizado é o teto do estatuto. Usá-lo infla as ações e esvazia o
+        VPA — a companhia apareceria barata por causa de um número que não
+        corresponde a ação nenhuma emitida."""
+        lido = self._ler([_linha_fca(tipo="Capital Autorizado", total="9000000000")])
+        self.assertEqual(lido, {})
+
+    def test_integralizado_vence_subscrito_na_mesma_data(self):
+        lido = self._ler([
+            _linha_fca(tipo="Capital Subscrito", total="5000000000"),
+            _linha_fca(tipo="Capital Integralizado", total="4550000000"),
+        ])
+        self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
+
+    def test_ordem_no_arquivo_nao_decide(self):
+        lido = self._ler([
+            _linha_fca(tipo="Capital Integralizado", total="4550000000"),
+            _linha_fca(tipo="Capital Subscrito", total="5000000000"),
+        ])
+        self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
+
+    def test_declaracao_mais_recente_vence(self):
+        lido = self._ler([
+            _linha_fca(total="4000000000", data="2025-05-30", versao=1),
+            _linha_fca(total="4550000000", data="2026-05-30", versao=1),
+        ])
+        self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
+
+    def test_versao_maior_vence_na_mesma_data(self):
+        lido = self._ler([
+            _linha_fca(total="4000000000", versao=1),
+            _linha_fca(total="4550000000", versao=2),
+        ])
+        self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
+
+    def test_cabecalho_alternativo_ainda_casa(self):
+        """A grafia da coluna muda entre formulários; o casamento é por nome
+        normalizado, não por igualdade exata."""
+        cabecalho = ("CNPJ_CIA;DT_REFER;VERSAO;DENOM_CIA;Tipo Capital;"
+                     "Quantidade Ações Ordinárias;Quantidade Ações Preferenciais;"
+                     "Quantidade Total Ações")
+        lido = self._ler([_linha_fca()], cabecalho=cabecalho)
+        self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
+
+    def test_coluna_obrigatoria_ausente_devolve_vazio(self):
+        """Não dá para adivinhar: melhor nada do que uma contagem errada."""
+        cabecalho = "CNPJ_Companhia;Data_Referencia;Versao;Nome_Companhia;Tipo_Capital"
+        linha = f"{CNPJ_VALE};2026-05-30;3;VALE S.A.;Capital Integralizado"
+        self.assertEqual(self._ler([linha], cabecalho=cabecalho), {})
+
+    def test_notacao_brasileira_e_americana(self):
+        self.assertEqual(coletor._quantidade("4.550.000.000,00"), 4.55e9)
+        self.assertEqual(coletor._quantidade("4550000000"), 4.55e9)
+        # Sem vírgula o ponto é decimal: apagá-lo multiplicaria por dez.
+        self.assertEqual(coletor._quantidade("4550000000.0"), 4.55e9)
+
+    def test_quantidade_implausivel_e_recusada(self):
+        self.assertIsNone(coletor._quantidade("0"))
+        self.assertIsNone(coletor._quantidade("12"))
+        self.assertIsNone(coletor._quantidade(""))
+        self.assertIsNone(coletor._quantidade("n/a"))
+
+    def test_gravacao_e_leitura(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            banco = os.path.join(pasta, "teste.db")
+            coletor.gravar_acoes({CNPJ_VALE: {
+                "data_ref": "2026-05-30", "versao": 3, "nome": "VALE S.A.",
+                "ordinarias": 4.55e9, "preferenciais": None, "total": 4.55e9}}, banco)
+            conexao = sqlite3.connect(banco)
+            linha = conexao.execute(
+                "SELECT total, ordinarias FROM acoes_cia WHERE cnpj = ?",
+                (CNPJ_VALE,)).fetchone()
+            conexao.close()
+            self.assertEqual(linha, (4.55e9, 4.55e9))
+
+
+class TestAcoesNoVpa(unittest.TestCase):
+    """De onde sai o denominador do VPA, e quando a declarada é recusada."""
+
+    PRECO = 79.02
+    PL_DFP = 2e11
+    LUCRO = 4e10
+    LPA = 9.30
+    ACOES_DEDUZIDAS = LUCRO / LPA   # ~4,3 bi
+
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.banco = os.path.join(self.pasta.name, "fundamentos.db")
+        self.cadastro = os.path.join(self.pasta.name, "cadastro.json")
+        cadastro_b3.gravar({"VALE": {"cnpj": CNPJ_VALE, "nome": "VALE S.A.",
+                                     "nome_pregao": "VALE"}}, self.cadastro)
+        cadastro_b3.limpar_memoria()
+        fundamentos_cvm.limpar_cache()
+
+    def tearDown(self):
+        self.pasta.cleanup()
+        cadastro_b3.limpar_memoria()
+        fundamentos_cvm.limpar_cache()
+
+    def _gravar_dfp(self, **campos):
+        base = {"denom_cia": "VALE S.A.", "patrimonio_liquido": self.PL_DFP,
+                "lucro_liquido": self.LUCRO, "receita_liquida": 2e11,
+                "lpa_on": self.LPA}
+        base.update(campos)
+        coletor.gravar({(CNPJ_VALE, 2025): base}, self.banco)
+        fundamentos_cvm.limpar_cache()
+
+    def _gravar_acoes(self, total, cnpj=CNPJ_VALE):
+        coletor.gravar_acoes({cnpj: {
+            "data_ref": "2026-05-30", "versao": 3, "nome": "VALE S.A.",
+            "ordinarias": total, "preferenciais": None, "total": total}}, self.banco)
+        fundamentos_cvm.limpar_cache()
+
+    def _multiplos(self):
+        return fundamentos_cvm.multiplos_do_ticker(
+            "VALE3", preco=self.PRECO, banco=self.banco,
+            caminho_cadastro=self.cadastro)
+
+    def test_sem_tabela_de_acoes_usa_lucro_sobre_lpa(self):
+        """Regressão: base do coletor antigo se comporta exatamente como antes."""
+        self._gravar_dfp()
+        self.assertFalse(fundamentos_cvm.base_acoes_disponivel(self.banco))
+        m = self._multiplos()
+        self.assertEqual(m["acoes_origem"], "lpa")
+        self.assertAlmostEqual(m["acoes"], self.ACOES_DEDUZIDAS, places=2)
+        self.assertAlmostEqual(
+            m["pvp"], self.PRECO / (self.PL_DFP / self.ACOES_DEDUZIDAS), places=6)
+
+    def test_declarada_entra_no_lugar_da_deduzida(self):
+        self._gravar_dfp()
+        self._gravar_acoes(4.55e9)
+        m = self._multiplos()
+        self.assertTrue(fundamentos_cvm.base_acoes_disponivel(self.banco))
+        self.assertEqual(m["acoes_origem"], "fca")
+        self.assertEqual(m["acoes"], 4.55e9)
+        self.assertAlmostEqual(m["pvp"], self.PRECO / (self.PL_DFP / 4.55e9), places=6)
+
+    def test_papel_sem_lpa_passa_a_ter_pvp(self):
+        """O ganho principal: antes isso era 'não apurado' e agora é medido."""
+        self._gravar_dfp(lpa_on=None)
+        sem = self._multiplos()
+        self.assertIsNone(sem["pvp"])
+        self.assertIsNone(sem["acoes_origem"])
+
+        self._gravar_acoes(4.55e9)
+        com = self._multiplos()
+        self.assertEqual(com["acoes_origem"], "fca")
+        self.assertAlmostEqual(com["pvp"], self.PRECO / (self.PL_DFP / 4.55e9), places=6)
+        self.assertIsNone(com["pl"], "P/L sem LPA continua não apurado")
+
+    def test_prejuizo_com_acoes_declaradas_ainda_tem_pvp(self):
+        """Patrimônio positivo com prejuízo no ano: P/VP existe, P/L não."""
+        self._gravar_dfp(lucro_liquido=-8e9, lpa_on=None)
+        self._gravar_acoes(4.55e9)
+        m = self._multiplos()
+        self.assertIsNone(m["pl"])
+        self.assertIsNotNone(m["pvp"])
+        self.assertAlmostEqual(m["roe"], -4.0, places=6)
+
+    def test_divergencia_de_ordem_de_grandeza_recusa_a_declarada(self):
+        """Dez vezes mais ações é coluna trocada, não recompra."""
+        self._gravar_dfp()
+        self._gravar_acoes(4.55e10)
+        m = self._multiplos()
+        self.assertEqual(m["acoes_origem"], "lpa")
+        self.assertAlmostEqual(m["acoes"], self.ACOES_DEDUZIDAS, places=2)
+
+    def test_divergencia_pequena_e_aceita(self):
+        """Recompra e follow-on são reais: só o extremo é recusado."""
+        self._gravar_dfp()
+        self._gravar_acoes(5.0e9)
+        m = self._multiplos()
+        self.assertEqual(m["acoes_origem"], "fca")
+
+    def test_companhia_fora_do_fca_cai_para_a_deduzida(self):
+        self._gravar_dfp()
+        self._gravar_acoes(1e9, cnpj="11222333000144")
+        m = self._multiplos()
+        self.assertEqual(m["acoes_origem"], "lpa")
+
+    def test_vpa_viaja_junto(self):
+        self._gravar_dfp()
+        self._gravar_acoes(4.55e9)
+        m = self._multiplos()
+        self.assertAlmostEqual(m["vpa"], self.PL_DFP / 4.55e9, places=6)
+
+    def test_sem_nenhuma_das_duas_nao_ha_pvp(self):
+        """Não apurado continua sendo não apurado — nunca zero."""
+        self._gravar_dfp(lpa_on=None)
+        m = self._multiplos()
+        self.assertIsNone(m["pvp"])
+        self.assertIsNone(m["vpa"])
+        self.assertIsNone(m["acoes"])
+
+    def test_itr_e_fca_se_combinam(self):
+        """Patrimônio do trimestre sobre ações declaradas: as duas correções
+        juntas, que é o caso normal depois da coleta completa."""
+        self._gravar_dfp()
+        coletor.gravar_itr({(CNPJ_VALE, "2026-06-30"): {
+            "_versao": 1, "denom_cia": "VALE S.A.",
+            "patrimonio_liquido": 2.2e11}}, self.banco)
+        self._gravar_acoes(4.55e9)
+        m = self._multiplos()
+        self.assertEqual(m["patrimonio_origem"], "itr")
+        self.assertEqual(m["acoes_origem"], "fca")
+        self.assertAlmostEqual(m["pvp"], self.PRECO / (2.2e11 / 4.55e9), places=6)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

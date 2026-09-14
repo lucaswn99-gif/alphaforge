@@ -1000,20 +1000,48 @@ class PhilosophyEngine:
 
     @staticmethod
     def _acoes_em_circulacao(balanco, valor_mercado, preco):
-        """(quantidade, origem). Duas vias, ambas aproximadas — e a origem diz
-        qual foi usada.
+        """(quantidade, origem). Três vias, em ordem de qualidade — e a origem
+        diz qual foi usada, porque ela muda a confiança no VPA.
 
-        A DFP não publica quantidade de ações. Lucro/LPA é exato quando os
-        dois vêm do mesmo demonstrativo; valor de mercado/preço é o plano B, e
-        é aproximado para quem tem ON e PN, porque o valor de mercado cobre as
-        duas classes e o preço é de uma só.
+        A DFP não publica quantidade de ações. As alternativas, da melhor para
+        a pior:
+
+        * FCA — a companhia declara a quantidade por classe no Formulário
+          Cadastral. É a única que não é dedução, e a única que existe para
+          quem não publica LPA.
+        * Lucro/LPA — exato quando os dois saem do mesmo demonstrativo, mas é
+          média ponderada do exercício, não saldo em data, e some sem LPA.
+        * Valor de mercado/preço — plano C, aproximado para quem tem ON e PN,
+          porque o valor de mercado cobre as duas classes e o preço é de uma só.
+
+        Esta é a MESMA ordem de `fundamentos_cvm.multiplos_do_ticker`. Se as
+        duas divergirem, a aba de Graham e o scanner passam a mostrar P/VP
+        diferentes para o mesmo papel no mesmo dia.
         """
+        cnpj = balanco.get("cnpj")
+        registro = fundamentos_cvm.acoes_por_cnpj(cnpj) if cnpj else None
+        declarado = fontes.positivo(registro.get("total")) if registro else None
+
         lucro = fontes.numero(balanco.get("lucro_liquido"))
         lpa = fontes.numero(balanco.get("lpa_on"))
+        deduzido = None
         if lucro and lpa:
-            acoes = lucro / lpa
-            if acoes > 0:
-                return acoes, "lucro/LPA (DFP)"
+            candidato = lucro / lpa
+            if candidato > 0:
+                deduzido = candidato
+
+        if declarado:
+            # Mesma trava do outro módulo: ordem de grandeza diferente entre as
+            # duas é coluna trocada, e aí vale a deduzida, que sai do balanço
+            # auditado.
+            divergente = deduzido and (
+                declarado > fundamentos_cvm.DIVERGENCIA_MAXIMA_ACOES * deduzido
+                or deduzido > fundamentos_cvm.DIVERGENCIA_MAXIMA_ACOES * declarado)
+            if not divergente:
+                return declarado, "quantidade declarada (FCA)"
+
+        if deduzido:
+            return deduzido, "lucro/LPA (DFP)"
 
         mercado = fontes.positivo(valor_mercado)
         cotacao = fontes.positivo(preco)

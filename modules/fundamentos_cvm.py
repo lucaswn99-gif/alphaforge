@@ -43,9 +43,18 @@ PVP_MAXIMO_PLAUSIVEL = 100.0
 # é descartado e vale a DFP, que é auditada.
 VARIACAO_MAXIMA_PATRIMONIO = 3.0
 
+# Quanto a quantidade de ações declarada no FCA pode divergir da deduzida de
+# lucro/LPA antes de uma das duas ser considerada errada. As duas medem coisas
+# ligeiramente diferentes — o FCA é o emitido numa data, lucro/LPA é a média
+# ponderada do exercício — então divergência pequena é esperada e não é erro.
+# Ordem de grandeza diferente é coluna trocada, e o sintoma seria um VPA
+# deslocado por um fator de dez, que produz um P/VP plausível e falso.
+DIVERGENCIA_MAXIMA_ACOES = 5.0
+
 _lock = threading.Lock()
 _cache = {}
 _cache_itr = {}
+_cache_acoes = {}
 
 
 def _conectar(banco=None):
@@ -165,6 +174,48 @@ def balanco_itr_por_cnpj(cnpj, banco=None):
     return registro
 
 
+def base_acoes_disponivel(banco=None):
+    conexao = _conectar(banco)
+    if conexao is None:
+        return False
+    try:
+        conexao.execute("SELECT 1 FROM acoes_cia LIMIT 1").fetchone()
+        return True
+    except sqlite3.Error:
+        return False
+    finally:
+        conexao.close()
+
+
+def acoes_por_cnpj(cnpj, banco=None):
+    """Quantidade de ações declarada no FCA, ou None."""
+    if not cnpj:
+        return None
+    with _lock:
+        if cnpj in _cache_acoes:
+            return _cache_acoes[cnpj]
+
+    conexao = _conectar(banco)
+    if conexao is None:
+        return None
+    try:
+        linha = conexao.execute(
+            "SELECT * FROM acoes_cia WHERE cnpj = ?", (cnpj,)).fetchone()
+        if linha is None and len(cnpj) >= 8:
+            linha = conexao.execute(
+                "SELECT * FROM acoes_cia WHERE cnpj LIKE ? "
+                "ORDER BY data_ref DESC LIMIT 1", (cnpj[:8] + "%",)).fetchone()
+    except sqlite3.Error:
+        linha = None
+    finally:
+        conexao.close()
+
+    registro = dict(linha) if linha else None
+    with _lock:
+        _cache_acoes[cnpj] = registro
+    return registro
+
+
 def historico_por_cnpj(cnpj, banco=None):
     """Todos os exercícios da companhia, do mais antigo ao mais recente.
 
@@ -247,6 +298,44 @@ def _patrimonio_para_pvp(balanco, itr):
     return trimestral, "itr", data_itr
 
 
+def _acoes_em_circulacao(balanco, registro_acoes):
+    """Quantas ações dividem o patrimônio. Devolve (quantidade, origem).
+
+    Duas fontes, nesta ordem:
+
+    * `fca` — a quantidade que a companhia declarou no Formulário Cadastral.
+      É o que cabe no VPA, que é conceito de data, e existe mesmo para quem
+      não publica LPA.
+    * `lpa` — lucro / LPA, a dedução que era a única fonte até aqui. Continua
+      como segunda opção, porque nem toda companhia aparece no FCA.
+
+    Quando as duas existem e discordam por ordem de grandeza, a declarada é
+    recusada e vale a deduzida: lucro e LPA saem do mesmo demonstrativo
+    auditado, então elas erram juntas ou não erram.
+    """
+    lucro = _numero(balanco.get("lucro_liquido"))
+    lpa = _numero(balanco.get("lpa_on"))
+    deduzido = None
+    if lucro is not None and lpa:
+        candidato = lucro / lpa
+        if candidato > 0:
+            deduzido = candidato
+
+    declarado = None
+    if registro_acoes:
+        declarado = _positivo(registro_acoes.get("total"))
+
+    if declarado is None:
+        return deduzido, ("lpa" if deduzido else None)
+    if deduzido is None:
+        return declarado, "fca"
+
+    if (declarado > DIVERGENCIA_MAXIMA_ACOES * deduzido
+            or deduzido > DIVERGENCIA_MAXIMA_ACOES * declarado):
+        return deduzido, "lpa"
+    return declarado, "fca"
+
+
 def multiplos_do_ticker(ticker, preco=None, banco=None, caminho_cadastro=None):
     """Múltiplos calculados a partir do balanço. Sempre devolve um dicionário.
 
@@ -255,13 +344,16 @@ def multiplos_do_ticker(ticker, preco=None, banco=None, caminho_cadastro=None):
 
     `patrimonio_origem` e `patrimonio_data` dizem de que documento saiu o
     denominador do P/VP: "dfp" para exercício fechado, "itr" para trimestre.
-    Eles viajam junto para a tela poder declarar a data, como já faz com o
+    `acoes_origem` diz de onde veio a quantidade de ações: "fca" quando a
+    companhia declarou, "lpa" quando foi deduzida de lucro/LPA. Os três viajam
+    junto para a tela poder declarar a procedência, como já faz com o
     exercício — um múltiplo sem data é um múltiplo que não dá para conferir.
     """
     resultado = {"pl": None, "pvp": None, "roe": None, "margem_liq": None,
                  "origem": "cvm", "exercicio": None, "cnpj": None,
                  "denominacao": None, "disponivel": False,
-                 "patrimonio_origem": None, "patrimonio_data": None}
+                 "patrimonio_origem": None, "patrimonio_data": None,
+                 "acoes": None, "acoes_origem": None, "vpa": None}
 
     cnpj = cadastro_b3.cnpj_do_ticker(ticker, caminho_cadastro)
     if not cnpj:
@@ -299,27 +391,24 @@ def multiplos_do_ticker(ticker, preco=None, banco=None, caminho_cadastro=None):
         if 0 < pl <= PL_MAXIMO_PLAUSIVEL:
             resultado["pl"] = pl
 
-    # P/VP = preço / VPA, com o número de ações implícito em lucro/LPA — a DFP
-    # não publica a quantidade de ações diretamente. O patrimônio vem do
-    # documento mais recente que resista à faixa de plausibilidade; a contagem
-    # de ações continua saindo da DFP, porque o ITR não publica LPA. Ações em
-    # circulação mudam devagar e recompra grande é rara, então o erro que isso
-    # deixa é muito menor que o de um patrimônio de até quinze meses atrás.
+    # P/VP = preço / VPA. O patrimônio vem do documento mais recente que
+    # resista à faixa de plausibilidade; a quantidade de ações, da declaração
+    # da companhia, caindo para lucro/LPA quando ela não existe.
     patrimonio_pvp, origem_pat, data_pat = _patrimonio_para_pvp(balanco, itr)
     resultado["patrimonio_origem"] = origem_pat
     resultado["patrimonio_data"] = data_pat
 
-    if preco and patrimonio_pvp and lpa and lucro:
-        try:
-            acoes = lucro / lpa
-        except ZeroDivisionError:
-            acoes = None
-        if acoes and acoes > 0:
-            vpa = patrimonio_pvp / acoes
-            if vpa > 0:
-                pvp = preco / vpa
-                if 0 < pvp <= PVP_MAXIMO_PLAUSIVEL:
-                    resultado["pvp"] = pvp
+    acoes, origem_acoes = _acoes_em_circulacao(balanco, acoes_por_cnpj(cnpj, banco))
+    resultado["acoes"] = acoes
+    resultado["acoes_origem"] = origem_acoes
+
+    if preco and patrimonio_pvp and acoes:
+        vpa = patrimonio_pvp / acoes
+        if vpa > 0:
+            resultado["vpa"] = vpa
+            pvp = preco / vpa
+            if 0 < pvp <= PVP_MAXIMO_PLAUSIVEL:
+                resultado["pvp"] = pvp
 
     return resultado
 
@@ -328,3 +417,4 @@ def limpar_cache():
     with _lock:
         _cache.clear()
         _cache_itr.clear()
+        _cache_acoes.clear()

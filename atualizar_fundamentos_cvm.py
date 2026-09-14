@@ -1,11 +1,12 @@
 """Constrói a base de fundamentos a partir da DFP e do ITR da CVM.
 
-    python atualizar_fundamentos_cvm.py            # DFP (3 exercícios) + ITR
-    python atualizar_fundamentos_cvm.py 2024 2025  # esses anos, nas duas fontes
+    python atualizar_fundamentos_cvm.py            # DFP + ITR + FCA
+    python atualizar_fundamentos_cvm.py 2024 2025  # esses anos, nas três fontes
     python atualizar_fundamentos_cvm.py --so-itr   # só o balanço trimestral
-    python atualizar_fundamentos_cvm.py --sem-itr  # comportamento antigo
+    python atualizar_fundamentos_cvm.py --so-fca   # só a quantidade de ações
+    python atualizar_fundamentos_cvm.py --sem-itr --sem-fca   # como era antes
 
-Duas fontes, duas tabelas, por um motivo:
+Três fontes, três tabelas, por um motivo:
 
 * `fundamentos`, da DFP, é anual e fechada. É o que sustenta pergunta que só
   existe em exercício encerrado — lucro em todos os anos, crescimento de lucro,
@@ -14,6 +15,9 @@ Duas fontes, duas tabelas, por um motivo:
   P/VP atual: sem ele o patrimônio usado no cálculo pode estar até quinze meses
   atrás do preço com que é dividido, o que faz o múltiplo divergir de qualquer
   fonte que acompanhe o trimestre.
+* `acoes_cia`, do FCA, é a quantidade de ações declarada pela companhia. É o
+  denominador do VPA. Sem ela a conta dependia de lucro/LPA, que some quando a
+  companhia não publica LPA — e aí não havia P/VP nenhum.
 
 A DRE do ITR fica de fora: ela é acumulada no ano, e casá-la com a DRE anual
 exige reconstruir 12 meses móveis. Enquanto isso não for feito, lucro, receita
@@ -49,6 +53,7 @@ import requests
 
 URL_DFP = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFP/DADOS/dfp_cia_aberta_{ano}.zip"
 URL_ITR = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/ITR/DADOS/itr_cia_aberta_{ano}.zip"
+URL_FCA = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/FCA/DADOS/fca_cia_aberta_{ano}.zip"
 BANCO = "fundamentos_cvm.db"
 TIMEOUT = 180
 TAMANHO_BLOCO = 200_000  # linhas por chunk: a DFP passa de 1 milhão
@@ -187,6 +192,232 @@ def baixar_zip(ano):
 
 def baixar_zip_itr(ano):
     return _baixar(URL_ITR.format(ano=ano), f"ITR {ano}")
+
+
+def baixar_zip_fca(ano):
+    return _baixar(URL_FCA.format(ano=ano), f"FCA {ano}")
+
+
+# ---------------------------------------------------------------- FCA: ações
+#
+# Por que o FCA entra. O VPA era calculado com um número de ações DEDUZIDO:
+# lucro / LPA. Isso tem três defeitos, e os três aparecem no P/VP:
+#
+# * Companhia que não publica a conta 3.99.01.01 ficava sem P/VP NENHUM — não
+#   um P/VP velho, nenhum. Era a maior fonte de "não apurado" do radar.
+# * lucro/LPA dá a média ponderada do exercício. VPA é conceito de data: o que
+#   cabe ali é a quantidade em circulação no fechamento.
+# * Recompra e follow-on no meio do ano ficavam invisíveis.
+#
+# O FCA publica a quantidade por classe, declarada pela própria companhia.
+#
+# O que ele NÃO desconta: ações em tesouraria. O total aqui é o emitido, então
+# o VPA sai levemente subestimado e o P/VP levemente superestimado. O erro é da
+# ordem de 1-2% do capital na maioria das companhias, e ele empurra para o lado
+# conservador — um papel nunca vai parecer mais barato do que é por causa disso.
+
+# O FCA não usa a mesma convenção de nome de coluna da DFP (CNPJ_CIA vira
+# CNPJ_Companhia). Em vez de fixar uma grafia e quebrar quando ela mudar, o
+# cabeçalho real é normalizado e casado contra estes candidatos.
+COLUNAS_FCA = {
+    "cnpj": ("CNPJ_COMPANHIA", "CNPJ_CIA"),
+    "data": ("DATA_REFERENCIA", "DT_REFER"),
+    "versao": ("VERSAO",),
+    "nome": ("NOME_COMPANHIA", "DENOM_CIA"),
+    "tipo": ("TIPO_CAPITAL",),
+    "ordinarias": ("QUANTIDADE_ACOES_ORDINARIAS",),
+    "preferenciais": ("QUANTIDADE_ACOES_PREFERENCIAIS",),
+    "total": ("QUANTIDADE_TOTAL_ACOES",),
+}
+OBRIGATORIAS_FCA = ("cnpj", "data", "tipo", "total")
+
+# Ordem de preferência do tipo de capital. Integralizado é o que foi de fato
+# pago; autorizado é apenas o teto do estatuto e NÃO entra em hipótese alguma —
+# usar o teto como se fosse capital existente infla as ações, esvazia o VPA e
+# faz a companhia parecer barata.
+TIPOS_CAPITAL = ("capital integralizado", "capital subscrito", "capital emitido")
+ACOES_MINIMO_PLAUSIVEL = 1_000.0
+
+
+def _mapear_colunas_fca(cabecalho):
+    """Cabeçalho real -> {papel: nome da coluna}. Devolve (mapa, faltando)."""
+    presentes = {}
+    for bruto in cabecalho.split(";"):
+        limpo = bruto.strip().strip('"').replace("﻿", "")
+        presentes[_normalizar_texto(limpo).upper().replace(" ", "_")] = limpo
+
+    mapa = {}
+    for papel, candidatos in COLUNAS_FCA.items():
+        for candidato in candidatos:
+            if candidato in presentes:
+                mapa[papel] = presentes[candidato]
+                break
+    faltando = [p for p in OBRIGATORIAS_FCA if p not in mapa]
+    return mapa, faltando
+
+
+def _quantidade(bruto):
+    """Quantidade de ações, tolerando as duas notações que a CVM usa.
+
+    O ponto só é tratado como separador de milhar quando há vírgula na mesma
+    string ("1.234.567,00" é brasileiro). Sem vírgula, "1234567.0" é ponto
+    decimal e apagá-lo multiplicaria a quantidade por dez — o que reduziria o
+    VPA na mesma proporção e faria a companhia parecer dez vezes mais cara.
+    """
+    texto = str(bruto or "").strip()
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    try:
+        numero = float(texto)
+    except (TypeError, ValueError):
+        return None
+    return numero if numero >= ACOES_MINIMO_PLAUSIVEL else None
+
+
+def ler_acoes_fca(arquivo_zip, nome_csv):
+    """{cnpj: {data_ref, versao, ordinarias, preferenciais, total, nome}}.
+
+    Fica com o registro de data mais recente, desempatando por versão. Entre
+    tipos de capital na mesma data, fica com o primeiro de TIPOS_CAPITAL que
+    aparecer com quantidade plausível.
+    """
+    coletado = {}
+
+    try:
+        with arquivo_zip.open(nome_csv) as fluxo:
+            cabecalho = fluxo.readline().decode("iso-8859-1", errors="replace")
+        mapa, faltando = _mapear_colunas_fca(cabecalho)
+        if faltando:
+            # Layout diferente do esperado. Imprime o que existe de verdade em
+            # vez de seguir com colunas erradas: contagem de ações errada não
+            # dá erro, dá um P/VP plausível e falso.
+            print(f"   ! {nome_csv}: faltam as colunas {faltando}")
+            print(f"     cabeçalho real: {cabecalho.strip()[:300]}")
+            return {}
+
+        with arquivo_zip.open(nome_csv) as fluxo:
+            blocos = pd.read_csv(fluxo, sep=";", encoding="iso-8859-1",
+                                 usecols=list(mapa.values()), dtype=str,
+                                 chunksize=TAMANHO_BLOCO)
+            for bloco in blocos:
+                for linha in bloco.to_dict("records"):
+                    cnpj = "".join(ch for ch in str(linha.get(mapa["cnpj"])) if ch.isdigit())
+                    if len(cnpj) != 14:
+                        continue
+
+                    tipo = _normalizar_texto(linha.get(mapa["tipo"]))
+                    if tipo not in TIPOS_CAPITAL:
+                        continue
+                    posto = TIPOS_CAPITAL.index(tipo)
+
+                    total = _quantidade(linha.get(mapa["total"]))
+                    if total is None:
+                        continue
+
+                    data = _data_referencia(linha.get(mapa["data"])) or ""
+                    versao = _versao(linha.get(mapa["versao"])) if "versao" in mapa else 0
+
+                    atual = coletado.get(cnpj)
+                    if atual is not None:
+                        # Mais recente vence; empatou na data, maior versão;
+                        # empatou na versão, o tipo de capital melhor colocado.
+                        chave_nova = (data, versao, -posto)
+                        chave_atual = (atual["data_ref"], atual["versao"], -atual["_posto"])
+                        if chave_nova <= chave_atual:
+                            continue
+
+                    coletado[cnpj] = {
+                        "data_ref": data,
+                        "versao": versao,
+                        "_posto": posto,
+                        "nome": str(linha.get(mapa.get("nome", ""), "") or "").strip(),
+                        "ordinarias": _quantidade(linha.get(mapa.get("ordinarias", ""))),
+                        "preferenciais": _quantidade(linha.get(mapa.get("preferenciais", ""))),
+                        "total": total,
+                    }
+    except KeyError:
+        print(f"   ! {nome_csv} não está no zip")
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ! falha lendo {nome_csv}: {type(exc).__name__}: {exc}")
+
+    return coletado
+
+
+def processar_fca(ano):
+    arquivo_zip = baixar_zip_fca(ano)
+    if arquivo_zip is None:
+        return {}
+    lido = ler_acoes_fca(arquivo_zip, f"fca_cia_aberta_capital_social_{ano}.csv")
+    print(f"   FCA {ano}: {len(lido)} companhias com quantidade de ações")
+    return lido
+
+
+def gravar_acoes(registros, banco=BANCO):
+    conexao = sqlite3.connect(banco)
+    cursor = conexao.cursor()
+    cursor.execute("DROP TABLE IF EXISTS acoes_cia")
+    cursor.execute("""
+        CREATE TABLE acoes_cia (
+            cnpj TEXT PRIMARY KEY,
+            data_ref TEXT,
+            versao INTEGER,
+            denom_cia TEXT,
+            ordinarias REAL,
+            preferenciais REAL,
+            total REAL NOT NULL
+        )
+    """)
+    cursor.executemany(
+        "INSERT OR REPLACE INTO acoes_cia "
+        "(cnpj, data_ref, versao, denom_cia, ordinarias, preferenciais, total) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [[cnpj, v.get("data_ref"), v.get("versao"), v.get("nome"),
+          v.get("ordinarias"), v.get("preferenciais"), v.get("total")]
+         for cnpj, v in registros.items()],
+    )
+    conexao.commit()
+    print(f"\n{len(registros)} companhias com ações gravadas em {banco}")
+    conexao.close()
+
+
+def relatorio_qualidade_acoes(banco=BANCO):
+    """Cruza a contagem declarada com a deduzida de lucro/LPA.
+
+    As duas medem coisas ligeiramente diferentes — uma é o emitido na data, a
+    outra é a média ponderada do exercício — então divergência pequena é
+    esperada. Ordem de grandeza diferente não é: é coluna errada.
+    """
+    conexao = sqlite3.connect(banco)
+    cursor = conexao.cursor()
+    try:
+        linhas = cursor.execute("""
+            SELECT a.denom_cia, a.total, f.lucro_liquido / f.lpa_on
+            FROM acoes_cia a
+            JOIN fundamentos f ON f.cnpj = a.cnpj
+            WHERE f.ano = (SELECT MAX(ano) FROM fundamentos WHERE cnpj = f.cnpj)
+              AND f.lpa_on IS NOT NULL AND f.lpa_on <> 0
+              AND f.lucro_liquido IS NOT NULL
+              AND f.lucro_liquido / f.lpa_on > 0
+        """).fetchall()
+    except sqlite3.Error as exc:
+        print(f"\n! não deu para cruzar FCA com DFP: {exc}")
+        conexao.close()
+        return
+    conexao.close()
+
+    if not linhas:
+        print("\nFCA x LPA: nada para cruzar.")
+        return
+
+    fora = [(nome, declarado, deduzido) for nome, declarado, deduzido in linhas
+            if declarado > 5.0 * deduzido or deduzido > 5.0 * declarado]
+    print(f"\nFCA x lucro/LPA — {len(linhas)} companhias cruzadas, "
+          f"{len(fora)} fora de proporção:")
+    if not fora:
+        print("   nenhuma  <-- esperado")
+    for nome, declarado, deduzido in sorted(fora, key=lambda x: -x[1])[:15]:
+        print(f"   {(nome or '')[:30]:<30} FCA {declarado:>16,.0f}   "
+              f"LPA {deduzido:>16,.0f}   <-- revisar")
 
 
 def _escala(valor):
@@ -671,11 +902,30 @@ def coletar_itr(anos):
     relatorio_qualidade_itr()
 
 
-def main(anos, anos_itr=None, com_dfp=True, com_itr=True):
+def coletar_fca(anos):
+    """Fica com a declaração mais recente de cada companhia entre os anos."""
+    registros = {}
+    for ano in sorted(anos):
+        for cnpj, valores in processar_fca(ano).items():
+            atual = registros.get(cnpj)
+            if atual is None or (valores["data_ref"], valores["versao"]) >= \
+                    (atual["data_ref"], atual["versao"]):
+                registros[cnpj] = valores
+    if not registros:
+        print("\n! Nenhuma quantidade de ações obtida — o VPA segue saindo de "
+              "lucro/LPA, como antes.")
+        return
+    gravar_acoes(registros)
+    relatorio_qualidade_acoes()
+
+
+def main(anos, anos_itr=None, com_dfp=True, com_itr=True, com_fca=True):
     if com_dfp:
         coletar_dfp(anos)
     if com_itr:
         coletar_itr(anos_itr or anos)
+    if com_fca:
+        coletar_fca(anos_itr or anos)
 
 
 if __name__ == "__main__":
@@ -705,11 +955,23 @@ if __name__ == "__main__":
 
     so_itr = "--so-itr" in sys.argv
     sem_itr = "--sem-itr" in sys.argv
+    so_fca = "--so-fca" in sys.argv
+    sem_fca = "--sem-fca" in sys.argv
     if so_itr and sem_itr:
         raise SystemExit("--so-itr e --sem-itr se cancelam: escolha um.")
+    if so_fca and sem_fca:
+        raise SystemExit("--so-fca e --sem-fca se cancelam: escolha um.")
+    if so_itr and so_fca:
+        raise SystemExit("--so-itr e --so-fca se cancelam: escolha um.")
 
-    if not so_itr:
+    com_dfp = not (so_itr or so_fca)
+    com_itr = not (sem_itr or so_fca)
+    com_fca = not (sem_fca or so_itr)
+
+    if com_dfp:
         print(f"Exercícios (DFP): {anos_alvo}")
-    if not sem_itr:
+    if com_itr:
         print(f"Trimestres (ITR): {anos_itr_alvo}")
-    main(anos_alvo, anos_itr_alvo, com_dfp=not so_itr, com_itr=not sem_itr)
+    if com_fca:
+        print(f"Ações (FCA):      {anos_itr_alvo}")
+    main(anos_alvo, anos_itr_alvo, com_dfp=com_dfp, com_itr=com_itr, com_fca=com_fca)
