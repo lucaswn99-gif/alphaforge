@@ -919,6 +919,27 @@ class TestColetorCapital(unittest.TestCase):
         ])
         self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
 
+    def test_aprovacao_mais_recente_desempata_o_mesmo_tipo(self):
+        """O 17.1 traz uma linha por evento de capital aprovado. Sem a data de
+        aprovação no desempate, quem vencia era a primeira linha do arquivo —
+        a ordem física do CSV decidindo a quantidade de ações da companhia."""
+        lido = self._ler([
+            _linha_capital(total="3000000000", data="2026-05-30", versao=1)
+            + ";2011-04-28",
+            _linha_capital(total="4550000000", data="2026-05-30", versao=1)
+            + ";2024-07-10",
+        ], cabecalho=CABECALHO_CAPITAL + ";Data_Autorizacao_Aprovacao")
+        self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
+
+    def test_aprovacao_antiga_depois_da_nova_nao_reverte(self):
+        lido = self._ler([
+            _linha_capital(total="4550000000", data="2026-05-30", versao=1)
+            + ";2024-07-10",
+            _linha_capital(total="3000000000", data="2026-05-30", versao=1)
+            + ";2011-04-28",
+        ], cabecalho=CABECALHO_CAPITAL + ";Data_Autorizacao_Aprovacao")
+        self.assertEqual(lido[CNPJ_VALE]["total"], 4.55e9)
+
     def test_versao_maior_vence_na_mesma_data(self):
         lido = self._ler([
             _linha_capital(total="4000000000", versao=1),

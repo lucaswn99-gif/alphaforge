@@ -236,6 +236,7 @@ COLUNAS_CAPITAL = {
     "versao": ("VERSAO",),
     "nome": ("NOME_EMPRESARIAL", "NOME_COMPANHIA", "DENOM_CIA"),
     "tipo": ("TIPO_CAPITAL",),
+    "aprovacao": ("DATA_AUTORIZACAO_APROVACAO", "DATA_APROVACAO"),
     "ordinarias": ("QUANTIDADE_ACOES_ORDINARIAS",),
     "preferenciais": ("QUANTIDADE_ACOES_PREFERENCIAIS",),
     "total": ("QUANTIDADE_TOTAL_ACOES", "QUANTIDADE_ACOES"),
@@ -359,12 +360,22 @@ def ler_acoes_capital(arquivo_zip, nome_csv):
                             if "data" in mapa else "") or ""
                     versao = _versao(linha.get(mapa["versao"])) if "versao" in mapa else 0
 
+                    # O 17.1 pode trazer mais de uma linha do mesmo tipo de
+                    # capital para a mesma companhia, uma por evento aprovado.
+                    # Sem a data de aprovação no desempate, quem vencia era a
+                    # PRIMEIRA linha do arquivo — ou seja, a ordem física do
+                    # CSV decidia a quantidade de ações. Isso não é critério.
+                    aprovacao = (_data_referencia(linha.get(mapa["aprovacao"]))
+                                 if "aprovacao" in mapa else "") or ""
+
                     atual = coletado.get(cnpj)
                     if atual is not None:
                         # Mais recente vence; empatou na data, maior versão;
-                        # empatou na versão, o tipo de capital melhor colocado.
-                        chave_nova = (data, versao, -posto)
-                        chave_atual = (atual["data_ref"], atual["versao"], -atual["_posto"])
+                        # empatou na versão, o tipo de capital melhor colocado;
+                        # empatou no tipo, a aprovação mais recente.
+                        chave_nova = (data, versao, -posto, aprovacao)
+                        chave_atual = (atual["data_ref"], atual["versao"],
+                                       -atual["_posto"], atual["_aprovacao"])
                         if chave_nova <= chave_atual:
                             continue
 
@@ -372,6 +383,7 @@ def ler_acoes_capital(arquivo_zip, nome_csv):
                         "data_ref": data,
                         "versao": versao,
                         "_posto": posto,
+                        "_aprovacao": aprovacao,
                         "nome": str(linha.get(mapa.get("nome", ""), "") or "").strip(),
                         "ordinarias": _quantidade(linha.get(mapa.get("ordinarias", ""))),
                         "preferenciais": _quantidade(linha.get(mapa.get("preferenciais", ""))),
@@ -1060,6 +1072,59 @@ def coletar_capital(anos):
     relatorio_qualidade_acoes()
 
 
+def inspecionar_fre(cnpj_alvo, ano):
+    """Despeja TODAS as linhas de capital social de UMA companhia no FRE.
+
+        python atualizar_fundamentos_cvm.py --inspecionar-fre 43776517000180 2026
+
+    Mostra o registro inteiro, com todas as colunas, sem filtro de tipo de
+    capital nem de data — inclusive as linhas que a coleta descarta. É o que
+    responde "por que esta companhia veio com esta quantidade" sem hipótese.
+    """
+    cnpj_alvo = "".join(ch for ch in str(cnpj_alvo) if ch.isdigit())
+    arquivo_zip = baixar_zip_fre(ano)
+    if arquivo_zip is None:
+        return
+    candidatos, todos = _csvs_candidatos_capital(arquivo_zip, ano)
+    if not candidatos:
+        print("   ! nenhum CSV de capital social. Arquivos no zip:")
+        for nome in todos:
+            print(f"       {nome}")
+        return
+
+    nome_csv = candidatos[0]
+    print(f"\n===== {nome_csv} =====")
+    try:
+        with arquivo_zip.open(nome_csv) as fluxo:
+            cabecalho = fluxo.readline().decode("iso-8859-1", errors="replace")
+        colunas = [c.strip().strip('"') for c in cabecalho.strip().split(";")]
+        coluna_cnpj = next(
+            (c for c in colunas
+             if _normalizar_texto(c).upper().replace(" ", "_")
+             in ("CNPJ_COMPANHIA", "CNPJ_CIA")), None)
+        if coluna_cnpj is None:
+            print(f"   ! não achei coluna de CNPJ em: {cabecalho.strip()[:300]}")
+            return
+
+        with arquivo_zip.open(nome_csv) as fluxo:
+            blocos = pd.read_csv(fluxo, sep=";", encoding="iso-8859-1",
+                                 dtype=str, chunksize=TAMANHO_BLOCO)
+            achou = False
+            for bloco in blocos:
+                alvo = bloco[bloco[coluna_cnpj].str.replace(r"\D", "", regex=True)
+                             == cnpj_alvo]
+                for registro in alvo.to_dict("records"):
+                    achou = True
+                    print("   " + "-" * 60)
+                    for chave, valor in registro.items():
+                        if valor is not None and str(valor).strip() not in ("", "nan"):
+                            print(f"   {str(chave)[:34]:<34} {str(valor)[:60]}")
+            if not achou:
+                print("   (nada para este CNPJ)")
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ! {type(exc).__name__}: {exc}")
+
+
 def inspecionar_itr(cnpj_alvo, ano):
     """Despeja o balanço de UMA companhia no ITR, consolidado e individual.
 
@@ -1134,6 +1199,15 @@ if __name__ == "__main__":
         if not restante:
             raise SystemExit("uso: --inspecionar-itr <cnpj> [ano]")
         inspecionar_itr(restante[0],
+                        int(restante[1]) if len(restante) > 1 else atual)
+        raise SystemExit(0)
+
+    if "--inspecionar-fre" in sys.argv:
+        posicao = sys.argv.index("--inspecionar-fre")
+        restante = [a for a in sys.argv[posicao + 1:] if not a.startswith("--")]
+        if not restante:
+            raise SystemExit("uso: --inspecionar-fre <cnpj> [ano]")
+        inspecionar_fre(restante[0],
                         int(restante[1]) if len(restante) > 1 else atual)
         raise SystemExit(0)
 
