@@ -124,6 +124,35 @@ def iniciar():
                     id_mensagem  TEXT PRIMARY KEY,
                     visto_em     TEXT NOT NULL
                 );
+
+                -- Carteira do assinante. Mora aqui, e não numa base própria,
+                -- por um motivo de segurança: `contas.db` já está no
+                -- .gitignore e nunca sai do servidor. Quantidade x preço médio
+                -- É o patrimônio do cliente — criar um segundo arquivo seria
+                -- criar um segundo lugar de onde ele pode vazar.
+                --
+                -- UNIQUE(usuario_id, ticker): uma posição por papel. Postar um
+                -- ticker que já existe faz MERGE por média ponderada, que é o
+                -- que um aporte é. Duas linhas do mesmo papel seria erro
+                -- contábil disfarçado de registro.
+                --
+                -- quantidade REAL: você compra inteiro, mas bonificação e
+                -- desdobramento geram fração. INTEGER perderia dado calado.
+                CREATE TABLE IF NOT EXISTS carteiras (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    usuario_id    INTEGER NOT NULL,
+                    ticker        TEXT    NOT NULL,
+                    quantidade    REAL    NOT NULL,
+                    preco_medio   REAL    NOT NULL,
+                    classe        TEXT,
+                    verificado    INTEGER NOT NULL DEFAULT 0,
+                    criado_em     TEXT    NOT NULL,
+                    atualizado_em TEXT    NOT NULL,
+                    UNIQUE (usuario_id, ticker),
+                    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_carteiras_usuario
+                    ON carteiras(usuario_id);
             """)
         _iniciado = True
 

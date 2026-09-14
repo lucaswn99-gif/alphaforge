@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from modules import contas  # noqa: E402
 from routers import (conta, equity, filosofias, fixed_income,  # noqa: E402
-                     legal, mercado, opcoes, quantitativo, wealth)
+                     legal, mercado, opcoes, quantitativo, vip, wealth)
 
 # O router `trading` está fora da aplicação de propósito. Ele dependia do
 # MetaTrader 5 (Windows-only, inerte no servidor) e expunha /executar-ordem,
@@ -42,6 +42,7 @@ app.include_router(opcoes.router)
 app.include_router(legal.router)
 app.include_router(conta.router)
 app.include_router(filosofias.router)
+app.include_router(vip.router)
 
 
 @app.on_event("startup")

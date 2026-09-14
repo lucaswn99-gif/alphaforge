@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AlphaForge · Console VIP</title>
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Mesma paleta do terminal. Duplicada aqui de propósito: esta página é
+       autônoma e não carrega o index.html de 165 KB só para herdar doze
+       variáveis. */
+    :root {
+      --fundo:      #050806;
+      --painel:     #0a0f0c;
+      --painel-alt: #070b09;
+      --borda:      #16211b;
+      --borda-viva: #1f3329;
+      --verde:      #00e57a;
+      --verde-esc:  #0b8f52;
+      --texto:      #e8efea;
+      --suave:      #78877f;
+      --vermelho:   #ff4d5e;
+      --ambar:      #ffb020;
+    }
+    * { box-sizing: border-box; }
+    /* Definida aqui, e não herdada do Tailwind, de propósito: `hidden` é a
+       classe que separa a tela de login do console. Se o CDN do Tailwind
+       demorar ou for bloqueado (rede corporativa, extensão, DNS), a página
+       mostraria as DUAS telas sobrepostas — numa tela paga, a pior falha
+       possível. Sem o CDN o layout fica menos bonito; com esta linha, ele
+       continua correto. */
+    .hidden { display: none !important; }
+    body {
+      margin: 0; background: var(--fundo); color: var(--texto);
+      font-family: 'Inter', system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+    table { font-variant-numeric: tabular-nums; }
+    .painel { background: var(--painel); border: 1px solid var(--borda); border-radius: 8px; }
+    .rotulo { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--suave); font-weight: 600; }
+    .linha:hover { background: #0d1410; }
+
+    ::-webkit-scrollbar { width: 7px; height: 7px; }
+    ::-webkit-scrollbar-track { background: var(--painel-alt); }
+    ::-webkit-scrollbar-thumb { background: var(--borda-viva); border-radius: 4px; }
+
+    .campo {
+      background: var(--painel-alt); border: 1px solid var(--borda);
+      border-radius: 5px; padding: 10px 12px; color: var(--texto);
+      font-size: 13px; width: 100%; outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .campo:focus { border-color: var(--verde-esc); box-shadow: 0 0 0 3px rgba(0,229,122,.10); }
+    .campo::placeholder { color: #3d4a43; }
+
+    .btn {
+      background: var(--verde); color: #04120b; border: 0; border-radius: 5px;
+      padding: 10px 18px; font-weight: 700; font-size: 12px; cursor: pointer;
+      letter-spacing: .02em; transition: filter .15s, transform .05s;
+    }
+    .btn:hover:not(:disabled) { filter: brightness(1.12); }
+    .btn:active:not(:disabled) { transform: translateY(1px); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-fantasma {
+      background: transparent; color: var(--suave); border: 1px solid var(--borda);
+      border-radius: 5px; padding: 7px 12px; font-size: 11px; cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+    .btn-fantasma:hover { color: var(--texto); border-color: var(--borda-viva); }
+
+    /* --------------------------------------------------------------------
+       Fundo do login: gerado, não fotografado.
+       Zero byte de rede, nítido em qualquer densidade de tela, e impossível
+       de parecer template — gradiente radial + curva de patrimônio em SVG a
+       opacidade baixa + vinheta. Foto atrás de formulário exigiria um overlay
+       escuro que acabaria escondendo a própria foto.
+       -------------------------------------------------------------------- */
+    .palco {
+      position: fixed; inset: 0; overflow: hidden; z-index: 0;
+      background:
+        radial-gradient(1100px 620px at 50% -10%, #072418 0%, transparent 62%),
+        radial-gradient(760px 520px at 12% 108%, #05140e 0%, transparent 58%),
+        var(--fundo);
+    }
+    .palco svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .curva { fill: none; stroke: var(--verde); stroke-width: 1.5; opacity: .17;
+             stroke-linecap: round; stroke-linejoin: round; }
+    .curva-fraca { stroke: var(--verde); stroke-width: 1; opacity: .07; }
+    .grade { stroke: var(--verde); stroke-width: .5; opacity: .05; }
+    .vinheta {
+      position: absolute; inset: 0;
+      background: radial-gradient(circle at 50% 45%, transparent 35%, rgba(5,8,6,.88) 100%);
+    }
+    /* A curva se desenha na entrada. Respeita quem pediu menos movimento. */
+    @media (prefers-reduced-motion: no-preference) {
+      .curva, .curva-fraca {
+        stroke-dasharray: 2400; stroke-dashoffset: 2400;
+        animation: tracar 2.6s cubic-bezier(.22,.61,.36,1) forwards;
+      }
+      .curva-fraca { animation-delay: .25s; }
+    }
+    @keyframes tracar { to { stroke-dashoffset: 0; } }
+
+    .brilho {
+      position: absolute; left: 50%; top: 50%; width: 620px; height: 420px;
+      transform: translate(-50%, -50%);
+      background: radial-gradient(closest-side, rgba(0,229,122,.09), transparent);
+      pointer-events: none;
+    }
+
+    .entra { animation: subir .5s cubic-bezier(.22,.61,.36,1) both; }
+    @keyframes subir { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+    .selo {
+      font-size: 9px; letter-spacing: .16em; text-transform: uppercase;
+      font-weight: 700; padding: 3px 8px; border-radius: 3px;
+      background: rgba(0,229,122,.10); color: var(--verde);
+      border: 1px solid rgba(0,229,122,.24);
+    }
+    .barra-peso { height: 3px; border-radius: 2px; background: var(--verde-esc); }
+  </style>
+</head>
+<body>
+
+<!-- ===================== TELA DE ENTRADA ===================== -->
+<section id="telaLogin" class="hidden">
+  <div class="palco" aria-hidden="true">
+    <svg viewBox="0 0 1200 700" preserveAspectRatio="xMidYMid slice">
+      <g class="grade">
+        <line x1="0" y1="175" x2="1200" y2="175"></line>
+        <line x1="0" y1="350" x2="1200" y2="350"></line>
+        <line x1="0" y1="525" x2="1200" y2="525"></line>
+      </g>
+      <path class="curva-fraca" d="M0,560 L90,540 L180,566 L270,505 L360,524 L450,455 L540,478 L630,404 L720,430 L810,356 L900,384 L990,300 L1080,330 L1200,246"></path>
+      <path class="curva" d="M0,600 L75,572 L150,588 L225,520 L300,548 L375,470 L450,496 L525,414 L600,444 L675,356 L750,386 L825,300 L900,332 L975,242 L1050,272 L1125,186 L1200,214"></path>
+    </svg>
+    <div class="vinheta"></div>
+    <div class="brilho"></div>
+  </div>
+
+  <main class="relative z-10 min-h-screen flex items-center justify-center px-5 py-12">
+    <div class="w-full max-w-[400px] entra">
+      <div class="text-center mb-7">
+        <div class="inline-flex items-center gap-2.5 mb-4">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 2 3 7v10l9 5 9-5V7z" stroke="var(--verde)" stroke-width="1.4" stroke-linejoin="round"/>
+            <path d="M7.5 14.5 10.5 10l2.6 3 3.4-5.2" stroke="var(--verde)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="text-[17px] font-extrabold tracking-tight">AlphaForge</span>
+        </div>
+        <div class="flex justify-center mb-3"><span class="selo">Console VIP</span></div>
+        <p class="text-[12px] leading-relaxed" style="color: var(--suave)">
+          Sua carteira, medida contra os mesmos critérios que o terminal aplica ao mercado.
+        </p>
+      </div>
+
+      <div class="painel p-6" style="backdrop-filter: blur(2px)">
+        <form id="formLogin" class="space-y-3.5" autocomplete="on">
+          <div>
+            <label class="rotulo block mb-1.5" for="email">E-mail</label>
+            <input class="campo" type="email" id="email" name="email"
+                   autocomplete="email" required placeholder="voce@exemplo.com">
+          </div>
+          <div>
+            <label class="rotulo block mb-1.5" for="senha">Senha</label>
+            <input class="campo" type="password" id="senha" name="senha"
+                   autocomplete="current-password" required placeholder="••••••••">
+          </div>
+          <p id="erroLogin" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5"
+             style="background: rgba(255,77,94,.08); border: 1px solid rgba(255,77,94,.25); color: var(--vermelho)"></p>
+          <button class="btn w-full" id="btnEntrar" type="submit">Entrar</button>
+        </form>
+      </div>
+
+      <p class="text-center text-[11px] mt-5" style="color: var(--suave)">
+        Ainda não tem conta?
+        <a href="/" class="hover:underline" style="color: var(--verde)">Comece pelo terminal</a>
+      </p>
+    </div>
+  </main>
+</section>
+
+<!-- ===================== CONSOLE DA CARTEIRA ===================== -->
+<section id="telaConsole" class="hidden">
+  <header class="sticky top-0 z-20 border-b" style="border-color: var(--borda); background: rgba(5,8,6,.88); backdrop-filter: blur(8px)">
+    <div class="max-w-[1180px] mx-auto px-5 h-14 flex items-center justify-between gap-3">
+      <div class="flex items-center gap-2.5">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 2 3 7v10l9 5 9-5V7z" stroke="var(--verde)" stroke-width="1.4" stroke-linejoin="round"/>
+        </svg>
+        <span class="font-extrabold text-[14px] tracking-tight">AlphaForge</span>
+        <span class="selo ml-1">VIP</span>
+      </div>
+      <div class="flex items-center gap-2.5">
+        <span id="emailUsuario" class="text-[11px] hidden sm:inline" style="color: var(--suave)"></span>
+        <a href="/" class="btn-fantasma" style="text-decoration:none">Terminal</a>
+        <button class="btn-fantasma" id="btnSair" type="button">Sair</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Convite: quem entrou mas não assina. Fica AQUI, e não no login, porque
+       mandar para o login quem já está autenticado é um beco sem saída. -->
+  <div id="painelAssinatura" class="hidden max-w-[1180px] mx-auto px-5 pt-7">
+    <div class="painel p-6 text-center" style="border-color: var(--borda-viva)">
+      <span class="selo">Plano Premium</span>
+      <h2 class="text-[17px] font-bold mt-3.5">O console de carteira é do plano Premium</h2>
+      <p class="text-[12px] mt-2 max-w-[440px] mx-auto leading-relaxed" style="color: var(--suave)">
+        Sua conta está ativa, mas no plano gratuito. O console guarda suas posições e
+        as mede contra as filosofias que o terminal já aplica ao mercado.
+      </p>
+      <a href="/" class="btn inline-block mt-5" style="text-decoration:none">Ver planos no terminal</a>
+    </div>
+  </div>
+
+  <main id="painelCarteira" class="hidden max-w-[1180px] mx-auto px-5 py-7 space-y-5">
+
+    <!-- Faixa de patrimônio: o número grande é o que a pessoa abriu a tela
+         para ver. Tudo o mais é contexto dele. -->
+    <section class="painel p-6 entra">
+      <div class="flex items-end justify-between gap-5 flex-wrap">
+        <div>
+          <p class="rotulo mb-2">Custo total da carteira</p>
+          <p class="mono font-bold leading-none" style="font-size: clamp(30px, 6vw, 44px)">
+            <span style="color: var(--suave); font-size: .5em; vertical-align: .35em">R$</span>
+            <span id="custoTotal">0,00</span>
+          </p>
+          <p class="text-[11px] mt-2.5" style="color: var(--suave)">
+            <span id="resumoPosicoes">Nenhuma posição</span>
+            <span id="avisoNaoVerificados" class="hidden" style="color: var(--ambar)"></span>
+          </p>
+        </div>
+        <p class="text-[10px] max-w-[300px] leading-relaxed" style="color: #3d4a43">
+          Peso calculado sobre <b>custo de aquisição</b>, não sobre valor de mercado —
+          a cotação entra no diagnóstico, no próximo módulo.
+        </p>
+      </div>
+    </section>
+
+    <!-- Ingestão -->
+    <section class="painel p-5 entra" style="animation-delay:.05s">
+      <h2 class="rotulo mb-3.5">Registrar posição ou aporte</h2>
+      <form id="formItem" class="grid grid-cols-1 sm:grid-cols-[1.2fr_1fr_1fr_auto] gap-3 items-end">
+        <div>
+          <label class="rotulo block mb-1.5" for="ticker">Papel</label>
+          <input class="campo mono uppercase" id="ticker" name="ticker" required
+                 maxlength="12" placeholder="PETR4" autocomplete="off" spellcheck="false">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="quantidade">Quantidade</label>
+          <input class="campo mono" id="quantidade" name="quantidade" type="number"
+                 step="any" min="0" required placeholder="100">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="precoMedio">Preço médio</label>
+          <input class="campo mono" id="precoMedio" name="precoMedio" type="number"
+                 step="any" min="0" required placeholder="32,50">
+        </div>
+        <button class="btn h-[38px]" id="btnAdicionar" type="submit">Adicionar</button>
+      </form>
+      <p id="avisoItem" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mt-3"></p>
+      <p class="text-[10px] mt-3" style="color: #3d4a43">
+        Papel já registrado recebe o aporte por <b>média ponderada</b> — não cria linha nova.
+      </p>
+    </section>
+
+    <!-- Posições -->
+    <section class="painel entra" style="animation-delay:.1s">
+      <div class="flex items-center justify-between gap-3 px-5 pt-5 pb-3.5 flex-wrap">
+        <h2 class="rotulo">Posições</h2>
+        <input type="text" id="buscaPosicao" oninput="renderizar()" placeholder="Filtrar…"
+               class="campo mono uppercase text-[11px] py-1.5" style="width: 150px">
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-[12px]">
+          <thead>
+            <tr class="rotulo text-left border-y" style="border-color: var(--borda)">
+              <th class="px-5 py-2.5 font-semibold">Papel</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Quantidade</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Preço médio</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Custo</th>
+              <th class="px-3 py-2.5 font-semibold text-right" style="min-width:110px">Peso</th>
+              <th class="px-5 py-2.5 font-semibold text-right">Ações</th>
+            </tr>
+          </thead>
+          <tbody id="tabelaPosicoes" class="divide-y" style="border-color: var(--borda)"></tbody>
+        </table>
+      </div>
+      <div id="estadoVazio" class="hidden px-5 py-14 text-center">
+        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" class="mx-auto mb-3.5" aria-hidden="true">
+          <rect x="3" y="7" width="18" height="13" rx="2" stroke="var(--borda-viva)" stroke-width="1.4"/>
+          <path d="M8 7V5.5A1.5 1.5 0 0 1 9.5 4h5A1.5 1.5 0 0 1 16 5.5V7" stroke="var(--borda-viva)" stroke-width="1.4"/>
+          <path d="M8.5 13.5h7" stroke="var(--verde-esc)" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        <p class="text-[13px] font-semibold">Sua carteira está vazia</p>
+        <p class="text-[11px] mt-1.5 max-w-[330px] mx-auto leading-relaxed" style="color: var(--suave)">
+          Registre a primeira posição no campo acima. Precisa do código do papel,
+          da quantidade e do preço médio pago.
+        </p>
+      </div>
+    </section>
+  </main>
+</section>
+
+<script>
+// ===================== utilidades =====================
+const $ = (id) => document.getElementById(id);
+
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+const brl = (v) => Number(v || 0).toLocaleString('pt-BR',
+  { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Quantidade é REAL no banco (bonificação e desdobramento geram fração), mas
+// mostrar "100,0000" numa coluna de lote inteiro é ruído.
+const qtd = (v) => Number.isInteger(Number(v))
+  ? Number(v).toLocaleString('pt-BR')
+  : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 4 });
+
+function aviso(id, texto, tipo = 'erro') {
+  const el = $(id);
+  if (!texto) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  const cores = {
+    erro:    ['rgba(255,77,94,.08)',  'rgba(255,77,94,.25)',  'var(--vermelho)'],
+    alerta:  ['rgba(255,176,32,.08)', 'rgba(255,176,32,.25)', 'var(--ambar)'],
+    sucesso: ['rgba(0,229,122,.07)',  'rgba(0,229,122,.22)',  'var(--verde)'],
+  }[tipo];
+  el.setAttribute('style', `background:${cores[0]};border:1px solid ${cores[1]};color:${cores[2]}`);
+  el.innerHTML = texto;
+  el.classList.remove('hidden');
+}
+
+// ===================== estado =====================
+let POSICOES = [];
+
+// ===================== sessão =====================
+async function iniciar() {
+  let conta = null;
+  try {
+    conta = await (await fetch('/conta/eu')).json();
+  } catch (e) { /* servidor fora: cai para o login */ }
+
+  const noLogin = location.pathname.replace(/\/$/, '') === '/vip/login';
+
+  if (!conta || !conta.autenticado) {
+    // Já autenticado abrindo /vip/login vai direto ao console, e vice-versa —
+    // a URL não pode discordar do estado real da sessão.
+    if (!noLogin) { location.replace('/vip/login'); return; }
+    $('telaLogin').classList.remove('hidden');
+    return;
+  }
+
+  if (noLogin) { location.replace('/vip'); return; }
+
+  $('telaConsole').classList.remove('hidden');
+  $('emailUsuario').innerText = conta.email || '';
+
+  if (conta.plano !== 'premium') {
+    $('painelAssinatura').classList.remove('hidden');
+    return;
+  }
+  $('painelCarteira').classList.remove('hidden');
+  carregar();
+}
+
+$('formLogin').addEventListener('submit', async (evento) => {
+  evento.preventDefault();
+  const btn = $('btnEntrar');
+  btn.disabled = true; btn.innerText = 'Entrando…';
+  aviso('erroLogin', '');
+  try {
+    // Mesma rota do terminal: a tela é paralela, a autenticação é uma só.
+    const res = await fetch('/conta/entrar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: $('email').value.trim(), senha: $('senha').value }),
+    });
+    const corpo = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const motivo = (corpo.detail && (corpo.detail.motivo || corpo.detail)) || 'Não foi possível entrar.';
+      aviso('erroLogin', esc(typeof motivo === 'string' ? motivo : 'Não foi possível entrar.'));
+      return;
+    }
+    location.replace('/vip');
+  } catch (e) {
+    aviso('erroLogin', `Falha de conexão: ${esc(e.message || e)}`);
+  } finally { btn.disabled = false; btn.innerText = 'Entrar'; }
+});
+
+$('btnSair').addEventListener('click', async () => {
+  try { await fetch('/conta/sair', { method: 'POST' }); } catch (e) {}
+  location.replace('/vip/login');
+});
+
+// ===================== carteira =====================
+async function carregar() {
+  try {
+    const res = await fetch('/api/v1/carteira');
+    if (res.status === 402 || res.status === 401) { location.reload(); return; }
+    if (!res.ok) { aviso('avisoItem', `O servidor respondeu ${res.status}.`); return; }
+    const dados = await res.json();
+    POSICOES = dados.posicoes || [];
+    $('custoTotal').innerText = brl(dados.custo_total);
+    $('resumoPosicoes').innerText = dados.posicoes_total === 1
+      ? '1 posição' : `${dados.posicoes_total || 0} posições`;
+    const naoVerificados = dados.nao_verificados || 0;
+    const el = $('avisoNaoVerificados');
+    if (naoVerificados > 0) {
+      el.innerText = ` · ${naoVerificados} papel(is) fora dos nossos registros`;
+      el.classList.remove('hidden');
+    } else { el.classList.add('hidden'); }
+    renderizar();
+  } catch (e) {
+    aviso('avisoItem', `Falha ao carregar: ${esc(e.message || e)}`);
+  }
+}
+
+function renderizar() {
+  const busca = ($('buscaPosicao').value || '').trim().toUpperCase();
+  const lista = POSICOES.filter((p) => !busca || p.ticker.includes(busca));
+
+  $('estadoVazio').classList.toggle('hidden', lista.length > 0);
+  const rotulos = { acao: 'Ação', fii: 'FII', etf: 'ETF', desconhecida: 'Não verificado' };
+
+  $('tabelaPosicoes').innerHTML = lista.map((p) => `
+    <tr class="linha" data-ticker="${esc(p.ticker)}">
+      <td class="px-5 py-3">
+        <div class="font-bold mono text-[12px]" style="color: var(--verde)">${esc(p.ticker)}</div>
+        <div class="text-[9px] mt-0.5" style="color: ${p.verificado ? '#3d4a43' : 'var(--ambar)'}"
+             title="${p.verificado ? '' : 'Não encontrado nos nossos registros — confira o código.'}">
+          ${esc(rotulos[p.classe] || p.classe)}</div>
+      </td>
+      <td class="px-3 py-3 text-right mono">${qtd(p.quantidade)}</td>
+      <td class="px-3 py-3 text-right mono" style="color: var(--suave)">${brl(p.preco_medio)}</td>
+      <td class="px-3 py-3 text-right mono">${brl(p.custo_total)}</td>
+      <td class="px-3 py-3 text-right">
+        <div class="mono text-[11px]">${p.peso_pct == null ? '—' : p.peso_pct.toFixed(1) + '%'}</div>
+        <div class="barra-peso mt-1 ml-auto" style="width: ${Math.max(2, Math.min(100, p.peso_pct || 0))}%"></div>
+      </td>
+      <td class="px-5 py-3 text-right whitespace-nowrap">
+        <button class="btn-fantasma" onclick="editar('${esc(p.ticker)}')">Corrigir</button>
+        <button class="btn-fantasma" onclick="remover('${esc(p.ticker)}')"
+                style="color: var(--vermelho); border-color: rgba(255,77,94,.25)">Remover</button>
+      </td>
+    </tr>`).join('');
+}
+
+$('formItem').addEventListener('submit', async (evento) => {
+  evento.preventDefault();
+  const btn = $('btnAdicionar');
+  btn.disabled = true; btn.innerText = 'Salvando…';
+  aviso('avisoItem', '');
+  try {
+    const res = await fetch('/api/v1/carteira/item', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticker: $('ticker').value.trim().toUpperCase(),
+        quantidade: Number($('quantidade').value),
+        preco_medio: Number($('precoMedio').value),
+      }),
+    });
+    const corpo = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const motivo = (corpo.detail && corpo.detail.motivo) || `O servidor respondeu ${res.status}.`;
+      aviso('avisoItem', esc(motivo), res.status === 422 ? 'alerta' : 'erro');
+      return;
+    }
+    const posicao = corpo.posicao || {};
+    let texto = corpo.aporte_incorporado
+      ? `Aporte incorporado a <b>${esc(posicao.ticker)}</b> — novo preço médio R$ ${brl(posicao.preco_medio)}.`
+      : `<b>${esc(posicao.ticker)}</b> registrado.`;
+    if (posicao.verificado === false) {
+      texto += ' Este código não está nos nossos registros: confira antes de usar no diagnóstico.';
+      aviso('avisoItem', texto, 'alerta');
+    } else {
+      aviso('avisoItem', texto, 'sucesso');
+    }
+    $('formItem').reset();
+    $('ticker').focus();
+    carregar();
+  } catch (e) {
+    aviso('avisoItem', `Falha ao salvar: ${esc(e.message || e)}`);
+  } finally { btn.disabled = false; btn.innerText = 'Adicionar'; }
+});
+
+async function editar(ticker) {
+  const atual = POSICOES.find((p) => p.ticker === ticker);
+  if (!atual) return;
+  const quantidade = prompt(`Nova quantidade de ${ticker} (substitui, não soma):`, atual.quantidade);
+  if (quantidade === null) return;
+  const preco = prompt(`Novo preço médio de ${ticker}:`, atual.preco_medio);
+  if (preco === null) return;
+  try {
+    const res = await fetch(`/api/v1/carteira/item/${encodeURIComponent(ticker)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, quantidade: Number(quantidade), preco_medio: Number(preco) }),
+    });
+    const corpo = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      aviso('avisoItem', esc((corpo.detail && corpo.detail.motivo) || `O servidor respondeu ${res.status}.`),
+            res.status === 422 ? 'alerta' : 'erro');
+      return;
+    }
+    aviso('avisoItem', `<b>${esc(ticker)}</b> corrigido.`, 'sucesso');
+    carregar();
+  } catch (e) { aviso('avisoItem', `Falha ao corrigir: ${esc(e.message || e)}`); }
+}
+
+async function remover(ticker) {
+  if (!confirm(`Remover ${ticker} da carteira?`)) return;
+  try {
+    const res = await fetch(`/api/v1/carteira/item/${encodeURIComponent(ticker)}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const corpo = await res.json().catch(() => ({}));
+      aviso('avisoItem', esc((corpo.detail && corpo.detail.motivo) || `O servidor respondeu ${res.status}.`));
+      return;
+    }
+    aviso('avisoItem', `<b>${esc(ticker)}</b> removido.`, 'sucesso');
+    carregar();
+  } catch (e) { aviso('avisoItem', `Falha ao remover: ${esc(e.message || e)}`); }
+}
+
+iniciar();
+</script>
+</body>
+</html>
