@@ -18,8 +18,8 @@ import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, Depends, Query
 
-from modules import (composicao_ifix, fundamentos_fii, identidade, otimizador,
-                     planos, segmentos_fii, taxas)
+from modules import (composicao_ifix, etfs_b3, fundamentos_fii, identidade,
+                     otimizador, planos, segmentos_fii, taxas)
 from routers.equity import (_adicionar_sufixo_b3, carimbo_de_coleta, dy_da_serie,
                             fatiar_precos, normalizar_dy, raio_x_10_anos)
 
@@ -37,8 +37,11 @@ router = APIRouter(prefix="/wealth", tags=["Gestão de Patrimônio & Fundos"])
 FIIS_TIJOLO = segmentos_fii.tickers_do_segmento(segmentos_fii.TIJOLO)
 FIIS_PAPEL = segmentos_fii.tickers_do_segmento(segmentos_fii.PAPEL)
 FIIS_FOF = segmentos_fii.tickers_do_segmento(segmentos_fii.FOF)
-ETFS_B3 = ["BOVA11", "IVVB11", "SMAL11", "NASD11", "HASH11",
-           "DIVO11", "SPXI11", "GOLD11", "XINA11", "BINA11"]
+# Também derivada de um módulo só (ver `modules/etfs_b3.py`), e bem mais
+# ampla que as 10 fixas de antes. ETF sem histórico no Yahoo é descartado em
+# `_montar_etfs` — a resposta diz quantos foram consultados e quantos
+# responderam, para a diferença não sumir sem aviso.
+ETFS_B3 = etfs_b3.tickers()
 
 # P/VP abaixo disto entra no alerta de desconto alto do radar — ver
 # `_montar_fiis`/`radar_fundos`. FIIs de tijolo abaixo de 0,85x do patrimônio
@@ -216,14 +219,22 @@ def _montar_etfs(df_precos):
         sma = float(fechamentos.rolling(SMA_ETF).mean().iloc[-1])
         if pd.isna(sma):
             continue
+        categoria = etfs_b3.categoria_do_ticker(ticker)
         linhas.append({
             "ticker": ticker,
             "preco": round(preco, 2),
             "ponto_entrada": round(sma, 2),
             "recomendacao": "ABAIXO DA MÉDIA" if preco <= sma else "ACIMA DA MÉDIA",
             "racional": f"Pullback na média de {SMA_ETF} pregões",
+            "categoria": categoria,
+            "categoria_rotulo": etfs_b3.rotulo(categoria),
         })
-    linhas.sort(key=lambda linha: linha["ticker"])
+    # Por categoria e, dentro dela, por código: um ETF de cripto no meio dos
+    # de renda fixa é a diferença entre uma tabela e uma lista.
+    ordem = list(etfs_b3.ROTULOS)
+    linhas.sort(key=lambda linha: (
+        ordem.index(linha["categoria"]) if linha["categoria"] in ordem else len(ordem),
+        linha["ticker"]))
     return linhas
 
 
@@ -292,6 +303,11 @@ def radar_fundos(forcar_ifix: bool = Query(False),
         "com_fundamentos": sum(1 for l in todos_montados if l["fundamentos_disponiveis"]),
         "com_pvp": sum(1 for l in todos_montados if l["pvp"] is not None),
         "total_fiis": len(todos_montados),
+        # Quantos ETFs pedimos ao Yahoo e quantos voltaram com histórico. Sem
+        # isto, um ETF que saiu de circulação (ou mudou de código) some da
+        # tabela sem deixar rastro.
+        "etfs_consultados": len(ETFS_B3),
+        "etfs_com_dados": len(etfs),
         "origem_composicao_ifix": origem_ifix,
         "idade_composicao_ifix_segundos": idade_ifix,
         "alertas_desconto_alto": alertas_desconto,

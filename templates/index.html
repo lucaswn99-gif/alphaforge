@@ -535,9 +535,12 @@
         </table></div>
       </div>
       <div class="painel p-4">
-        <h3 class="rotulo mb-3">ETFs</h3>
-        <div class="overflow-x-auto"><table class="w-full text-xs">
-          <thead><tr class="rotulo text-left"><th class="p-1.5">ETF</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-center">Preço x VP</th></tr></thead>
+        <div class="flex justify-between items-baseline gap-2 flex-wrap mb-3">
+          <h3 class="rotulo">ETFs</h3>
+          <p class="text-[10px]" style="color: var(--suave)" id="coberturaEtfs"></p>
+        </div>
+        <div class="overflow-x-auto max-h-[420px] overflow-y-auto"><table class="w-full text-xs">
+          <thead class="sticky top-0" style="background: var(--painel)"><tr class="rotulo text-left"><th class="p-1.5">ETF</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-center">Preço x média</th></tr></thead>
           <tbody id="tabelaETFs" class="divide-y" style="border-color: var(--borda)"></tbody>
         </table></div>
       </div>
@@ -1971,11 +1974,14 @@ async function carregarFundos() {
     const renderFii = (fii) => renderLinhaFii(fii, false);
     const estilo = estiloRecomendacaoFundo;
 
+    // A categoria substitui o racional na segunda linha: com 30+ ETFs, saber
+    // se é índice amplo, cripto ou renda fixa vale mais que repetir "pullback
+    // na média de 20" em toda linha — isso já está no tooltip.
     const renderEtf = (etf) => `
       <tr class="linha">
-        <td class="p-1.5">
+        <td class="p-1.5" title="${esc(etf.racional || '')}">
           <div class="font-bold text-[12px]" style="color: var(--verde)">${esc(etf.ticker)}</div>
-          <div class="text-[9px] truncate max-w-[110px]" style="color:#4a554e">${esc(etf.racional || '')}</div>
+          <div class="text-[9px] truncate max-w-[110px]" style="color:#4a554e">${esc(etf.categoria_rotulo || '')}</div>
         </td>
         <td class="p-1.5 text-right mono">${num(etf.preco)}</td>
         <td class="p-1.5 text-right mono" style="color: var(--suave)">${num(etf.ponto_entrada)}</td>
@@ -1987,6 +1993,13 @@ async function carregarFundos() {
     document.getElementById('tabelaTijolo').innerHTML = (data.tijolo || []).map(renderFii).join('');
     document.getElementById('tabelaPapel').innerHTML  = (data.papel  || []).map(renderFii).join('');
     document.getElementById('tabelaETFs').innerHTML   = (data.etfs   || []).map(renderEtf).join('');
+
+    // ETF que saiu de circulação ou mudou de código não aparece na tabela.
+    // Dizer quantos responderam evita que a ausência passe por "não existe".
+    document.getElementById('coberturaEtfs').innerText =
+      data.etfs_consultados
+        ? `${data.etfs_com_dados ?? (data.etfs || []).length} de ${data.etfs_consultados} com histórico`
+        : '';
 
     // A pesquisa recebe o universo inteiro (inclusive FOF e não
     // classificados, que não têm quadro próprio lá em cima) e filtra sozinha.
