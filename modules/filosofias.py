@@ -148,10 +148,30 @@ PVP_MAXIMO_GRAHAM = 1.5
 # admitia P/L acima de 15 se o P/VP compensasse, e vice-versa. 22,5 = 15 x 1,5.
 PRODUTO_MAXIMO_GRAHAM = 22.5
 # Quantos dos seis critérios verificáveis precisam ter saído como NÚMERO para
-# a ação poder ser aprovada. Mesma trava do MINIMO_CRITERIOS de Barsi: banco
-# não publica ativo circulante na DFP, e sem este piso ele seria aprovado por
-# ausência — "não apurado não conta contra" vira aprovação de graça.
-MINIMO_CRITERIOS_GRAHAM = 4
+# a ação poder ser aprovada.
+#
+# Começou em 4 e subiu para 5 depois da primeira rodada com dado real: com 4,
+# os únicos aprovados do IBOV inteiro foram BBDC3, BBDC4 e SANB11 — os três
+# bancos, os três com "4 de 6", aprovados PRECISAMENTE porque liquidez
+# corrente e capital de giro não puderam ser medidos. Era a aprovação por
+# ausência que esta trava existe para impedir, acontecendo debaixo dela.
+MINIMO_CRITERIOS_GRAHAM = 5
+
+# Graham não aplicava os critérios do investidor defensivo a instituição
+# financeira, e a razão é estrutural: liquidez corrente e "dívida de longo
+# prazo abaixo do capital de giro" medem solidez de balanço industrial. Banco
+# capta recurso como matéria-prima — para ele esses dois números não são dado
+# faltando, são teste que não se aplica. Aprovar banco aqui seria carimbar de
+# "Graham" um papel que o método não avalia; reprovar seria acusá-lo de falhar
+# num teste que nunca foi feito para ele. Então ele sai do escopo, dito com
+# essas palavras, e o usuário decide o que fazer com isso.
+#
+# A detecção não depende só do setor que o Yahoo devolve (que falha e muda de
+# rótulo): no Brasil, companhia que não publica ativo e passivo circulante na
+# DFP é instituição financeira — elas seguem plano de contas próprio. O sinal
+# está no próprio balanço.
+SETORES_FINANCEIROS_GRAHAM = {"financial services", "financials", "banks",
+                              "insurance", "financial", "capital markets"}
 
 # Greenblatt
 SHAREHOLDER_YIELD_MINIMO = 5.0
@@ -733,7 +753,7 @@ class PhilosophyEngine:
         a definição de porte que o próprio mercado publica e rebalanceia.
         """
         tickers, origem_universo = self._universo_graham(universo)
-        aprovados, reprovados, ressalvas = [], [], []
+        aprovados, reprovados, ressalvas, fora_escopo = [], [], [], []
 
         for ticker in tickers:
             try:
@@ -746,13 +766,19 @@ class PhilosophyEngine:
                 ressalvas.append({"ticker": ticker,
                                   "motivo": "Sem preço ou sem balanço na CVM."})
                 continue
-            (aprovados if linha["aprovado"] else reprovados).append(linha)
+            if linha["fora_do_escopo"]:
+                fora_escopo.append(linha)
+            elif linha["aprovado"]:
+                aprovados.append(linha)
+            else:
+                reprovados.append(linha)
 
         # Entre aprovados, o que manda é desconto sobre o valor intrínseco —
         # é a margem de segurança, o conceito central do método.
         aprovados.sort(key=lambda l: -(l["margem_seguranca"] if l["margem_seguranca"]
                                        is not None else -9e9))
         reprovados.sort(key=lambda l: l["ticker"])
+        fora_escopo.sort(key=lambda l: l["ticker"])
         return {
             "filosofia": "graham",
             "universo": origem_universo,
@@ -765,12 +791,16 @@ class PhilosophyEngine:
                 "pvp_maximo": PVP_MAXIMO_GRAHAM,
                 "produto_maximo": PRODUTO_MAXIMO_GRAHAM,
                 "minimo_criterios_medidos": MINIMO_CRITERIOS_GRAHAM,
+                "fora_do_escopo": ("Instituição financeira não é avaliada: Graham "
+                                   "não aplicava os critérios do investidor "
+                                   "defensivo a banco e seguradora."),
                 "observacao": ("Graham pedia 10 anos de lucro e 20 de dividendo; "
                                "a base da CVM cobre três exercícios. O campo "
                                "anos_apurados diz sobre quantos o teste rodou."),
             },
             "aprovados": aprovados,
             "reprovados": reprovados,
+            "fora_do_escopo": fora_escopo,
             "ressalvas": ressalvas,
             **_carimbo(),
         }
@@ -794,6 +824,11 @@ class PhilosophyEngine:
         balanco = self._balanco_cvm(ticker)
         if preco is None or not balanco:
             return None
+
+        # Fora do escopo antes de qualquer critério: não faz sentido medir
+        # liquidez corrente de banco para depois ignorar o resultado.
+        fora_do_escopo, motivo_escopo = self._fora_do_escopo_graham(
+            balanco, perfil.get("setor"))
 
         motivos_reprova, nao_apurados = [], []
 
@@ -915,10 +950,36 @@ class PhilosophyEngine:
             "margem_seguranca": margem,
             "criterios_medidos": medidos,
             "momentum": momento,
-            "aprovado": not motivos_reprova,
+            "fora_do_escopo": fora_do_escopo,
+            "motivo_escopo": motivo_escopo,
+            # Fora do escopo não é aprovado nem reprovado: é "o método não
+            # responde sobre este papel". Misturar as três coisas num booleano
+            # só é o que produziria o carimbo falso.
+            "aprovado": bool(not motivos_reprova and not fora_do_escopo),
             "motivos": motivos_reprova,
             "nao_apurados": nao_apurados,
         }
+
+    @staticmethod
+    def _fora_do_escopo_graham(balanco, setor):
+        """(bool, motivo). Instituição financeira não é avaliada por Graham.
+
+        Ver `SETORES_FINANCEIROS_GRAHAM` para o porquê. Dois sinais, e basta
+        um: o setor declarado, e — mais confiável — a ausência de circulante
+        na DFP, que no Brasil é a assinatura do plano de contas financeiro.
+        """
+        nome_setor = str(setor or "").strip().lower()
+        if nome_setor and nome_setor in SETORES_FINANCEIROS_GRAHAM:
+            return True, (f"Setor {setor}: Graham não aplicava os critérios do "
+                          "investidor defensivo a instituição financeira.")
+
+        tem_circulante = (balanco.get("ativo_circulante") is not None
+                          or balanco.get("passivo_circulante") is not None)
+        if not tem_circulante and balanco.get("ativo_total") is not None:
+            return True, ("Não publica ativo/passivo circulante na DFP — plano "
+                          "de contas de instituição financeira. Liquidez "
+                          "corrente e capital de giro não se aplicam.")
+        return False, None
 
     @staticmethod
     def _acoes_em_circulacao(balanco, valor_mercado, preco):

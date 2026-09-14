@@ -71,6 +71,17 @@ class MotorFalso:
                 "motivos": ["P/L x P/VP = 160.0 — teto 22.5 (P/L 40.0x, P/VP 4.00x)."],
                 "nao_apurados": [],
             }],
+            "fora_do_escopo": [{
+                "ticker": "BBDC4", "nome": "Bradesco", "preco": 18.59,
+                "numero_graham": 27.63, "margem_seguranca": 0.327,
+                "pl": 8.7, "pvp": 1.17, "produto_pl_pvp": 10.2,
+                "liquidez_corrente": None, "criterios_medidos": 4,
+                "anos_apurados": 3, "aprovado": False, "motivos": [],
+                "nao_apurados": ["liquidez corrente"],
+                "fora_do_escopo": True,
+                "motivo_escopo": ("Setor Financial Services: Graham não aplicava os "
+                                  "critérios do investidor defensivo a instituição financeira."),
+            }],
             "ressalvas": [], "criterios": {},
         }
 
@@ -200,9 +211,16 @@ if __name__ == "__main__":
         page.click("#btn-sub-graham")
         page.wait_for_selector("#tabelaGraham tr", timeout=5000)
         texto_graham = page.inner_text("#tabelaGraham")
-        checar("Graham renderizou aprovado + reprovado",
-               page.eval_on_selector_all("#tabelaGraham tr", "els => els.length") == 2,
-               texto_graham[:200])
+        checar("Graham renderizou aprovado + reprovado + fora do escopo",
+               page.eval_on_selector_all("#tabelaGraham tr", "els => els.length") == 3,
+               texto_graham[:300])
+        checar("Graham marca banco como FORA DO ESCOPO",
+               "FORA DO ESCOPO" in texto_graham, texto_graham[:300])
+        checar("Graham NÃO marca banco como aprovado",
+               texto_graham.count("APROVADO") == 1, texto_graham[:300])
+        checar("Graham resumo conta os fora do escopo",
+               "fora do escopo" in page.inner_text("#grahamResumo"),
+               page.inner_text("#grahamResumo"))
         checar("Graham mostra o papel aprovado", "BOA3" in texto_graham)
         checar("Graham mostra o Número de Graham", "15" in texto_graham, texto_graham[:200])
         checar("Graham mostra a cobertura de critérios", "6 de 6" in texto_graham, texto_graham[:200])

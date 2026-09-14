@@ -544,6 +544,46 @@ def principal():
     checar("Graham: crescimento a partir de prejuízo não vira porcentagem",
            filosofias.PhilosophyEngine._crescimento_de_lucro([-1e8, 1e8]) is None)
 
+    # O caso que o dado real revelou: com piso de 4 critérios, os ÚNICOS
+    # aprovados do IBOV inteiro foram três bancos — aprovados justamente
+    # porque liquidez e capital de giro não puderam ser medidos. Graham nunca
+    # aplicou os critérios do defensivo a instituição financeira; ela sai do
+    # escopo, que não é aprovar nem reprovar.
+    BALANCOS_BANCO = {
+        # Setor declarado no perfil.
+        "BBDC4": {"ano": 2025, "denom_cia": "BRADESCO", "receita_liquida": 100e9,
+                  "ativo_total": 1800e9, "ativo_circulante": None,
+                  "passivo_circulante": None, "divida_longo_prazo": None,
+                  "patrimonio_liquido": 180e9, "lucro_liquido": 20e9, "lpa_on": 2.4},
+        # Sem setor no perfil: tem que sair pelo sinal do próprio balanço.
+        "SANB11": {"ano": 2025, "denom_cia": "SANTANDER", "receita_liquida": 80e9,
+                   "ativo_total": 1200e9, "ativo_circulante": None,
+                   "passivo_circulante": None, "divida_longo_prazo": None,
+                   "patrimonio_liquido": 90e9, "lucro_liquido": 12e9, "lpa_on": None},
+    }
+    motor_b = filosofias.PhilosophyEngine(fonte=FonteFalsa(perfis={
+        "BBDC4.SA": perfil_simples(18.59, 190e9, "Bradesco", "Financial Services"),
+        "SANB11.SA": perfil_simples(30.62, 115e9, "Santander"),
+    }))
+    motor_b._balanco_cvm = lambda t: BALANCOS_BANCO.get(t)
+    motor_b._historico_de_lucro = lambda t: ([18e9, 19e9, 20e9], 3)
+    saida_b = motor_b.satelite_graham(universo=list(BALANCOS_BANCO),
+                                      aplicar_momentum=False)
+
+    fora = {l["ticker"] for l in saida_b["fora_do_escopo"]}
+    checar("Graham: banco com setor financeiro sai do escopo", "BBDC4" in fora, fora)
+    checar("Graham: banco sem setor sai pelo sinal do balanço", "SANB11" in fora, fora)
+    checar("Graham: banco não aparece como aprovado",
+           not saida_b["aprovados"], [l["ticker"] for l in saida_b["aprovados"]])
+    checar("Graham: banco não aparece como reprovado (não falhou — não se aplica)",
+           not saida_b["reprovados"], [l["ticker"] for l in saida_b["reprovados"]])
+    checar("Graham: fora do escopo nunca vem com aprovado=True",
+           all(not l["aprovado"] for l in saida_b["fora_do_escopo"]))
+    checar("Graham: o motivo do escopo é declarado",
+           all(l["motivo_escopo"] for l in saida_b["fora_do_escopo"]))
+    checar("Graham: piso de critérios medidos é 5, não 4",
+           filosofias.MINIMO_CRITERIOS_GRAHAM == 5, filosofias.MINIMO_CRITERIOS_GRAHAM)
+
     # ======================================================================
     print("\n[Greenblatt — EUA]")
     def contabil(ebit, divida, caixa, circ, passivo, imob, div_pagos, recompras):

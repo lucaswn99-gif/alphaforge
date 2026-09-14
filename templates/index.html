@@ -937,6 +937,9 @@
           Sete critérios de <i>O Investidor Inteligente</i> (cap. 14). O <b>Número de Graham</b>
           é √(22,5 × LPA × VPA) — o preço em que P/L × P/VP bate exatamente o teto de 22,5,
           não uma estimativa de quanto a empresa vale. A margem é o desconto do preço sobre ele.
+          <b>Banco e seguradora saem como "fora do escopo"</b>: Graham não aplicava estes critérios
+          a instituição financeira, e liquidez corrente de banco não é dado faltando — é teste
+          que não se aplica.
         </p>
         <div class="overflow-x-auto max-h-[520px] overflow-y-auto"><table class="w-full text-xs">
           <thead class="sticky top-0" style="background: var(--painel)"><tr class="rotulo text-left">
@@ -2487,17 +2490,22 @@ async function carregarGraham(forcar = false) {
     const ocultos = data.reprovados_ocultos || 0;
     const idade = Number(data.idade_segundos || 0);
     const origem = data.cache ? `cache de ${Math.floor(idade / 60)} min — use "Atualizar" para refazer` : 'coleta ao vivo';
+    const foraEscopo = data.fora_do_escopo || [];
     document.getElementById('grahamResumo').innerText =
       `${aprovados.length} aprovado(s) de ${data.avaliados || 0} avaliados` +
       (reprovados.length ? `, ${reprovados.length} reprovado(s)` : '') +
+      (foraEscopo.length ? `, ${foraEscopo.length} fora do escopo` : '') +
       (ocultos ? `, ${ocultos} reprovado(s) oculto(s) no plano gratuito` : '') +
       ` · universo ${esc(data.universo || 'IBOV')} · ${origem}`;
 
     // A cobertura de critérios é coluna de primeira classe: "4 de 6" ao lado
     // de um APROVADO diz que dois critérios não puderam ser medidos — sem
     // isso, aprovação por dado ausente pareceria aprovação por mérito.
-    const linha = (l, aprovado) => `
-      <tr class="linha${aprovado ? '' : ' opacity-60'}">
+    // Três estados, não dois: aprovado, reprovado e FORA DO ESCOPO. Banco não
+    // falhou nos critérios de Graham — o método não se aplica a ele, e um
+    // booleano só transformaria isso em reprovação falsa.
+    const linha = (l, estado) => `
+      <tr class="linha${estado === 'aprovado' ? '' : ' opacity-60'}">
         <td class="p-1.5">
           <div class="font-bold text-[12px]" style="color: var(--verde)">${esc(l.ticker)}</div>
           <div class="text-[9px] truncate max-w-[130px]" style="color:#4a554e"
@@ -2515,13 +2523,19 @@ async function carregarGraham(forcar = false) {
                 title="${esc((l.nao_apurados || []).join(' | ') || 'todos os critérios medidos')}">
             ${l.criterios_medidos ?? '—'} de 6</span>
         </td>
-        <td class="p-1.5 text-[10px] font-bold" style="color: ${aprovado ? 'var(--verde)' : 'var(--ambar)'}"
-            title="${esc((l.motivos || []).join(' | '))}">${
-              aprovado ? 'APROVADO' : esc((l.motivos && l.motivos[0]) || 'reprovado')}</td>
+        <td class="p-1.5 text-[10px] font-bold" style="color: ${
+              estado === 'aprovado' ? 'var(--verde)'
+              : (estado === 'fora' ? '#4a554e' : 'var(--ambar)')}"
+            title="${esc(estado === 'fora' ? (l.motivo_escopo || '') : (l.motivos || []).join(' | '))}">${
+              estado === 'aprovado' ? 'APROVADO'
+              : (estado === 'fora' ? 'FORA DO ESCOPO'
+                 : esc((l.motivos && l.motivos[0]) || 'reprovado'))}</td>
       </tr>`;
 
     document.getElementById('tabelaGraham').innerHTML =
-      (aprovados.map(l => linha(l, true)).join('') + reprovados.map(l => linha(l, false)).join(''))
+      (aprovados.map(l => linha(l, 'aprovado')).join('')
+       + reprovados.map(l => linha(l, 'reprovado')).join('')
+       + foraEscopo.map(l => linha(l, 'fora')).join(''))
       || '<tr><td colspan="10" class="p-3 text-center text-[11px]" style="color:#4a554e">Nenhum papel do IBOV passou nos sete critérios. Isso é resultado, não erro — Graham reprova a maioria por construção.</td></tr>';
 
     const ressalvas = data.ressalvas || [];

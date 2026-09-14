@@ -308,6 +308,9 @@ def cortar_graham(payload, ctx: Contexto):
     payload["aprovados"] = aprovados[:BARSI_FREE_LINHAS]
     payload["reprovados"] = []
     payload["reprovados_ocultos"] = len(reprovados)
+    # Fora do escopo segue visível: é informação sobre o MÉTODO (Graham não
+    # avalia banco), não sobre o papel. Esconder isso faria o gratuito achar
+    # que os bancos simplesmente não existem na varredura.
     return _marcar(payload, len(aprovados) + len(reprovados),
                    len(payload["aprovados"]),
                    "O plano gratuito mostra três aprovados e esconde qual "

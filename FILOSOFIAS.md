@@ -10,7 +10,7 @@ Dois submódulos novos, desacoplados do motor de ordens: `PhilosophyEngine`
 | `modules/filosofias.py` | `PhilosophyEngine` e `MotorMomentum`. |
 | `modules/bdr.py` | `GlobalEquitiesPanel`. |
 | `routers/filosofias.py` | As seis rotas, com cache e corte por plano. |
-| `test_filosofias.py` | 159 verificações, todas com fontes falsas. |
+| `test_filosofias.py` | 166 verificações, todas com fontes falsas. |
 | `conferir_filosofias.py` | Roda os motores contra dado real e aponta contrato quebrado. |
 | `conferir_bdr.py` | Afere os fatores de paridade contra o preço de tela. |
 | `smoke_frontend.py` | Abre a aba Filosofias num Chromium headless e confere a renderização. |
@@ -91,12 +91,23 @@ motor não finge dez: mede o que tem e devolve `anos_apurados`. Crescimento de
 lucro medido em três anos é um critério **fraco** — e dizer isso é melhor que
 inventar histórico.
 
-**Graham — banco não é reprovado por liquidez corrente.** A DFP de instituição
-financeira não publica ativo e passivo circulante. Isso vira "não apurado",
-nunca reprovação — mesmo tratamento que dívida/EBIT recebe em Barsi. A trava é
-`MINIMO_CRITERIOS_GRAHAM`: pelo menos 4 dos 6 critérios verificáveis precisam
-ter saído como número, senão não há base para aprovar. Sem ela, banco passaria
-por ausência de dado.
+**Graham — instituição financeira sai do escopo, não é aprovada nem
+reprovada.** Graham não aplicava os critérios do investidor defensivo a banco e
+seguradora, e a razão é estrutural: liquidez corrente e "dívida longa abaixo do
+capital de giro" medem solidez de balanço industrial. Banco capta recurso como
+matéria-prima — ali esses números não são dado faltando, são teste que não se
+aplica. Ele aparece num terceiro estado, `fora_do_escopo`, com o motivo escrito.
+
+Isto foi descoberto rodando contra dado real, e vale registrar: com o piso em 4
+critérios medidos, os **únicos** aprovados do IBOV inteiro foram BBDC3, BBDC4 e
+SANB11 — os três bancos, os três com "4 de 6", aprovados precisamente porque
+liquidez e capital de giro não puderam ser medidos. Era a aprovação por ausência
+que a trava existe para impedir, acontecendo debaixo dela. O piso subiu para 5
+(`MINIMO_CRITERIOS_GRAHAM`) e a exclusão setorial entrou.
+
+A detecção não depende só do setor que o Yahoo devolve: no Brasil, companhia que
+não publica ativo e passivo circulante na DFP é instituição financeira — elas
+seguem plano de contas próprio. O sinal está no próprio balanço.
 
 **Graham — a quantidade de ações é derivada, não publicada.** A DFP não traz o
 número de ações. Sai de lucro/LPA quando os dois vêm do mesmo demonstrativo
@@ -211,12 +222,12 @@ três consultas do dia sem nada ter sido calculado.
 ## Testes
 
 ```
-python test_filosofias.py       # 159 verificações, sem rede
+python test_filosofias.py       # 166 verificações, sem rede
 python conferir_filosofias.py   # os motores contra dado real
 python conferir_bdr.py          # os fatores de paridade contra o mercado
 ```
 
-159 verificações, sem rede. O que provam, além da aritmética: que o momentum
+166 verificações, sem rede. O que provam, além da aritmética: que o momentum
 pula mesmo o mês recente (série que sobe 30% e depois desaba tem que marcar
 +30%), que carteira em duas moedas é convertida antes de comparar, que banco
 não é reprovado por uma dívida/EBIT que não se aplica a ele, que razão de BDR
