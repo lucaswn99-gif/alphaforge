@@ -1,0 +1,34 @@
+# Dependencias de DESENVOLVIMENTO. Nao entram no droplet.
+#
+# Existem separadas por um motivo que custou um deploy travado: o `subir.bat`
+# rodava os testes com o Python do sistema, enquanto o `requirements.txt` era
+# instalado no venv. Os dois ambientes divergiram, e a suite passou a testar
+# um conjunto de versoes diferente do que sobe para producao — que e a forma
+# mais silenciosa de aprovar um deploy quebrado.
+#
+# Agora o `subir.bat` roda no venv, e o venv precisa destas duas coisas alem
+# do requirements.txt:
+#
+#     python -m venv venv
+#     venv\Scripts\pip install -r requirements.txt -r requirements-dev.txt
+#
+# O `httpx` NAO esta aqui: ele fica no requirements.txt porque
+# `starlette.testclient` o exige na coleta do pytest, e mover a linha agora
+# mudaria o que o droplet instala sem necessidade.
+
+pytest==8.4.2
+
+# `self.subTest(...)` no test_env.py. Sem o plugin, o pytest coleta os testes
+# mas nao reporta os subtestes — e a saida diz "25 subtests passed".
+pytest-subtests==0.14.1
+
+# Os smokes de tela (smoke_frontend.py, smoke_fundos.py, smoke_vip.py) abrem
+# um Chromium de verdade. Nao sao coletados pelo pytest (o nome nao comeca
+# com test_), entao o subir.bat nao depende deles — sao rodados a mao:
+#
+#     venv\Scripts\python smoke_vip.py
+#
+# Depois de instalar, o navegador em si vem com:
+#
+#     venv\Scripts\playwright install chromium
+playwright==1.49.1
