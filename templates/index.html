@@ -477,6 +477,48 @@
 
     <p id="fundosAviso" class="hidden text-xs rounded px-4 py-3 border"></p>
 
+    <!-- Alerta de desconto alto: lista curta, já ordenada, pra não exigir
+         garimpar as tabelas de baixo atrás de oportunidade. -->
+    <div id="painelAlertaDesconto" class="hidden painel p-4" style="border-color: var(--verde)">
+      <h3 class="rotulo mb-2" style="color: var(--verde)">⚠ Desconto patrimonial alto</h3>
+      <div id="listaAlertaDesconto" class="flex flex-wrap gap-2"></div>
+    </div>
+
+    <!-- Raio-X histórico de FII: mesma ideia do Raio-X 10 Anos de ações,
+         num card compacto, porque aqui é uma consulta pontual, não a tabela
+         principal do radar. -->
+    <div class="painel p-4">
+      <h3 class="rotulo mb-2">Raio-X histórico de um FII</h3>
+      <div class="flex gap-2 flex-wrap">
+        <input type="text" id="raioXFiiTicker" value="HGLG11" class="campo uppercase flex-1 min-w-[160px]">
+        <button onclick="consultarRaioXFii()" id="btnRaioXFii" class="btn">Consultar</button>
+      </div>
+      <p id="raioXFiiAviso" class="hidden text-xs rounded px-4 py-3 border mt-3"></p>
+      <div id="painelRaioXFii" class="hidden grid grid-cols-2 sm:grid-cols-5 gap-3 mt-3">
+        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+          <p class="text-[10px]" style="color: var(--suave)">Máxima (fech.)</p>
+          <p class="text-base font-bold mono mt-1" style="color: var(--verde)" id="raioXFiiMaxima">—</p>
+        </div>
+        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+          <p class="text-[10px]" style="color: var(--suave)">Mínima (fech.)</p>
+          <p class="text-base font-bold mono mt-1" style="color: var(--vermelho)" id="raioXFiiMinima">—</p>
+        </div>
+        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+          <p class="text-[10px]" style="color: var(--suave)">Média (fech.)</p>
+          <p class="text-base font-bold mono mt-1" id="raioXFiiMedia">—</p>
+        </div>
+        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+          <p class="text-[10px]" style="color: var(--suave)">Retorno absoluto</p>
+          <p class="text-base font-bold mono mt-1" id="raioXFiiRetorno">—</p>
+        </div>
+        <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+          <p class="text-[10px]" style="color: var(--suave)">DY últimos 12m</p>
+          <p class="text-base font-bold mono mt-1 sobe" id="raioXFiiDY">—</p>
+        </div>
+      </div>
+      <p class="text-[10px] mt-2" style="color: var(--suave)" id="raioXFiiRodape"></p>
+    </div>
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
       <div class="painel p-4">
         <h3 class="rotulo mb-3">FIIs de tijolo</h3>
@@ -499,6 +541,22 @@
           <tbody id="tabelaETFs" class="divide-y" style="border-color: var(--borda)"></tbody>
         </table></div>
       </div>
+    </div>
+
+    <!-- Resto do IFIX: tudo que o índice traz e ainda não está classificado
+         como tijolo/papel acima. Cheio de propósito, não é "os melhores" —
+         é "o que falta olhar". -->
+    <div class="painel p-4">
+      <div class="flex justify-between items-center mb-3 gap-2 flex-wrap">
+        <h3 class="rotulo">Outros FIIs do IFIX</h3>
+        <p class="text-[10px]" style="color: var(--suave)" id="origemIfix"></p>
+      </div>
+      <div class="overflow-x-auto max-h-[420px] overflow-y-auto"><table class="w-full text-xs">
+        <thead class="sticky top-0" style="background: var(--painel-alt)">
+          <tr class="rotulo text-left"><th class="p-1.5">Fundo</th><th class="p-1.5 text-right">Preço</th><th class="p-1.5 text-right">Entrada</th><th class="p-1.5 text-right">DY</th><th class="p-1.5 text-center">Preço x VP</th></tr>
+        </thead>
+        <tbody id="tabelaOutrosFiis" class="divide-y" style="border-color: var(--borda)"></tbody>
+      </table></div>
     </div>
   </section>
 
@@ -1813,9 +1871,13 @@ async function carregarFundos() {
     const renderFii = (fii) => {
       // A competência do informe importa: o valor patrimonial é mensal, e um
       // P/VP de três meses atrás não é o de hoje.
-      const fonte = fii.competencia_vp
+      // O nome do fundo entra no tooltip: se ele não bater com o papel, o
+      // vínculo ticker→CNPJ da CVM está errado, e é melhor você ver isso do
+      // que confiar num P/VP que na verdade é de outro fundo.
+      const fonte = (fii.competencia_vp
         ? `VP de ${esc(fii.competencia_vp)}`
-        : (fii.origem_fundamentos ? esc(fii.origem_fundamentos) : 'sem P/VP na fonte');
+        : (fii.origem_fundamentos ? esc(fii.origem_fundamentos) : 'sem P/VP na fonte'))
+        + (fii.nome_fundo_cvm ? ` · CVM: ${esc(fii.nome_fundo_cvm)}` : '');
       return `
         <tr class="linha${fii.pvp === null ? ' opacity-50' : ''}">
           <td class="p-1.5">
@@ -1847,9 +1909,33 @@ async function carregarFundos() {
         </td>
       </tr>`;
 
-    document.getElementById('tabelaTijolo').innerHTML = (data.tijolo || []).map(renderFii).join('');
-    document.getElementById('tabelaPapel').innerHTML  = (data.papel  || []).map(renderFii).join('');
-    document.getElementById('tabelaETFs').innerHTML   = (data.etfs   || []).map(renderEtf).join('');
+    document.getElementById('tabelaTijolo').innerHTML     = (data.tijolo || []).map(renderFii).join('');
+    document.getElementById('tabelaPapel').innerHTML      = (data.papel  || []).map(renderFii).join('');
+    document.getElementById('tabelaOutrosFiis').innerHTML = (data.outros || []).map(renderFii).join('');
+    document.getElementById('tabelaETFs').innerHTML       = (data.etfs   || []).map(renderEtf).join('');
+
+    // Origem do universo do IFIX: rede, cache do dia ou lista embutida —
+    // mesma linguagem já usada pro IBOV no scanner de ações.
+    const origemTexto = { b3: 'ao vivo do B3', cache: 'cache do dia', fallback: 'lista de reserva' };
+    document.getElementById('origemIfix').innerText = data.origem_composicao_ifix
+      ? `IFIX: ${(data.outros || []).length + (data.tijolo || []).length + (data.papel || []).length} fundos · `
+        + `composição ${origemTexto[data.origem_composicao_ifix] || data.origem_composicao_ifix}`
+      : '';
+
+    // Alerta de desconto: chips curtos, cada um levando o olho direto pro
+    // ticker — a tabela de baixo é onde se confirma, não onde se descobre.
+    const alertas = data.alertas_desconto_alto || [];
+    const painelAlerta = document.getElementById('painelAlertaDesconto');
+    if (alertas.length > 0) {
+      painelAlerta.classList.remove('hidden');
+      document.getElementById('listaAlertaDesconto').innerHTML = alertas.map(a => `
+        <span class="px-2.5 py-1.5 rounded text-[11px]" style="background:var(--painel-alt);border:1px solid var(--verde)">
+          <b class="mono" style="color:var(--verde)">${esc(a.ticker)}</b>
+          <span class="mono ml-1" style="color:var(--suave)">P/VP ${num(a.pvp)}</span>
+        </span>`).join('');
+    } else {
+      painelAlerta.classList.add('hidden');
+    }
 
     // O que importa é quantos têm P/VP: é ele que gera recomendação.
     const semPvp = (data.total_fiis || 0) - (data.com_pvp || 0);
@@ -1864,6 +1950,34 @@ async function carregarFundos() {
   } catch (e) {
     mostrarAviso('fundosAviso', `Falha ao carregar o radar: ${esc(e.message || e)}`);
   } finally { btn.innerText = 'Atualizar radar'; btn.disabled = false; }
+}
+
+async function consultarRaioXFii() {
+  const ticker = document.getElementById('raioXFiiTicker').value.trim();
+  const btn = document.getElementById('btnRaioXFii');
+  if (!ticker) { mostrarAviso('raioXFiiAviso', 'Informe um ticker.', 'alerta'); return; }
+
+  btn.innerText = 'Consultando…'; btn.disabled = true;
+  mostrarAviso('raioXFiiAviso', '');
+  try {
+    const res = await fetch(`/wealth/raio-x-fii/${encodeURIComponent(ticker)}`);
+    if (!res.ok) { mostrarAviso('raioXFiiAviso', `O servidor respondeu ${res.status}.`); return; }
+    const d = await res.json();
+    if (d.erro) { mostrarAviso('raioXFiiAviso', esc(d.erro)); return; }
+
+    document.getElementById('painelRaioXFii').classList.remove('hidden');
+    document.getElementById('raioXFiiMaxima').innerHTML  = 'R$ ' + num(d.preco_maximo_fechamento);
+    document.getElementById('raioXFiiMinima').innerHTML  = 'R$ ' + num(d.preco_minimo_fechamento);
+    document.getElementById('raioXFiiMedia').innerHTML   = 'R$ ' + num(d.preco_medio_fechamento);
+    document.getElementById('raioXFiiRetorno').innerHTML =
+      d.retorno_absoluto_pct === null ? num(null) : pct(d.retorno_absoluto_pct);
+    document.getElementById('raioXFiiDY').innerHTML = num(d.dy_ultimos_12m_pct, 2, '%');
+    document.getElementById('raioXFiiRodape').innerText =
+      `${(d.pregoes_considerados || 0).toLocaleString('pt-BR')} pregões em ${d.periodo || '5y'} · `
+      + 'retorno compara o fechamento mais recente com a abertura do 1º pregão do período.';
+  } catch (e) {
+    mostrarAviso('raioXFiiAviso', `Falha na consulta: ${esc(e.message || e)}`);
+  } finally { btn.innerText = 'Consultar'; btn.disabled = false; }
 }
 
 // ===================== crédito =========================

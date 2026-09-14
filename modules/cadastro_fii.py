@@ -185,6 +185,33 @@ def cnpj_do_ticker(ticker, caminho=None):
     return fundo.get("cnpj") if fundo else None
 
 
+def carregar_manual(caminho=None):
+    """Só o arquivo de correção à mão, sem o cadastro automático.
+
+    Existe separado de `carregar` porque quem consome precisa saber *qual* das
+    duas fontes deu o CNPJ: uma foi conferida por um humano, a outra foi
+    inferida. Ver `modules/fundamentos_fii.pvp_do_fii`, que ordena os
+    candidatos por confiança.
+    """
+    try:
+        with open(caminho or ARQUIVO_MANUAL, "r", encoding="utf-8") as arquivo:
+            bruto = json.load(arquivo) or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    mapa = {}
+    for sigla, cnpj in bruto.items():
+        normalizado = normalizar_cnpj(cnpj)
+        if normalizado:
+            mapa[str(sigla).upper()[:4]] = normalizado
+    return mapa
+
+
+def cnpj_manual_do_ticker(ticker, caminho=None):
+    """CNPJ conferido à mão, ou None. Tem precedência sobre tudo."""
+    raiz = raiz_do_ticker(ticker)
+    return carregar_manual(caminho).get(raiz) if raiz else None
+
+
 def limpar_memoria():
     _memoria["mapa"] = None
 

@@ -102,39 +102,83 @@ def cnpj_pelo_informe(ticker, banco=None):
     return linha["cnpj"] if linha else None
 
 
+def _candidatos_cnpj(ticker, banco, caminho_cadastro):
+    """CNPJs a tentar para um ticker, do mais confiável para o menos.
+
+    1. `cadastro_fii_manual.json` — conferido por um humano, vence tudo.
+    2. Tabela `tickers` do informe — vínculo publicado pela CVM... exceto que,
+       quando o informe não traz código de negociação (é o caso hoje), esse
+       vínculo é DEDUZIDO do ISIN, e dedução erra.
+    3. Cadastro de fundos listados do B3, por raiz de 4 letras.
+
+    Ordem só decide o desempate: `pvp_do_fii` testa todos e fica com o
+    primeiro que produzir um P/VP plausível. Foi assim que o XPML11 apareceu:
+    o ISIN apontava para um CNPJ cujo valor patrimonial dava P/VP de 0,004 —
+    dado de outro fundo, não desconto de 99,6%.
+    """
+    candidatos = []
+    for origem, cnpj in (
+        ("manual", cadastro_fii.cnpj_manual_do_ticker(ticker)),
+        ("informe-isin", cnpj_pelo_informe(ticker, banco)),
+        ("cadastro-b3", cadastro_fii.cnpj_do_ticker(ticker, caminho_cadastro)),
+    ):
+        if cnpj and not any(cnpj == existente for _, existente in candidatos):
+            candidatos.append((origem, cnpj))
+    return candidatos
+
+
 def pvp_do_fii(ticker, preco, banco=None, caminho_cadastro=None):
     """{pvp, vp_por_cota, competencia, cnpj, disponivel}. Nunca levanta."""
     resultado = {"pvp": None, "vp_por_cota": None, "competencia": None,
                  "cnpj": None, "disponivel": False, "origem": "cvm-informe"}
 
-    # Informe primeiro (exato), cadastro do B3 depois (por raiz).
-    cnpj = cnpj_pelo_informe(ticker, banco) or cadastro_fii.cnpj_do_ticker(
-        ticker, caminho_cadastro)
-    if not cnpj:
-        return resultado
-    resultado["cnpj"] = cnpj
-
-    informe = informe_por_cnpj(cnpj, banco)
-    if not informe:
-        return resultado
-
-    resultado["disponivel"] = True
-    resultado["competencia"] = informe.get("competencia")
-
     try:
-        vp_cota = float(informe.get("vp_por_cota") or 0.0)
         preco = float(preco or 0.0)
     except (TypeError, ValueError):
         return resultado
 
-    if vp_cota <= 0 or preco <= 0:
-        return resultado
+    primeiro_com_informe = None
+    for origem_cnpj, cnpj in _candidatos_cnpj(ticker, banco, caminho_cadastro):
+        informe = informe_por_cnpj(cnpj, banco)
+        if not informe:
+            continue
 
-    resultado["vp_por_cota"] = vp_cota
-    pvp = preco / vp_cota
-    if PVP_MINIMO <= pvp <= PVP_MAXIMO:
-        resultado["pvp"] = pvp
-    return resultado
+        try:
+            vp_cota = float(informe.get("vp_por_cota") or 0.0)
+        except (TypeError, ValueError):
+            continue
+
+        parcial = {
+            "pvp": None,
+            "vp_por_cota": vp_cota if vp_cota > 0 else None,
+            "competencia": informe.get("competencia"),
+            "cnpj": cnpj,
+            # O nome do fundo viaja junto para a tela poder dizer de QUAL
+            # fundo veio o valor patrimonial — é o que flagra um vínculo
+            # ticker->CNPJ errado sem abrir o banco. None em base antiga,
+            # gravada antes desta coluna existir.
+            "nome_fundo": informe.get("nome"),
+            "disponivel": True,
+            "origem": f"cvm-informe ({origem_cnpj})",
+        }
+        if primeiro_com_informe is None:
+            primeiro_com_informe = parcial
+
+        if vp_cota <= 0 or preco <= 0:
+            continue
+
+        pvp = preco / vp_cota
+        if PVP_MINIMO <= pvp <= PVP_MAXIMO:
+            # Candidato plausível: é este. Um P/VP fora da faixa não é
+            # "oportunidade extrema", é quase sempre CNPJ trocado — seguimos
+            # tentando o próximo em vez de publicar o número.
+            parcial["pvp"] = pvp
+            return parcial
+
+    # Nenhum candidato plausível: devolvemos o primeiro que ao menos tinha
+    # informe, com `pvp` None. A tela mostra "sem dados", que é a verdade —
+    # temos um valor patrimonial, mas nenhum que case com o preço de mercado.
+    return primeiro_com_informe or resultado
 
 
 def limpar_cache():

@@ -18,18 +18,31 @@ import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, Depends, Query
 
-from modules import fundamentos_fii, identidade, otimizador, planos, taxas
-from routers.equity import (carimbo_de_coleta, dy_da_serie, fatiar_precos,
-                            normalizar_dy)
+from modules import composicao_ifix, fundamentos_fii, identidade, otimizador, planos, taxas
+from routers.equity import (_adicionar_sufixo_b3, carimbo_de_coleta, dy_da_serie,
+                            fatiar_precos, normalizar_dy, raio_x_10_anos)
 
 router = APIRouter(prefix="/wealth", tags=["Gestão de Patrimônio & Fundos"])
 
+# Estas duas listas agora são só a CLASSIFICAÇÃO conhecida (tijolo/papel) de
+# FIIs curados manualmente — não mais o universo inteiro do radar. O universo
+# vem de `composicao_ifix.obter_composicao()` (o índice IFIX ao vivo, com
+# cache e fallback — mesmo desenho de `composicao_ibov` para o IBOV). Qualquer
+# FII do IFIX que não esteja em nenhuma das duas cai em "outros" — ainda
+# avaliado com o mesmo motor de P/VP e DY, só sem o rótulo de segmento, que a
+# gente não tem como inferir só pelo ticker.
 FIIS_TIJOLO = ["HGLG11", "BTLG11", "XPML11", "VISC11", "ALZR11",
                "KNRI11", "VILG11", "MALL11", "PVBI11", "BRCR11"]
 FIIS_PAPEL = ["KNIP11", "KNCR11", "IRDM11", "CPTS11", "MXRF11",
               "HGCR11", "MCCI11", "RECR11", "CVBI11", "VRTA11"]
 ETFS_B3 = ["BOVA11", "IVVB11", "SMAL11", "NASD11", "HASH11",
            "DIVO11", "SPXI11", "GOLD11", "XINA11", "BINA11"]
+
+# P/VP abaixo disto entra no alerta de desconto alto do radar — ver
+# `_montar_fiis`/`radar_fundos`. FIIs de tijolo abaixo de 0,85x do patrimônio
+# são, historicamente, descontos incomuns (não "todo desconto", que já é o
+# gatilho de entrada normal em `_recomendacao_fii`).
+PVP_ALERTA_DESCONTO = 0.85
 
 MAX_WORKERS_INFO = 6
 SMA_ETF = 20
@@ -135,12 +148,17 @@ def _montar_fiis(tickers, df_precos, fundamentos):
 
         # P/VP do Informe Mensal da CVM quando o Yahoo não traz. É o gatilho de
         # entrada do FII: sem ele a linha não tem recomendação nenhuma.
+        nome_fundo_cvm = None
         if pvp is None:
             informe = fundamentos_fii.pvp_do_fii(ticker, preco)
             if informe.get("pvp") is not None:
                 pvp = informe["pvp"]
                 vp_cota = informe.get("vp_por_cota")
                 competencia_vp = informe.get("competencia")
+                # Qual fundo a CVM diz que é. Se isto não bater com o papel,
+                # o vínculo ticker->CNPJ está errado — e o usuário vê, em vez
+                # de olhar um P/VP de outro fundo achando que é deste.
+                nome_fundo_cvm = informe.get("nome_fundo")
                 origens.append(f"CVM {competencia_vp}" if competencia_vp else "CVM")
 
         # DY pelos proventos que vieram junto do preço: provento pago é fato.
@@ -164,9 +182,15 @@ def _montar_fiis(tickers, df_precos, fundamentos):
                 round(preco / pvp, 2) if pvp else None),
             "vp_por_cota": round(vp_cota, 2) if vp_cota else None,
             "competencia_vp": competencia_vp,
+            "nome_fundo_cvm": nome_fundo_cvm,
             "recomendacao": recomendacao or "SEM DADOS",
             "racional": racional or "P/VP indisponível na fonte",
             "desconto": bool(pvp and 0 < pvp < 1),
+            # Alerta: desconto patrimonial ACIMA do normal, não só "abaixo de
+            # 1,0x" (que já é o gatilho comum de entrada, marcado em
+            # `desconto`). "Não apurado" nunca vira alerta — sem P/VP não há
+            # como afirmar desconto nenhum.
+            "alerta_desconto_alto": bool(pvp and 0 < pvp < PVP_ALERTA_DESCONTO),
             "origem_fundamentos": " + ".join(origens) if origens else None,
             "fundamentos_disponiveis": pvp is not None or dy is not None,
         })
@@ -199,9 +223,24 @@ def _montar_etfs(df_precos):
 
 
 @router.get("/fundos")
-def radar_fundos(ctx: planos.Contexto = Depends(planos.acesso())):
-    """FIIs por desconto patrimonial e ETFs por pullback na média de 20."""
-    todos_fiis = FIIS_TIJOLO + FIIS_PAPEL
+def radar_fundos(forcar_ifix: bool = Query(False),
+                 ctx: planos.Contexto = Depends(planos.acesso())):
+    """FIIs por desconto patrimonial e ETFs por pullback na média de 20.
+
+    O universo de FIIs vem do IFIX ao vivo (`composicao_ifix`), não mais de
+    duas listas fixas de 10 — ver o comentário de `FIIS_TIJOLO`/`FIIS_PAPEL`
+    acima. Quem já está classificado nessas duas listas entra em `tijolo`/
+    `papel`; o resto do IFIX entra em `outros`, avaliado do mesmo jeito.
+    """
+    codigos_ifix, origem_ifix, idade_ifix = composicao_ifix.obter_composicao(forcar=forcar_ifix)
+
+    classificados = set(FIIS_TIJOLO) | set(FIIS_PAPEL)
+    outros_tickers = [t for t in codigos_ifix if t not in classificados]
+    # Os curados sempre entram, mesmo se o B3/cache/fallback do IFIX não os
+    # trouxer agora (rebalanceamento do índice, ou instabilidade da fonte) —
+    # eles são o piso de qualidade que o radar tinha antes desta mudança.
+    todos_fiis = list(dict.fromkeys(FIIS_TIJOLO + FIIS_PAPEL + outros_tickers))
+
     df_fiis = _baixar_precos(todos_fiis)
     df_etfs = _baixar_precos(ETFS_B3)
 
@@ -219,16 +258,30 @@ def radar_fundos(ctx: planos.Contexto = Depends(planos.acesso())):
 
     tijolo = _montar_fiis(FIIS_TIJOLO, df_fiis, fundamentos)
     papel = _montar_fiis(FIIS_PAPEL, df_fiis, fundamentos)
+    outros = _montar_fiis(outros_tickers, df_fiis, fundamentos)
     etfs = _montar_etfs(df_etfs)
+
+    todos_montados = tijolo + papel + outros
+    # Alerta: lista curta e ordenada por desconto, pra não exigir que o
+    # usuário garimpe a tabela inteira atrás de oportunidade.
+    alertas_desconto = sorted(
+        (l for l in todos_montados if l["alerta_desconto_alto"]),
+        key=lambda l: l["pvp"],
+    )
 
     return planos.cortar_fundos({
         **carimbo_de_coleta(),
         "tijolo": tijolo,
         "papel": papel,
+        "outros": outros,
         "etfs": etfs,
-        "com_fundamentos": sum(1 for l in tijolo + papel if l["fundamentos_disponiveis"]),
-        "com_pvp": sum(1 for l in tijolo + papel if l["pvp"] is not None),
-        "total_fiis": len(tijolo) + len(papel),
+        "com_fundamentos": sum(1 for l in todos_montados if l["fundamentos_disponiveis"]),
+        "com_pvp": sum(1 for l in todos_montados if l["pvp"] is not None),
+        "total_fiis": len(todos_montados),
+        "origem_composicao_ifix": origem_ifix,
+        "idade_composicao_ifix_segundos": idade_ifix,
+        "alertas_desconto_alto": alertas_desconto,
+        "pvp_alerta_desconto": PVP_ALERTA_DESCONTO,
     }, ctx)
 
 
@@ -418,4 +471,53 @@ def otimizar_markowitz(
             "Fronteira e carteira usam as MESMAS restrições — comparar solução "
             "restrita com fronteira irrestrita compararia coisas diferentes.",
         ],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Raio-X histórico de FII
+# --------------------------------------------------------------------------- #
+
+# 5 anos, não 10: boa parte do IFIX listou depois de 2016 (a onda de IPOs de
+# FII foi 2019-2021), e pedir 10 anos deixaria a maioria dos fundos sem dado
+# nenhum. `raio_x_10_anos` (de `routers/equity.py`) não é específico de ação —
+# são só 4 contas sobre duas séries de preço — e é reaproveitado aqui tal e
+# qual, sem duplicar a lógica.
+PERIODO_RAIO_X_FII = "5y"
+
+
+@router.get("/raio-x-fii/{ticker}")
+def raio_x_fii(ticker: str):
+    """Raio-X histórico de uma cota de FII: máxima, mínima, média de
+    fechamento, retorno absoluto e DY médio dos últimos 12 meses do período.
+
+    Mesma ideia do Raio-X 10 Anos de ações, adaptada a FII: janela de 5 anos
+    (a maioria do IFIX é mais nova que 10 anos) e DY incluído, porque para FII
+    o provento é metade da tese — preço sozinho conta a metade da história.
+    """
+    simbolo = _adicionar_sufixo_b3(ticker)
+    ativo = yf.Ticker(simbolo)
+    try:
+        historico = ativo.history(period=PERIODO_RAIO_X_FII, interval="1d",
+                                  auto_adjust=True, actions=True)
+    except Exception as exc:  # noqa: BLE001
+        return {"erro": f"Erro ao consultar o Yahoo: {exc}"}
+
+    if historico is None or historico.empty or "Close" not in historico.columns:
+        return {"erro": "Sem dados históricos disponíveis."}
+
+    abertura = historico["Open"].dropna() if "Open" in historico.columns else None
+    fechamento = historico["Close"].dropna()
+    if fechamento.empty:
+        return {"erro": "Sem dados históricos disponíveis."}
+
+    preco_atual = float(fechamento.iloc[-1])
+    dy_periodo = dy_da_serie(historico, preco_atual) if "Dividends" in historico.columns else None
+
+    return {
+        "ticker": ticker.upper().strip(),
+        "simbolo_yahoo": simbolo,
+        "periodo": PERIODO_RAIO_X_FII,
+        **raio_x_10_anos(abertura, fechamento),
+        "dy_ultimos_12m_pct": round(dy_periodo, 2) if dy_periodo is not None else None,
     }

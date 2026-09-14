@@ -67,6 +67,13 @@ PADROES_ALVO = {
     "isin": [r"^codigo[ _]?isin$", r"^isin$"],
     "codigo_negociacao": [r"codigo[ _]?(de[ _]?)?negociacao", r"^ticker$",
                           r"^codigo[ _]?neg"],
+    # O nome do fundo é a única coisa que torna o vínculo ticker->CNPJ
+    # AUDITÁVEL. Sem ele, um ISIN mal deduzido aponta para o CNPJ de outro
+    # fundo e ninguém percebe: o número aparece na tela como se fosse do papel
+    # certo. Foi o que aconteceu com XPML11 -> 07583627000161, um fundo que
+    # não é o XP Malls. Com o nome gravado, a divergência salta aos olhos.
+    "nome": [r"^denominacao[ _]?social$", r"^nome[ _]?(do[ _]?)?fundo$",
+             r"^razao[ _]?social$", r"^nm[ _]?fantasia$"],
 }
 
 # BR + raiz de 4 do ticker + CTF (cota de fundo) + dígitos.
@@ -82,6 +89,27 @@ def ticker_do_isin(isin):
 # Um FII com VP por cota fora desta faixa é dado corrompido, não notícia.
 VP_COTA_MINIMO = 0.01
 VP_COTA_MAXIMO = 100_000.0
+
+# Teto de plausibilidade PARA CADA LINHA, aplicado depois de decidida a leitura
+# do arquivo inteiro (ver `decidir_leitura`/`aplicar_leitura`). Achado no caso
+# real de XPML11 (competência 2026-07): a leitura "total/cotas" foi a correta
+# para o arquivo (a maioria dos fundos bateu), mas UMA linha teve
+# `cotas_emitidas` errado na fonte — provavelmente um valor de classe/subclasse
+# da Resolução 175 casado com o patrimônio do fundo inteiro — e isso deu
+# 22.548,02 de VP por cota. `VP_COTA_MAXIMO` (100.000) não pegava isso: está
+# ordens de grandeza acima de qualquer cota de FII negociada na B3, mas ainda
+# dentro do teto absoluto. `conferir()` também não pegava: VP × cotas bate com
+# o patrimônio por CONSTRUÇÃO quando a leitura é "total/cotas" (um é derivado
+# do outro), então a conferência é sempre trivialmente satisfeita nesse caminho
+# — ela só protege a leitura "por-cota", onde VP vem de uma coluna e cotas de
+# outra.
+#
+# Este teto é a defesa de verdade: nenhuma cota de FII do mercado brasileiro
+# negocia perto disso, então uma linha que resulte acima daqui quase certamente
+# tem `cotas_emitidas` ou `patrimonio_liquido` errado na fonte, mesmo que os
+# dois batam entre si. "P/VP errado é pior que ausente" — a linha vira
+# descarte (fundo fica sem P/VP no radar) em vez de virar um número fabricado.
+VP_COTA_TETO_PLAUSIVEL = 10_000.0
 
 # Onde vive a esmagadora maioria das cotas de FII do mercado brasileiro. Serve
 # para escolher a leitura da coluna, não para descartar fundo: a decisão é
@@ -265,7 +293,7 @@ def processar_ano(ano):
             continue
 
         uteis = [c for c in ("cotas_emitidas", "vp_por_cota", "patrimonio_liquido",
-                             "isin", "codigo_negociacao") if c in mapa]
+                             "isin", "codigo_negociacao", "nome") if c in mapa]
         if not uteis:
             print(f"   - {nome}: nada de útil além da chave, ignorado")
             continue
@@ -298,6 +326,11 @@ def processar_ano(ano):
                     if codigo:
                         tickers.setdefault(codigo, cnpj)
                     continue
+                if campo == "nome":
+                    texto = str(bruto or "").strip()
+                    if texto and texto.upper() not in ("NAN", "NONE"):
+                        registro.setdefault("nome", texto)
+                    continue
                 numero = _para_numero(bruto)
                 if numero is not None:
                     registro[campo] = numero
@@ -329,6 +362,14 @@ def processar_ano(ano):
         if vp is None:
             descartes += 1
             continue
+        if vp > VP_COTA_TETO_PLAUSIVEL:
+            # Acima do teto de plausibilidade: mesmo que VP x cotas bata com o
+            # patrimônio (o que sempre bate quando a leitura é "total/cotas",
+            # por construção), nenhuma cota de FII real chega perto disso — o
+            # dado de origem (cotas ou patrimônio) está errado. Ver comentário
+            # de VP_COTA_TETO_PLAUSIVEL.
+            inconsistentes += 1
+            continue
         if origem != "pl/cotas" and not conferir(vp, patrimonio, cotas):
             inconsistentes += 1
             continue
@@ -341,6 +382,7 @@ def processar_ano(ano):
             "vp_por_cota": vp,
             "patrimonio_liquido": patrimonio,
             "cotas_emitidas": cotas,
+            "nome": registro.get("nome"),
             "leitura": origem,
         }
 
@@ -363,7 +405,8 @@ def gravar(registros, tickers=None, banco=BANCO):
             competencia TEXT,
             vp_por_cota REAL,
             patrimonio_liquido REAL,
-            cotas_emitidas REAL
+            cotas_emitidas REAL,
+            nome TEXT
         )
     """)
     # Só existe quando o informe traz código de negociação. Quando existe,
@@ -375,12 +418,12 @@ def gravar(registros, tickers=None, banco=BANCO):
         )
     """)
     linhas = [(cnpj, v["competencia"], v["vp_por_cota"],
-               v["patrimonio_liquido"], v["cotas_emitidas"])
+               v["patrimonio_liquido"], v["cotas_emitidas"], v.get("nome"))
               for cnpj, v in registros.items()]
     cursor.executemany(
         "INSERT OR REPLACE INTO fundos "
-        "(cnpj, competencia, vp_por_cota, patrimonio_liquido, cotas_emitidas) "
-        "VALUES (?, ?, ?, ?, ?)", linhas)
+        "(cnpj, competencia, vp_por_cota, patrimonio_liquido, cotas_emitidas, nome) "
+        "VALUES (?, ?, ?, ?, ?, ?)", linhas)
 
     if tickers:
         cursor.executemany("INSERT OR REPLACE INTO tickers (ticker, cnpj) VALUES (?, ?)",
@@ -399,11 +442,54 @@ def gravar(registros, tickers=None, banco=BANCO):
         leituras[valores["leitura"]] = leituras.get(valores["leitura"], 0) + 1
     print("leitura da coluna de valor:", leituras)
     print("\namostra:")
-    for cnpj, comp, vp in cursor.execute(
-            "SELECT cnpj, competencia, vp_por_cota FROM fundos "
+    for cnpj, comp, vp, nome in cursor.execute(
+            "SELECT cnpj, competencia, vp_por_cota, nome FROM fundos "
             "ORDER BY vp_por_cota DESC LIMIT 6"):
-        print(f"   {cnpj}  {comp}  VP/cota R$ {vp:,.2f}")
+        print(f"   {cnpj}  {comp}  VP/cota R$ {vp:,.2f}  {(nome or '')[:40]}")
+
+    conferir_tickers(cursor)
     conexao.close()
+
+
+# Os FIIs que o radar realmente usa. A conferência abaixo existe porque o
+# vínculo ticker->CNPJ é DEDUZIDO do ISIN (o informe não publica código de
+# negociação), e dedução erra silenciosamente: o P/VP de outro fundo aparece
+# na tela como se fosse deste papel. Com o nome do fundo ao lado, um humano
+# confere em cinco segundos o que nenhuma heurística garante.
+TICKERS_DO_RADAR = [
+    "HGLG11", "BTLG11", "XPML11", "VISC11", "ALZR11",
+    "KNRI11", "VILG11", "MALL11", "PVBI11", "BRCR11",
+    "KNIP11", "KNCR11", "IRDM11", "CPTS11", "MXRF11",
+    "HGCR11", "MCCI11", "RECR11", "CVBI11", "VRTA11",
+]
+
+
+def conferir_tickers(cursor):
+    """Imprime ticker -> CNPJ -> nome do fundo, para conferência humana."""
+    print("\nconferência do vínculo ticker -> fundo (o nome tem que bater "
+          "com o papel):")
+    sem_vinculo, sem_informe = [], []
+    for ticker in TICKERS_DO_RADAR:
+        linha = cursor.execute(
+            "SELECT t.cnpj, f.nome, f.vp_por_cota, f.competencia "
+            "FROM tickers t LEFT JOIN fundos f ON f.cnpj = t.cnpj "
+            "WHERE t.ticker = ?", (ticker,)).fetchone()
+        if not linha:
+            sem_vinculo.append(ticker)
+            continue
+        cnpj, nome, vp, comp = linha
+        if vp is None:
+            sem_informe.append(ticker)
+            print(f"   {ticker:<8} {cnpj}  (sem informe válido para este CNPJ)")
+            continue
+        print(f"   {ticker:<8} {cnpj}  VP/cota R$ {vp:>10,.2f}  {comp}  {(nome or '?')[:42]}")
+
+    if sem_vinculo:
+        print(f"   sem vínculo ticker->CNPJ: {', '.join(sem_vinculo)}")
+    if sem_informe:
+        print(f"   com vínculo mas sem VP: {', '.join(sem_informe)}")
+    print("   Nome que não bate com o papel = ISIN mal deduzido. Corrija em "
+          "cadastro_fii_manual.json: {\"XPML\": \"<cnpj certo>\"}")
 
 
 def main(anos):
