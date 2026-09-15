@@ -389,6 +389,123 @@
       </div>
     </section>
 
+    <!-- Estresse macro: Selic e eventos de cauda. Mede a carteira que já
+         está montada, e não a próxima compra — por isso vem depois do
+         rebalanceamento e antes da importação/registro, junto dos outros
+         módulos de leitura da carteira. -->
+    <section id="painelEstresse" class="hidden painel p-5 entra" style="animation-delay:.038s">
+      <div class="mb-4">
+        <h2 class="rotulo">Estresse macro</h2>
+        <p class="text-[10px] mt-1.5 leading-relaxed" style="color: #3d4a43">
+          Só mede <b>ações</b> — FII não tem dívida de companhia no balanço, e
+          ETF é cesta de índice sem endividamento próprio.
+        </p>
+      </div>
+
+      <!-- Sensibilidade à Selic: rota barata, sem rede, pensada para o
+           controle deslizante responder a cada arrasto. -->
+      <div class="rounded p-4 mb-4" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-1">
+          <p class="rotulo">Sensibilidade à Selic</p>
+          <p class="mono font-bold text-[16px]" id="selicSimulada">—</p>
+        </div>
+        <input type="range" id="controleSelic" min="0" max="25" step="0.25" value="13.75"
+               class="w-full mt-2.5" style="accent-color: var(--verde)">
+        <div class="flex justify-between text-[10px] mt-1" style="color:#3d4a43">
+          <span>0%</span>
+          <span id="selicMetaLabel">Selic meta: —</span>
+          <span id="selicMaxLabel">25%</span>
+        </div>
+        <p class="text-[10px] mt-3 leading-relaxed" style="color: #3d4a43" id="limiteSelic"></p>
+
+        <div class="grid grid-cols-3 gap-2.5 mt-4" id="resumoSelic"></div>
+
+        <div class="overflow-x-auto mt-4">
+          <table class="w-full text-[12px]">
+            <thead>
+              <tr class="text-left" style="color: var(--suave)">
+                <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider">Papel</th>
+                <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider text-right">Dívida líq.</th>
+                <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider text-right">Cobertura hoje</th>
+                <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider text-right">Cobertura simulada</th>
+                <th class="px-3 py-2 font-medium text-[10px] uppercase tracking-wider">Estado</th>
+              </tr>
+            </thead>
+            <tbody id="tabelaSelic" class="divide-y" style="border-color: var(--borda)"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Eventos de cauda: caro (baixa histórico inteiro de cada papel),
+           por isso é sob pedido, e não automático como a Selic acima. -->
+      <div class="rounded p-4" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-1">
+          <p class="rotulo">Eventos de cauda</p>
+          <button class="btn-fantasma" id="btnEstresseHistorico" type="button">Simular</button>
+        </div>
+        <p class="text-[10px] mt-1 mb-3 leading-relaxed" style="color: #3d4a43">
+          Contrafactual: aplica os pesos de <b>hoje</b> a preços do passado. Mede a
+          fragilidade da composição atual, não o que vai acontecer.
+        </p>
+        <p id="avisoEstresseHistorico" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mb-3"></p>
+        <div id="listaEventos" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+      </div>
+    </section>
+
+    <!-- Radar de cinco eixos: retrato multidimensional das AÇÕES da carteira.
+         Cálculo caro (Graham, Bazin e momentum por papel), por isso fica
+         sempre visível com um botão, em vez de aparecer/sumir sozinho. -->
+    <section class="painel p-5 entra" style="animation-delay:.039s">
+      <div class="flex items-start justify-between gap-3 flex-wrap mb-4">
+        <div>
+          <h2 class="rotulo">Radar de cinco eixos</h2>
+          <p class="text-[10px] mt-1.5 leading-relaxed" style="color: #3d4a43">
+            Valor, Qualidade, Proventos, Momentum e Segurança — cada eixo mede uma
+            pergunta diferente sobre as mesmas ações. Só ação entra: FII e ETF não
+            têm ROE nem múltiplo de empresa.
+          </p>
+        </div>
+        <button class="btn-fantasma" id="btnRadar" type="button">Calcular radar</button>
+      </div>
+
+      <p id="avisoRadar" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mb-4"></p>
+
+      <div id="corpoRadar" class="hidden">
+        <div class="flex items-end justify-between gap-5 flex-wrap mb-4">
+          <div>
+            <p class="rotulo mb-2">Média geral</p>
+            <p class="mono font-bold leading-none" style="font-size: clamp(26px, 5vw, 36px)" id="radarMedia">—</p>
+          </div>
+          <p class="text-[11px] text-right leading-relaxed" style="color: var(--suave)" id="radarResumo"></p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6 items-start">
+          <div class="flex justify-center">
+            <svg id="svgRadar" width="280" height="280" viewBox="0 0 300 300" aria-label="Radar de cinco eixos da carteira"></svg>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-[11px]">
+              <thead>
+                <tr class="text-left" style="color: var(--suave)">
+                  <th class="px-2.5 py-2 font-medium text-[10px] uppercase tracking-wider">Papel</th>
+                  <th class="px-2.5 py-2 font-medium text-[10px] uppercase tracking-wider text-right" title="Está barato contra o que a empresa vale?">Valor</th>
+                  <th class="px-2.5 py-2 font-medium text-[10px] uppercase tracking-wider text-right" title="A empresa gera retorno sobre o capital que emprega?">Qualid.</th>
+                  <th class="px-2.5 py-2 font-medium text-[10px] uppercase tracking-wider text-right" title="Paga bem, e o pagamento se sustenta?">Provent.</th>
+                  <th class="px-2.5 py-2 font-medium text-[10px] uppercase tracking-wider text-right" title="O preço está em tendência, com liquidez para entrar?">Moment.</th>
+                  <th class="px-2.5 py-2 font-medium text-[10px] uppercase tracking-wider text-right" title="A empresa resiste a um aperto?">Segur.</th>
+                </tr>
+              </thead>
+              <tbody id="tabelaRadarPapeis" class="divide-y" style="border-color: var(--borda)"></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="text-[10px] mt-4 leading-relaxed" style="color: #3d4a43">
+          Raio tracejado e "—": eixo sem cobertura suficiente na carteira — ausência
+          de dado, nunca nota zero. <span id="radarOrigem"></span>
+        </p>
+      </div>
+    </section>
+
     <!-- Importação de planilha -->
     <section class="painel p-5 entra" style="animation-delay:.04s">
       <div class="flex items-start justify-between gap-3 flex-wrap mb-3.5">
@@ -630,8 +747,11 @@ async function carregar() {
     // O diagnóstico vem DEPOIS da tabela aparecer: ele consulta balanço de
     // cada posição e demora, e segurar a carteira inteira esperando por ele
     // deixaria a tela em branco por segundos sem necessidade.
-    if (POSICOES.length) carregarDiagnostico(false);
-    else { DIAGNOSTICO = {}; $('painelDiagnostico').classList.add('hidden'); }
+    if (POSICOES.length) { carregarDiagnostico(false); carregarEstresseSelic(); }
+    else {
+      DIAGNOSTICO = {}; $('painelDiagnostico').classList.add('hidden');
+      $('painelEstresse').classList.add('hidden');
+    }
     carregarFilosofia();
     carregarAlvos();
   } catch (e) {
@@ -1251,6 +1371,260 @@ function renderizarPlano(dados) {
 
 $('btnSalvarAlvos').addEventListener('click', salvarAlvos);
 $('btnCalcularAporte').addEventListener('click', calcularAporte);
+
+// ===================== estresse macro: selic =====================
+let SELIC_META = null;
+let _timerSelic = null;
+
+const CORES_ESTRESSE = {
+  critico:     ['var(--vermelho)', 'rgba(255,77,94,.09)',  'rgba(255,77,94,.26)'],
+  apertado:    ['var(--ambar)',    'rgba(255,176,32,.09)', 'rgba(255,176,32,.26)'],
+  folgado:     ['var(--verde)',    'rgba(0,229,122,.09)',  'rgba(0,229,122,.26)'],
+  beneficiado: ['var(--verde)',    'rgba(0,229,122,.06)',  'rgba(0,229,122,.20)'],
+  nao_apurado: ['#4a554e',         'rgba(120,135,127,.07)','rgba(120,135,127,.20)'],
+};
+const ROTULOS_ESTRESSE = {
+  critico: 'Crítico', apertado: 'Apertado', folgado: 'Folgado',
+  beneficiado: 'Beneficiado', nao_apurado: 'Não apurado',
+};
+
+function seloEstresse(estado, motivo) {
+  const [cor, fundo, borda] = CORES_ESTRESSE[estado] || CORES_ESTRESSE.nao_apurado;
+  return `<span class="text-[9px] font-bold px-2 py-1 rounded whitespace-nowrap"
+                style="color:${cor}; background:${fundo}; border:1px solid ${borda}"
+                title="${esc(motivo || '')}">${esc(ROTULOS_ESTRESSE[estado] || estado)}</span>`;
+}
+
+async function carregarEstresseSelic(taxa = null) {
+  try {
+    const url = taxa === null
+      ? '/api/v1/carteira/estresse/selic'
+      : `/api/v1/carteira/estresse/selic?taxa=${encodeURIComponent(taxa)}`;
+    const res = await fetch(url);
+    const dados = await res.json().catch(() => ({}));
+    if (!res.ok) { $('painelEstresse').classList.add('hidden'); return; }
+
+    if (taxa === null) {
+      SELIC_META = dados.selic_meta || null;
+      const meta = SELIC_META ? SELIC_META.valor : null;
+      const controle = $('controleSelic');
+      const maxCtrl = Math.max(25, Math.ceil((meta || 13.75) * 1.8));
+      controle.min = '0'; controle.max = String(maxCtrl);
+      controle.value = meta != null ? meta : 13.75;
+      $('selicMaxLabel').innerText = `${maxCtrl}%`;
+      $('selicMetaLabel').innerText = meta != null
+        ? `Selic meta hoje: ${meta.toFixed(2)}%` : 'Selic meta: —';
+      $('limiteSelic').innerText = dados.limite || '';
+    }
+    $('selicSimulada').innerText = `${Number(dados.taxa_nova).toFixed(2)}%`;
+    renderizarSelic(dados);
+    $('painelEstresse').classList.remove('hidden');
+  } catch (e) { $('painelEstresse').classList.add('hidden'); }
+}
+
+function renderizarSelic(dados) {
+  const linhas = dados.posicoes || [];
+  const resumo = [
+    { rotulo: 'Crítico',     valor: dados.pct_critico,     cor: 'var(--vermelho)' },
+    { rotulo: 'Apurado',     valor: dados.pct_apurado,     cor: 'var(--texto)' },
+    { rotulo: 'Beneficiado', valor: dados.pct_beneficiado, cor: 'var(--verde)' },
+  ];
+  $('resumoSelic').innerHTML = resumo.map((r) => `
+    <div class="p-2.5 rounded" style="background: var(--fundo); border: 1px solid var(--borda)">
+      <p class="text-[9px] font-bold uppercase tracking-wider" style="color: var(--suave)">${esc(r.rotulo)}</p>
+      <p class="mono font-bold text-[16px] mt-1" style="color:${r.cor}">${(r.valor ?? 0).toFixed(1)}%</p>
+    </div>`).join('');
+
+  $('tabelaSelic').innerHTML = linhas.map((l) => `
+    <tr class="linha" data-selic-ticker="${esc(l.ticker)}">
+      <td class="px-3 py-2.5 mono font-semibold">${esc(l.ticker)}</td>
+      <td class="px-3 py-2.5 text-right mono" style="color: var(--suave)">
+        ${l.divida_liquida != null ? 'R$ ' + brl(l.divida_liquida) : '—'}</td>
+      <td class="px-3 py-2.5 text-right mono">${l.cobertura_atual != null ? l.cobertura_atual.toFixed(2) + 'x' : '—'}</td>
+      <td class="px-3 py-2.5 text-right mono font-semibold">
+        ${l.cobertura_nova != null ? l.cobertura_nova.toFixed(2) + 'x' : '—'}</td>
+      <td class="px-3 py-2.5" data-celula="estado">${seloEstresse(l.estado, l.motivo)}</td>
+    </tr>`).join('');
+
+  const vazio = linhas.length === 0;
+  if (vazio) {
+    $('tabelaSelic').innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-[11px]"
+      style="color: var(--suave)">Nenhuma posição em ação para medir.</td></tr>`;
+  }
+}
+
+$('controleSelic').addEventListener('input', () => {
+  const valor = parseFloat($('controleSelic').value);
+  $('selicSimulada').innerText = `${valor.toFixed(2)}%`;
+  clearTimeout(_timerSelic);
+  _timerSelic = setTimeout(() => carregarEstresseSelic(valor), 150);
+});
+
+// ===================== estresse macro: eventos de cauda =====================
+async function carregarEstresseHistorico(forcar = false) {
+  const btn = $('btnEstresseHistorico');
+  btn.disabled = true; btn.innerText = 'Simulando…';
+  aviso('avisoEstresseHistorico', '');
+  try {
+    const res = await fetch(`/api/v1/carteira/estresse/historico?forcar=${forcar ? 'true' : 'false'}`);
+    const dados = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      aviso('avisoEstresseHistorico', esc((dados.detail && dados.detail.motivo)
+        || `O servidor respondeu ${res.status}.`), 'alerta');
+      return;
+    }
+    renderizarEventos(dados);
+  } catch (e) {
+    aviso('avisoEstresseHistorico', `Falha ao simular: ${esc(e.message || e)}`, 'erro');
+  } finally { btn.disabled = false; btn.innerText = 'Simular'; }
+}
+
+function renderizarEventos(dados) {
+  const eventos = dados.eventos || [];
+  $('listaEventos').innerHTML = eventos.map((ev) => {
+    const critico = ev.drawdown_pct != null && ev.drawdown_pct <= -30;
+    const cor = ev.drawdown_pct == null ? '#4a554e' : (critico ? 'var(--vermelho)' : 'var(--ambar)');
+    const rodape = ev.drawdown_pct != null
+      ? `cobertura de ${ev.cobertura_pct.toFixed(0)}% da carteira`
+      : esc(ev.motivo || 'sem histórico dos papéis nesta janela');
+    const piorPapel = ev.pior_papel
+      ? ` · pior papel: <b>${esc(ev.pior_papel.ticker)}</b> (${ev.pior_papel.drawdown_pct.toFixed(1)}%)`
+      : '';
+    return `
+      <div class="p-3.5 rounded" data-evento="${esc(ev.chave)}" style="background: var(--fundo); border: 1px solid var(--borda)">
+        <p class="text-[11px] font-bold">${esc(ev.nome)}</p>
+        <p class="text-[10px] mt-1 leading-relaxed" style="color: var(--suave)">${esc(ev.resumo)}</p>
+        <p class="mono font-bold text-[20px] mt-2.5" style="color:${cor}">
+          ${ev.drawdown_pct != null ? ev.drawdown_pct.toFixed(1) + '%' : '—'}</p>
+        <p class="text-[10px] mt-1" style="color: #3d4a43">${rodape}${piorPapel}</p>
+      </div>`;
+  }).join('');
+}
+
+$('btnEstresseHistorico').addEventListener('click', () => carregarEstresseHistorico(true));
+
+// ===================== radar de cinco eixos =====================
+const EIXOS_ORDEM_PADRAO = ['valor', 'qualidade', 'proventos', 'momentum', 'seguranca'];
+
+async function carregarRadar(forcar = false) {
+  const btn = $('btnRadar');
+  btn.disabled = true; btn.innerText = 'Calculando…';
+  aviso('avisoRadar', '');
+  try {
+    const res = await fetch(`/api/v1/carteira/radar?forcar=${forcar ? 'true' : 'false'}`);
+    const dados = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $('corpoRadar').classList.add('hidden');
+      aviso('avisoRadar', esc((dados.detail && dados.detail.motivo)
+        || `O servidor respondeu ${res.status}.`), 'alerta');
+      return;
+    }
+    const rotulos = dados.rotulos || {};
+    const forte = dados.eixo_mais_forte ? rotulos[dados.eixo_mais_forte] : null;
+    const fraco = dados.eixo_mais_fraco ? rotulos[dados.eixo_mais_fraco] : null;
+    $('radarMedia').innerText = dados.media_geral != null ? dados.media_geral.toFixed(0) : '—';
+    $('radarResumo').innerHTML = [
+      `${dados.papeis || 0} ação(ões) avaliada(s)`,
+      forte ? `mais forte: <b style="color:var(--verde)">${esc(forte)}</b>` : null,
+      fraco ? `mais fraco: <b style="color:var(--ambar)">${esc(fraco)}</b>` : null,
+    ].filter(Boolean).join(' · ');
+    $('radarOrigem').innerText = dados.cache
+      ? `Calculado há ${Math.floor((dados.idade_segundos || 0) / 60)} min.`
+      : 'Calculado agora.';
+    desenharRadar(dados);
+    renderizarTabelaRadarPapeis(dados.papeis_detalhe, dados.eixos_ordem || EIXOS_ORDEM_PADRAO);
+    $('corpoRadar').classList.remove('hidden');
+  } catch (e) {
+    $('corpoRadar').classList.add('hidden');
+    aviso('avisoRadar', `Falha ao calcular: ${esc(e.message || e)}`, 'erro');
+  } finally { btn.disabled = false; btn.innerText = 'Calcular radar'; }
+}
+
+// Pentágono desenhado à mão: cinco eixos fixos, e cada um só entra no
+// polígono preenchido quando tem nota. Eixo sem cobertura corta a aresta
+// em vez de virar zero — zero seria uma nota, e "não apurado" não é nota.
+function desenharRadar(dados) {
+  const ordem = dados.eixos_ordem || EIXOS_ORDEM_PADRAO;
+  const n = ordem.length;
+  const CX = 150, CY = 150, RAIO = 78;
+  const rotulos = dados.rotulos || {};
+  const cobertura = dados.cobertura_pct || {};
+  const eixos = dados.eixos || {};
+
+  const anguloGraus = (i) => -90 + i * (360 / n);
+  const anguloRad = (i) => (anguloGraus(i) * Math.PI) / 180;
+  const pontoAbs = (i, r) => [CX + r * Math.cos(anguloRad(i)), CY + r * Math.sin(anguloRad(i))];
+  const pontoValor = (i, valor) => pontoAbs(i, (Math.max(0, Math.min(100, valor)) / 100) * RAIO);
+
+  let svg = '';
+
+  // Grade: anéis pentagonais em 20/40/60/80/100.
+  [20, 40, 60, 80, 100].forEach((nivel) => {
+    const pts = ordem.map((_, i) => pontoValor(i, nivel).join(',')).join(' ');
+    svg += `<polygon points="${pts}" fill="none" stroke="var(--borda)" stroke-width="1"/>`;
+  });
+
+  // Raios: sólido quando o eixo tem nota na carteira, tracejado quando não.
+  ordem.forEach((chave, i) => {
+    const [x, y] = pontoAbs(i, RAIO);
+    const medido = eixos[chave] !== null && eixos[chave] !== undefined;
+    svg += `<line x1="${CX}" y1="${CY}" x2="${x}" y2="${y}" stroke="var(--borda-viva)"
+                  stroke-width="1" ${medido ? '' : 'stroke-dasharray="3,3" opacity=".55"'}/>`;
+  });
+
+  // Polígono de dados: só conecta eixos com nota, na ordem dos eixos —
+  // eixo sem nota fica de fora e a aresta corta direto para o próximo.
+  const medidos = [];
+  ordem.forEach((chave, i) => {
+    const v = eixos[chave];
+    if (v !== null && v !== undefined) medidos.push(pontoValor(i, v));
+  });
+  if (medidos.length >= 3) {
+    svg += `<polygon points="${medidos.map((p) => p.join(',')).join(' ')}"
+                     fill="rgba(0,229,122,.16)" stroke="var(--verde)" stroke-width="1.6"/>`;
+  } else if (medidos.length >= 2) {
+    svg += `<polyline points="${medidos.map((p) => p.join(',')).join(' ')}"
+                      fill="none" stroke="var(--verde)" stroke-width="1.6"/>`;
+  }
+  medidos.forEach(([x, y]) => { svg += `<circle cx="${x}" cy="${y}" r="3" fill="var(--verde)"/>`; });
+
+  // Rótulos: nome do eixo, nota (ou "—" quando não apurado) e cobertura
+  // quando a nota descreve só parte da carteira.
+  ordem.forEach((chave, i) => {
+    const [lx, ly] = pontoAbs(i, RAIO + 28);
+    const cosAng = Math.cos(anguloRad(i));
+    const anchor = cosAng > 0.25 ? 'start' : cosAng < -0.25 ? 'end' : 'middle';
+    const v = eixos[chave];
+    const cob = cobertura[chave];
+    const temNota = v !== null && v !== undefined;
+    const corTexto = temNota ? 'var(--texto)' : '#4a554e';
+    const valorTexto = temNota ? v.toFixed(0) : '—';
+    const notaCobertura = (temNota && cob != null && cob < 99.5) ? ` (${cob.toFixed(0)}%)` : '';
+    const titulo = temNota
+      ? esc(`${rotulos[chave] || chave}: ${v.toFixed(1)} — cobertura de ${(cob ?? 0).toFixed(0)}% da carteira`)
+      : esc(`${rotulos[chave] || chave}: não apurado — sem cobertura suficiente na carteira`);
+    svg += `<text x="${lx}" y="${ly}" text-anchor="${anchor}" font-size="10" font-weight="700"
+                  fill="var(--suave)" font-family="Inter, sans-serif"><title>${titulo}</title>${esc(rotulos[chave] || chave)}</text>`;
+    svg += `<text x="${lx}" y="${ly + 13}" text-anchor="${anchor}" font-size="10"
+                  fill="${corTexto}" font-family="'IBM Plex Mono', monospace"><title>${titulo}</title>${esc(valorTexto)}${esc(notaCobertura)}</text>`;
+  });
+
+  $('svgRadar').innerHTML = svg;
+}
+
+function renderizarTabelaRadarPapeis(papeis, ordem) {
+  $('tabelaRadarPapeis').innerHTML = (papeis || []).map((p) => {
+    const celulas = ordem.map((chave) => {
+      const v = p.eixos ? p.eixos[chave] : null;
+      return (v === null || v === undefined)
+        ? '<td class="px-2.5 py-2 text-right mono" style="color:#3d4a43" title="Não apurado">—</td>'
+        : `<td class="px-2.5 py-2 text-right mono">${v.toFixed(0)}</td>`;
+    }).join('');
+    return `<tr class="linha" data-radar-ticker="${esc(p.ticker)}"><td class="px-2.5 py-2 mono font-semibold">${esc(p.ticker)}</td>${celulas}</tr>`;
+  }).join('');
+}
+
+$('btnRadar').addEventListener('click', () => carregarRadar(true));
 
 iniciar();
 </script>

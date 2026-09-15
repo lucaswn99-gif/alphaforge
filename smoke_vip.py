@@ -19,6 +19,8 @@ contas.CAMINHO_BANCO = os.path.join(tempfile.mkdtemp(), "contas_smoke.db")
 
 import api
 import uvicorn
+import numpy as np
+import pandas as pd
 
 # Motor falso: o diagnostico real consulta perfil no Yahoo, que o sandbox nao
 # alcanca. O que este smoke prova e a TELA — selo por linha, cartoes do
@@ -27,7 +29,62 @@ import uvicorn
 from routers import filosofias as rota_filosofias
 
 
+class _FonteDeTeste:
+    """Série de preço sintética — cobre as janelas de TODOS os eventos de
+    cauda (2008 a 2022) mais folga, para o Pilar 4 ter o que recortar."""
+
+    def precos(self, ticker_sa, periodo="max"):
+        semente = abs(hash(ticker_sa)) % 1000
+        rng = np.random.default_rng(semente)
+        datas = pd.bdate_range("2007-01-01", "2026-08-01")
+        retornos = rng.normal(0.0002, 0.018, size=len(datas))
+        precos = 10.0 * np.exp(np.cumsum(retornos))
+        return pd.Series(precos, index=datas)
+
+
+class _MomentumDeTeste:
+    def avaliar(self, ticker_sa):
+        # Fração (nao porcentagem) — mesmo formato do MotorMomentum real.
+        # PETR4 vem ruim de proposito, para o radar mostrar um eixo fraco.
+        ruim = "PETR4" in ticker_sa
+        return {"momentum_12m_1m": -0.08 if ruim else 0.24,
+                "volatilidade_anual": 0.44 if ruim else 0.22,
+                "sharpe": 0.05 if ruim else 1.4}
+
+
 class MotorDeTeste:
+    def __init__(self):
+        self.fonte = _FonteDeTeste()
+        self.momentum = _MomentumDeTeste()
+
+    def _balanco_cvm(self, ticker):
+        # Balanco sintetico plausivel. PETR4 fica ALAVANCADO de proposito —
+        # e o caso que prova que o simulador de Selic reage (cobertura cai
+        # com o controle) e que o eixo de Seguranca do radar penaliza.
+        if ticker == "PETR4":
+            return {"ano": 2024, "divida_curto_prazo": 60_000, "divida_longo_prazo": 320_000,
+                     "caixa": 30_000, "ebit": 55_000, "ativo_total": 900_000,
+                     "ativo_circulante": 150_000, "passivo_circulante": 160_000,
+                     "passivo_nao_circulante": 420_000, "patrimonio_liquido": 320_000,
+                     "lucro_liquido": 90_000, "receita_liquida": 500_000,
+                     "lucros_acumulados": 120_000}
+        if ticker == "VALE3":
+            # Caixa liquido: prova o ramo "beneficiado" (juro alto vira ganho).
+            return {"ano": 2024, "divida_curto_prazo": 5_000, "divida_longo_prazo": 15_000,
+                     "caixa": 60_000, "ebit": 60_000, "ativo_total": 400_000,
+                     "ativo_circulante": 120_000, "passivo_circulante": 60_000,
+                     "passivo_nao_circulante": 80_000, "patrimonio_liquido": 260_000,
+                     "lucro_liquido": 70_000, "receita_liquida": 250_000,
+                     "lucros_acumulados": 90_000}
+        return None  # papel fora dos nossos registros: some do balanco, nao vira zero
+
+    def _historico_de_lucro(self, ticker):
+        if ticker == "PETR4":
+            return [90_000, -5_000, 80_000], [2022, 2023, 2024]
+        if ticker == "VALE3":
+            return [70_000, 65_000, 72_000], [2022, 2023, 2024]
+        return [], []
+
     def setor_besst(self, ticker):
         return {"TAEE11": "energia"}.get(ticker)
 
@@ -398,7 +455,79 @@ if __name__ == "__main__":
                pagina.input_value("#alvoAcao") in ("60", "60.0"),
                pagina.input_value("#alvoAcao"))
 
+        # -------- Pilar 4: estresse macro --------
+        # Selic e barata (so SQLite) e carrega sozinha; eventos de cauda sao
+        # caros (historico inteiro) e ficam atras de um botao.
+        pagina.wait_for_selector("#painelEstresse:not(.hidden)", timeout=10000)
+        pagina.wait_for_selector("tr[data-selic-ticker='PETR4']", timeout=8000)
+        tabela_selic = pagina.inner_text("#tabelaSelic")
+        checar("selic: PETR4 e VALE3 aparecem, ZZZZ3 (nao-acao) nao aparece",
+               "PETR4" in tabela_selic and "VALE3" in tabela_selic
+               and "ZZZZ3" not in tabela_selic, tabela_selic[:250])
+        checar("selic meta aparece no rotulo",
+               "%" in pagina.inner_text("#selicMetaLabel"),
+               pagina.inner_text("#selicMetaLabel"))
+
+        # VALE3 tem caixa liquido no balanco de teste: juro alto vira ganho,
+        # independente da taxa simulada.
+        estado_vale_selic = pagina.eval_on_selector(
+            "tr[data-selic-ticker='VALE3'] td[data-celula='estado'] span", "el => el.innerText")
+        checar("papel com caixa liquido fica Beneficiado por juro alto",
+               estado_vale_selic.strip() == "Beneficiado", estado_vale_selic)
+
+        # Arrasta o controle para uma Selic bem acima do ponto onde a divida
+        # alavancada do PETR4 de teste deixa de fechar a conta (>~15,7%).
+        pagina.eval_on_selector(
+            "#controleSelic",
+            "(el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }",
+            20)
+        pagina.wait_for_function(
+            "() => { const el = document.querySelector(\"tr[data-selic-ticker='PETR4'] "
+            "td[data-celula='estado'] span\"); return el && el.innerText.trim() === 'Crítico'; }",
+            timeout=10000)
+        checar("subir a Selic simulada empurra papel alavancado para Critico", True)
+        checar("o numero da Selic simulada acompanha o controle",
+               "20" in pagina.inner_text("#selicSimulada"), pagina.inner_text("#selicSimulada"))
+
+        # Eventos de cauda: sob pedido, por ser caro.
+        pagina.click("#btnEstresseHistorico")
+        pagina.wait_for_selector("[data-evento]", timeout=15000)
+        eventos_texto = pagina.inner_text("#listaEventos")
+        checar("os cinco eventos de cauda aparecem",
+               all(nome in eventos_texto for nome in (
+                   "Crise financeira de 2008", "Recessão brasileira de 2015-16",
+                   "Joesley Day", "Pandemia de 2020", "Aperto monetário de 2021-22")),
+               eventos_texto[:400])
+        checar("evento mostra queda em porcentagem, nao em branco",
+               "%" in eventos_texto, eventos_texto[:200])
+
+        # -------- Pilar 5: radar de cinco eixos --------
+        pagina.click("#btnRadar")
+        pagina.wait_for_selector("#corpoRadar:not(.hidden)", timeout=15000)
+        checar("media geral do radar e um numero, nao travessao",
+               pagina.inner_text("#radarMedia").strip() not in ("", "—"),
+               pagina.inner_text("#radarMedia"))
+        resumo_radar = pagina.inner_text("#radarResumo")
+        checar("resumo do radar cita quantas acoes e o eixo mais forte/fraco",
+               "avaliada" in resumo_radar and "mais forte" in resumo_radar
+               and "mais fraco" in resumo_radar, resumo_radar)
+
+        svg_textos = pagina.eval_on_selector_all(
+            "#svgRadar text", "els => els.map(e => e.textContent)")
+        checar("os cinco eixos aparecem no SVG do radar",
+               all(any(rotulo in txto for txto in svg_textos) for rotulo in
+                   ("Valor", "Qualidade", "Proventos", "Momentum", "Segurança")),
+               svg_textos)
+        checar("radar desenhou o poligono de dados, nao so a grade",
+               pagina.eval_on_selector_all("#svgRadar polygon", "els => els.length") >= 6,
+               pagina.eval_on_selector_all("#svgRadar polygon", "els => els.length"))
+
+        tabela_radar = pagina.inner_text("#tabelaRadarPapeis")
+        checar("tabela do radar traz PETR4 e VALE3",
+               "PETR4" in tabela_radar and "VALE3" in tabela_radar, tabela_radar[:250])
+
         # -------- sair --------
+
         pagina.click("#btnSair")
         pagina.wait_for_url("**/vip/login", timeout=8000)
         checar("sair devolve ao login", pagina.url.endswith("/vip/login"))
