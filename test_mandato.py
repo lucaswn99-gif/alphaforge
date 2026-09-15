@@ -58,6 +58,12 @@ class MotorFalso:
                               "alavancagem_ok": True, "abaixo_do_teto": True},
                 "criterios_nao_apurados": [], "aprovado": True}
 
+    def _balanco_cvm(self, ticker):
+        self.chamadas.append(("balanco", ticker))
+        return {"patrimonio_liquido": 100.0, "lucro_liquido": 28.0,
+                "receita_liquida": 200.0, "divida_curto_prazo": 10.0,
+                "divida_longo_prazo": 70.0, "caixa": 12.0, "ebit": 11.0}
+
 
 def _posicao(ticker, filosofia=None):
     return {"ticker": ticker, "classe": "acao", "preco_medio": 30.0,
@@ -120,6 +126,21 @@ class TestRoteamentoDoDiagnostico(unittest.TestCase):
         linha = saida["posicoes"][0]["diagnostico"]
         self.assertEqual(linha["estado"], diagnostico.NAO_APURADO)
         self.assertIn("Escolha a filosofia", linha["resumo"])
+
+    def test_nenhuma_mostra_dado_cru_sem_veredito(self):
+        """"Nenhuma" é escolha deliberada, não pendência: nem chama Barsi/
+        Bazin/Graham para veredito, e o resumo carrega o número, não um
+        aprovado/reprovado."""
+        motor = MotorFalso()
+        saida = diagnostico.diagnosticar(motor, [_posicao("TAEE11")],
+                                         filosofia_carteira="nenhuma")
+        self.assertEqual(sorted(motor.chamadas), [("balanco", "TAEE11"),
+                                                   ("graham", "TAEE11")])
+        linha = saida["posicoes"][0]["diagnostico"]
+        self.assertEqual(linha["estado"], diagnostico.SEM_FILOSOFIA)
+        self.assertIn("ROE", linha["resumo"])
+        self.assertNotIn("aprovado", linha["resumo"].lower())
+        self.assertNotIn("reprovado", linha["resumo"].lower())
 
     def test_barsi_fora_do_besst_e_nao_apurado_nao_reprovacao(self):
         """Barsi é uma tese sobre setores perenes. Aplicá-la a uma varejista
@@ -321,12 +342,14 @@ class TestRotasDoMandato(unittest.TestCase):
         for metodo, rota, corpo in self.ROTAS:
             self.assertEqual(self._chamar(metodo, rota, corpo).status_code, 402, rota)
 
-    def test_lista_as_tres_opcoes_com_resumo(self):
+    def test_lista_as_quatro_opcoes_com_resumo(self):
+        """As três teses mais "nenhuma" — uma escolha deliberada de não ser
+        julgado por nenhuma delas, não a ausência de escolha."""
         self._entrar("vip1@teste.com")
         corpo = self.cliente.get("/api/v1/carteira/filosofia").json()
         self.assertFalse(corpo["definida"])
         self.assertEqual([o["chave"] for o in corpo["opcoes"]],
-                         ["barsi", "bazin", "graham"])
+                         ["barsi", "bazin", "graham", "nenhuma"])
         self.assertTrue(all(o["resumo"] for o in corpo["opcoes"]))
 
     def test_define_e_le_de_volta(self):
@@ -336,6 +359,17 @@ class TestRotasDoMandato(unittest.TestCase):
         self.assertEqual(gravar.status_code, 200)
         self.assertEqual(
             self.cliente.get("/api/v1/carteira/filosofia").json()["filosofia"], "bazin")
+
+    def test_nenhuma_e_uma_escolha_valida_pela_rota(self):
+        """Gravar "nenhuma" não é erro nem equivale a não ter escolhido —
+        `definida` continua True e a leitura devolve "nenhuma" de volta."""
+        self._entrar("vip2b@teste.com")
+        gravar = self.cliente.put("/api/v1/carteira/filosofia",
+                                  json={"filosofia": "nenhuma"})
+        self.assertEqual(gravar.status_code, 200)
+        corpo = self.cliente.get("/api/v1/carteira/filosofia").json()
+        self.assertTrue(corpo["definida"])
+        self.assertEqual(corpo["filosofia"], "nenhuma")
 
     def test_filosofia_invalida_volta_422_com_motivo(self):
         self._entrar("vip3@teste.com")

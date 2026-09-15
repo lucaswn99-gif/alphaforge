@@ -336,8 +336,9 @@ if __name__ == "__main__":
         pagina.wait_for_selector("#painelDiagnostico:not(.hidden)", timeout=10000)
         cartoes = pagina.inner_text("#cartoesDiagnostico")
         checar("painel de diagnóstico aparece", "Desconformidade" in cartoes, cartoes[:200])
-        checar("os quatro estados aparecem, não três",
-               all(r in cartoes for r in ("Desconformidade", "Atenção", "Conforme", "Não apurado")),
+        checar("os cinco estados aparecem, incluindo Sem filosofia",
+               all(r in cartoes for r in ("Desconformidade", "Atenção", "Conforme",
+                                          "Não apurado", "Sem filosofia")),
                cartoes[:250])
 
         tabela = pagina.inner_text("#tabelaPosicoes")
@@ -381,8 +382,8 @@ if __name__ == "__main__":
         # linhas que nao sao acao.
         checar("o seletor de filosofia aparece",
                pagina.is_visible("#opcoesFilosofia"))
-        checar("as tres filosofias aparecem com resumo",
-               pagina.eval_on_selector_all("#opcoesFilosofia button", "els => els.length") == 3)
+        checar("as quatro opcoes de filosofia aparecem com resumo (3 teses + nenhuma)",
+               pagina.eval_on_selector_all("#opcoesFilosofia button", "els => els.length") == 4)
 
         pagina.click("#opcoesFilosofia button >> nth=1")     # Bazin
         pagina.wait_for_timeout(900)
@@ -397,6 +398,32 @@ if __name__ == "__main__":
             ".map(e => e.innerText)")
         checar("a filosofia persiste entre recargas",
                any("Bazin" in t for t in marcada), marcada)
+
+        # -------- "nenhuma": escolha deliberada, nao pendencia --------
+        pagina.click("#opcoesFilosofia button >> nth=3")     # Nenhuma
+        pagina.wait_for_timeout(900)
+        checar("nenhuma fica marcada e o aviso de pendencia some",
+               "Nenhuma" in pagina.inner_text("#opcoesFilosofia")
+               and pagina.inner_text("#avisoFilosofia").strip() == "",
+               (pagina.inner_text("#opcoesFilosofia"), pagina.inner_text("#avisoFilosofia")))
+        pagina.wait_for_function(
+            "() => { const el = document.querySelector(\"tr[data-ticker='PETR4'] "
+            "td[data-celula='diagnostico'] span\"); return el && el.innerText.trim() === 'Sem filosofia'; }",
+            timeout=10000)
+        titulo_sem_filosofia = pagina.eval_on_selector(
+            "tr[data-ticker='PETR4'] td[data-celula='diagnostico'] span", "el => el.title")
+        checar("sem filosofia mostra dado bruto (ROE ou P/VP), nao veredito",
+               "ROE" in titulo_sem_filosofia or "P/VP" in titulo_sem_filosofia,
+               titulo_sem_filosofia)
+        checar("sem filosofia nao usa linguagem de veredito",
+               "aprovado" not in titulo_sem_filosofia.lower()
+               and "reprovado" not in titulo_sem_filosofia.lower(),
+               titulo_sem_filosofia)
+
+        # Volta para Bazin: o resto do smoke (Pilar 3, bloqueio de aporte por
+        # desconformidade) depende dela.
+        pagina.click("#opcoesFilosofia button >> nth=1")     # Bazin
+        pagina.wait_for_timeout(900)
 
         # A regua por papel so existe para acao.
         colunas = pagina.eval_on_selector_all(
@@ -525,6 +552,242 @@ if __name__ == "__main__":
         tabela_radar = pagina.inner_text("#tabelaRadarPapeis")
         checar("tabela do radar traz PETR4 e VALE3",
                "PETR4" in tabela_radar and "VALE3" in tabela_radar, tabela_radar[:250])
+
+        # -------- Renda fixa: cadastro e marcação na curva --------
+        # Painel independente da carteira de ação: existe mesmo antes de
+        # cadastrar nada, e o pré-fixado não depende de rede nenhuma.
+        checar("carteira vazia comeca com o estado vazio de renda fixa",
+               pagina.is_visible("#estadoVazioRendaFixa"))
+
+        pagina.fill("#rfEmissor", "Banco Exemplo")
+        pagina.select_option("#rfTipo", "cdb")
+        pagina.select_option("#rfIndexador", "pre")
+        pagina.fill("#rfTaxa", "10")
+        pagina.fill("#rfDataAplicacao", "2024-01-02")
+        pagina.fill("#rfValorAplicado", "10000")
+        pagina.click("#btnRendaFixaAdicionar")
+        pagina.wait_for_timeout(700)
+
+        tabela_rf = pagina.inner_text("#tabelaRendaFixa")
+        checar("posicao pre-fixada aparece na tabela com tipo e indexador",
+               "Banco Exemplo" in tabela_rf and "CDB" in tabela_rf and "Pré" in tabela_rf,
+               tabela_rf)
+        rentab_pre = pagina.eval_on_selector(
+            "#tabelaRendaFixa tr td:nth-child(6)", "el => el.innerText")
+        checar("pre-fixado composto desde 2024 mostra rentabilidade positiva",
+               rentab_pre.startswith("+"), rentab_pre)
+        resumo_rf = pagina.inner_text("#resumoRendaFixa")
+        checar("resumo de renda fixa mostra aplicado e atual (curva)",
+               "aplicado" in resumo_rf.lower() and "curva" in resumo_rf.lower(), resumo_rf)
+
+        # Indexador ao CDI sem rede — o sandbox não alcança o BCB, a mesma
+        # premissa já usada acima para o Yahoo. Prova que a marcação volta
+        # "não apurado" em vez de inventar uma correção.
+        pagina.fill("#rfEmissor", "Fundo CDI Exemplo")
+        pagina.select_option("#rfTipo", "lci")
+        pagina.select_option("#rfIndexador", "pct_cdi")
+        pagina.fill("#rfTaxa", "100")
+        pagina.fill("#rfDataAplicacao", "2024-01-02")
+        pagina.fill("#rfValorAplicado", "5000")
+        pagina.click("#btnRendaFixaAdicionar")
+        pagina.wait_for_function(
+            "() => (document.getElementById('tabelaRendaFixa').innerText || '')"
+            ".toLowerCase().includes('não apurado')",
+            timeout=15000)
+        checar("indexador sem rede mostra nao apurado, nunca correcao inventada",
+               "não apurado" in pagina.inner_text("#tabelaRendaFixa").lower(),
+               pagina.inner_text("#tabelaRendaFixa"))
+
+        # Limpa as duas posições de teste.
+        for _ in range(2):
+            pagina.click("#tabelaRendaFixa button:has-text('Remover')")
+            pagina.wait_for_timeout(500)
+        checar("remover as duas posicoes volta ao estado vazio",
+               pagina.is_visible("#estadoVazioRendaFixa"))
+
+        # -------- Perfil do investidor e objetivo --------
+        # Campo simples, sem questionário: o que só o browser prova é que os
+        # campos condicionais aparecem/somem com o objetivo e que o valor
+        # volta preenchido depois de recarregar.
+        checar("campos de renda passiva comecam escondidos",
+               not pagina.is_visible("#camposRendaPassiva"))
+        checar("campos de aposentadoria comecam escondidos",
+               not pagina.is_visible("#camposAposentadoria"))
+
+        pagina.select_option("#perfilInvestidor", "moderado")
+        pagina.select_option("#objetivoCarteira", "aposentadoria")
+        checar("selecionar aposentadoria mostra os campos de aposentadoria",
+               pagina.is_visible("#camposAposentadoria"))
+        checar("aposentadoria nao mostra os campos de renda passiva",
+               not pagina.is_visible("#camposRendaPassiva"))
+
+        pagina.fill("#horizonteAnos", "20")
+        pagina.fill("#metaPatrimonio", "1500000")
+        pagina.click("#btnSalvarPerfil")
+        pagina.wait_for_timeout(600)
+        checar("aviso confirma que o perfil foi salvo",
+               "salvo" in pagina.inner_text("#avisoPerfil").lower(),
+               pagina.inner_text("#avisoPerfil"))
+
+        pagina.reload(wait_until="networkidle")
+        pagina.wait_for_selector("#painelCarteira:not(.hidden)", timeout=8000)
+        pagina.wait_for_function(
+            "() => document.getElementById('perfilInvestidor').value === 'moderado'",
+            timeout=8000)
+        checar("perfil e objetivo persistem entre recargas",
+               pagina.eval_on_selector("#objetivoCarteira", "el => el.value") == "aposentadoria"
+               and pagina.eval_on_selector("#horizonteAnos", "el => el.value") == "20")
+        checar("campo de aposentadoria reaparece ja marcado apos recarregar",
+               pagina.is_visible("#camposAposentadoria"))
+
+        # Trocar para renda passiva não pode deixar resto do horizonte antigo.
+        pagina.select_option("#objetivoCarteira", "renda_passiva")
+        pagina.fill("#metaRetiradaMensal", "6000")
+        pagina.click("#btnSalvarPerfil")
+        pagina.wait_for_timeout(600)
+        pagina.reload(wait_until="networkidle")
+        pagina.wait_for_selector("#painelCarteira:not(.hidden)", timeout=8000)
+        pagina.wait_for_function(
+            "() => document.getElementById('objetivoCarteira').value === 'renda_passiva'",
+            timeout=8000)
+        horizonte_depois = pagina.eval_on_selector("#horizonteAnos", "el => el.value")
+        checar("trocar de objetivo nao deixa resto do horizonte anterior",
+               horizonte_depois == "", horizonte_depois)
+
+        # -------- Backtest de 12 meses --------
+        # PETR4 e VALE3 têm histórico sintético desde 2007 (ver _FonteDeTeste
+        # acima) — cobrem a janela inteira, então a carteira toda entra na
+        # simulação (cobertura de 100%, sem sem_historico).
+        pagina.click("#btnBacktest")
+        pagina.wait_for_selector("#corpoBacktest:not(.hidden)", timeout=15000)
+        retorno_texto = pagina.inner_text("#backtestRetorno")
+        checar("retorno do backtest e um numero, nao travessao",
+               retorno_texto.strip() not in ("", "—") and "%" in retorno_texto,
+               retorno_texto)
+        resumo_backtest = pagina.inner_text("#backtestResumo")
+        checar("resumo do backtest cita posicoes e cobertura",
+               "posição" in resumo_backtest and "cobertura" in resumo_backtest,
+               resumo_backtest)
+        checar("cobertura de 100% quando as duas acoes tem historico completo",
+               "100%" in resumo_backtest, resumo_backtest)
+        checar("backtest nao desenhou nenhuma posicao em sem_historico",
+               pagina.inner_text("#listaSemHistoricoBacktest").strip() == "")
+        pontos_svg = pagina.eval_on_selector_all(
+            "#svgBacktest polyline", "els => els.length")
+        checar("backtest desenhou a linha da serie, nao so a grade",
+               pontos_svg >= 1, pontos_svg)
+        origem_backtest = pagina.inner_text("#backtestOrigem")
+        checar("rotulo do backtest deixa claro que e simulacao, nao cotacao",
+               "Simulação" in origem_backtest and "Calculado" in origem_backtest,
+               origem_backtest)
+
+        # -------- Projeção de capital --------
+        # O backtest acima ja preencheu a taxa sugerida; o perfil ficou com
+        # objetivo "renda passiva" e meta de R$ 6.000/mes do bloco anterior —
+        # prova que o gap usa o que ja esta cadastrado, sem repetir consulta.
+        taxa_sugerida = pagina.eval_on_selector("#projTaxaAnual", "el => el.value")
+        checar("taxa sugerida vem pre-preenchida com o retorno do backtest",
+               taxa_sugerida != "", taxa_sugerida)
+
+        pagina.fill("#projAporteMensal", "500")
+        pagina.fill("#projHorizonteAnos", "10")
+        pagina.click("#btnProjetar")
+        pagina.wait_for_selector("#corpoProjecao:not(.hidden)", timeout=15000)
+
+        aviso_hipotetico = pagina.inner_text("#projAvisoHipotetico")
+        checar("aviso hipotetico aparece em destaque, nao em rodape",
+               "hipotética" in aviso_hipotetico.lower(), aviso_hipotetico)
+        checar("valor final da projecao nao fica em branco",
+               pagina.inner_text("#projValorFinal").strip() not in ("", "—", "R$ —"),
+               pagina.inner_text("#projValorFinal"))
+        pontos_svg_proj = pagina.eval_on_selector_all(
+            "#svgProjecao polyline", "els => els.length")
+        checar("projecao desenhou a linha da serie",
+               pontos_svg_proj >= 1, pontos_svg_proj)
+
+        gaps_texto = pagina.inner_text("#listaGapsProjecao")
+        checar("gap da meta de renda passiva aparece como falta/sobra, nunca binario",
+               ("Faltam" in gaps_texto or "Sobram" in gaps_texto) and "R$" in gaps_texto,
+               gaps_texto)
+        checar("gap cita a meta cadastrada de renda passiva",
+               "Renda passiva" in gaps_texto, gaps_texto)
+
+        # Taxa/horizonte vazios: a tela recusa sem chamar o servidor.
+        pagina.fill("#projTaxaAnual", "")
+        pagina.click("#btnProjetar")
+        pagina.wait_for_timeout(300)
+        checar("taxa vazia e recusada na tela, com aviso",
+               "informe" in pagina.inner_text("#avisoProjecao").lower(),
+               pagina.inner_text("#avisoProjecao"))
+
+        # -------- Fundos de investimento (Etapa A) --------
+        # Sem cota diária ainda: prova que a tela nunca finge uma
+        # rentabilidade, e que cotas x valor da cota vira o aplicado certo.
+        checar("carteira nova comeca com o estado vazio de fundos",
+               pagina.is_visible("#estadoVazioFundos"))
+
+        pagina.fill("#fundoNome", "XP Multimercado FIC FIM")
+        pagina.fill("#fundoCnpj", "12.345.678/0001-99")
+        pagina.select_option("#fundoClasse", "multimercado")
+        pagina.fill("#fundoCotas", "100")
+        pagina.fill("#fundoValorCota", "150")
+        pagina.fill("#fundoDataAplicacao", "2024-01-02")
+        pagina.click("#btnFundoAdicionar")
+        pagina.wait_for_timeout(700)
+
+        tabela_fundos = pagina.inner_text("#tabelaFundos")
+        checar("fundo cadastrado aparece na tabela com classe e CNPJ",
+               "XP Multimercado" in tabela_fundos and "Multimercado" in tabela_fundos
+               and "12.345.678/0001-99" in tabela_fundos, tabela_fundos)
+        checar("aplicado bate com cotas vezes valor da cota (100 x 150 = 15.000)",
+               "15.000,00" in tabela_fundos, tabela_fundos)
+        checar("fundo aparece marcado como nao apurado (sem cota diaria ainda)",
+               "não apurado" in tabela_fundos.lower(), tabela_fundos)
+        resumo_fundos = pagina.inner_text("#resumoFundos")
+        checar("resumo de fundos avisa que a cota diaria ainda nao foi coletada (sem CVM no sandbox)",
+               "sem cota diária coletada" in resumo_fundos, resumo_fundos)
+
+        pagina.click("#tabelaFundos button:has-text('Remover')")
+        pagina.wait_for_timeout(500)
+        checar("remover o fundo volta ao estado vazio",
+               pagina.is_visible("#estadoVazioFundos"))
+
+        # -------- Relatório em PDF --------
+        # Tela prévia com checkbox por cenário (a escolha do usuário nas
+        # perguntas de design do Task #72) — nunca "gerar com tudo" direto.
+        # O bloco anterior esvaziou a taxa de propósito para testar a recusa
+        # client-side; aqui a repõe, simulando o assessor que já projetou e
+        # agora só quer o relatório com a mesma premissa ainda na tela.
+        pagina.fill("#projTaxaAnual", "10")
+        pagina.click("#btnAbrirRelatorio")
+        pagina.wait_for_selector("#blocoRelatorioPrevia:not(.hidden)", timeout=8000)
+        checkboxes_evento = pagina.eval_on_selector_all(
+            ".relatorio-evento", "els => els.length")
+        checar("tela previa lista os cinco cenarios de estresse",
+               checkboxes_evento == 5, checkboxes_evento)
+        checar("cenarios vem marcados por padrao (usuario desmarca, nao marca)",
+               pagina.eval_on_selector_all(
+                   ".relatorio-evento:checked", "els => els.length") == 5)
+        # Taxa/aporte/horizonte já ficaram preenchidos pelo bloco de projeção
+        # acima — a projeção deve vir habilitada e marcada, sem redigitar.
+        checar("checkbox de projecao vem habilitado quando ja ha premissa preenchida",
+               pagina.eval_on_selector("#relatorioIncluirProjecao", "el => !el.disabled"))
+        checar("checkbox de projecao vem marcado por padrao nesse caso",
+               pagina.eval_on_selector("#relatorioIncluirProjecao", "el => el.checked"))
+
+        with pagina.expect_download(timeout=15000) as info_download:
+            pagina.click("#btnGerarRelatorio")
+        download = info_download.value
+        caminho_pdf = os.path.join(tempfile.mkdtemp(), "relatorio-smoke.pdf")
+        download.save_as(caminho_pdf)
+        with open(caminho_pdf, "rb") as arq:
+            conteudo_pdf = arq.read()
+        checar("baixar relatorio devolve um PDF de verdade, nao um erro disfarcado",
+               conteudo_pdf.startswith(b"%PDF"), conteudo_pdf[:20])
+        checar("PDF gerado tem tamanho plausivel (varias secoes preenchidas)",
+               len(conteudo_pdf) > 1000, len(conteudo_pdf))
+        checar("tela previa fecha sozinha depois do download",
+               pagina.is_hidden("#blocoRelatorioPrevia"))
 
         # -------- sair --------
 

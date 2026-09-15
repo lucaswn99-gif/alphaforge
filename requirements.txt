@@ -28,6 +28,11 @@ requests==2.34.2
 urllib3==2.7.0
 pypdf==6.18.0
 
+# Geração do relatório em PDF (modules/relatorio.py) — desenho vetorial de
+# tabela e texto, não conversão de HTML: sem dependência de motor de
+# renderização de página (nada de wkhtmltopdf/Chromium no servidor).
+reportlab==4.4.10
+
 # Assinatura pelo Google Play: assina o JWT da conta de servico e renova o
 # token de acesso da Google Play Developer API. Unica dependencia do fluxo de
 # pagamento — assinar RS256 a mao num caminho que decide quem pagou seria

@@ -42,16 +42,25 @@ CONFORME = "conforme"
 ATENCAO = "atencao"
 DESCONFORME = "desconforme"
 NAO_APURADO = "nao_apurado"
+# Não é o mesmo que NAO_APURADO. NAO_APURADO é "não foi possível medir" ou
+# "ainda não escolheu a filosofia" — os dois pedem ação (esperar dado, ou
+# escolher). SEM_FILOSOFIA é "o investidor escolheu não ser julgado por
+# nenhuma das três teses", uma decisão já tomada, e a tela não pode tratar as
+# duas coisas como se fossem a mesma pendência.
+SEM_FILOSOFIA = "sem_filosofia"
 
 ROTULOS = {
     CONFORME: "Conforme",
     ATENCAO: "Atenção",
     DESCONFORME: "Desconformidade",
     NAO_APURADO: "Não apurado",
+    SEM_FILOSOFIA: "Sem filosofia",
 }
 
 # Ordem de gravidade, para ordenar a lista pelo que pede olhar primeiro.
-GRAVIDADE = {DESCONFORME: 0, ATENCAO: 1, NAO_APURADO: 2, CONFORME: 3}
+# "Sem filosofia" fica ao lado de "conforme": não é urgência, é modo de leitura.
+GRAVIDADE = {DESCONFORME: 0, ATENCAO: 1, NAO_APURADO: 2, SEM_FILOSOFIA: 3,
+            CONFORME: 4}
 
 # Consultas simultâneas ao avaliar a carteira. Cada posição pede perfil no
 # Yahoo; o mesmo teto do radar de fundos, pelo mesmo motivo — é o `.info` que
@@ -200,6 +209,62 @@ def _avaliar_acao(motor, ticker, filosofia):
     return estado, resumo, detalhes, "Graham (investidor defensivo)", extras
 
 
+def _avaliar_sem_filosofia(motor, ticker):
+    """(estado, resumo, detalhes, metodo, extras) quando o investidor escolheu
+    não aplicar nenhuma filosofia. Reaproveita o que Graham já calcula
+    (preço, balanço, múltiplos), mas só os NÚMEROS — nunca `aprovado` nem
+    `motivos`. Misturar os dois devolveria exatamente o veredito que o
+    investidor pediu para não receber."""
+    try:
+        linha = motor._avaliar_graham(ticker, aplicar_momentum=False)
+    except Exception:  # noqa: BLE001
+        linha = None
+    try:
+        balanco = motor._balanco_cvm(ticker) or {}
+    except Exception:  # noqa: BLE001
+        balanco = {}
+
+    extras = {}
+    if linha:
+        extras.update(numero_graham=linha.get("numero_graham"),
+                      pvp=linha.get("pvp"),
+                      produto_pl_pvp=linha.get("produto_pl_pvp"))
+
+    from modules import quant
+    patrimonio = balanco.get("patrimonio_liquido")
+    lucro = balanco.get("lucro_liquido")
+    receita = balanco.get("receita_liquida")
+    if lucro is not None and patrimonio:
+        extras["roe"] = round(lucro / patrimonio * 100.0, 2)
+    if lucro is not None and receita:
+        extras["margem_liquida"] = round(lucro / receita * 100.0, 2)
+    divida = quant.divida_liquida(balanco.get("divida_curto_prazo"),
+                                  balanco.get("divida_longo_prazo"),
+                                  balanco.get("caixa"))
+    dl_ebit = quant.dl_sobre_ebit(divida, balanco.get("ebit"))
+    if dl_ebit is not None:
+        extras["dl_ebit"] = round(dl_ebit, 2)
+
+    # O resumo é onde a tela HOJE mostra o texto do estado (a bolha traz só o
+    # rótulo; o número mora no title). "Sem veredito" sem o dado junto seria
+    # uma régua a menos sem nada em troca — o ponto inteiro de "nenhuma" é
+    # entregar o número cru em vez do veredito.
+    partes = []
+    if extras.get("pvp") is not None:
+        partes.append(f"P/VP {extras['pvp']:.2f}")
+    if extras.get("roe") is not None:
+        partes.append(f"ROE {extras['roe']:.1f}%")
+    if extras.get("margem_liquida") is not None:
+        partes.append(f"margem líquida {extras['margem_liquida']:.1f}%")
+    if extras.get("dl_ebit") is not None:
+        partes.append(f"DL/EBIT {extras['dl_ebit']:.2f}x")
+
+    resumo = ("Sem preço ou balanço suficiente para mostrar os números."
+             if not partes else
+             "Sem filosofia aplicada — " + " · ".join(partes) + ".")
+    return SEM_FILOSOFIA, resumo, [], "Nenhuma (dado bruto)", extras
+
+
 def _veredito_fii(informe, preco):
     """(estado, resumo, detalhes) pelo desconto sobre o valor patrimonial."""
     pvp = (informe or {}).get("pvp")
@@ -232,6 +297,14 @@ def avaliar_posicao(motor, posicao):
                     metodo="Não definido",
                     resumo=("Escolha a filosofia da carteira para esta posição "
                             "ser medida."))
+            elif filosofia == mandato.NENHUMA:
+                # Diferente do caso acima: aqui já HOUVE escolha — a de não
+                # ser julgado por nenhuma das três teses. Não é a mesma
+                # pendência, e por isso não é o mesmo estado.
+                estado, resumo, detalhes, metodo, extras = _avaliar_sem_filosofia(
+                    motor, ticker)
+                base.update(metodo=metodo, estado=estado, resumo=resumo,
+                            detalhes=detalhes, filosofia=filosofia, **extras)
             else:
                 estado, resumo, detalhes, metodo, extras = _avaliar_acao(
                     motor, ticker, filosofia)

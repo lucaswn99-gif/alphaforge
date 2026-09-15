@@ -17,13 +17,16 @@ deliberada, não convenção acidental.
 import os
 import time
 from collections import defaultdict, deque
+from datetime import date, datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from modules import (alvos, carteira, diagnostico, estresse, importacao,
-                     mandato, planos, radar, rebalanceamento, taxas)
+from modules import (alvos, backtest, carteira, diagnostico, estresse,
+                     fundos, importacao, mandato, perfil, planos, projecao,
+                     radar, rebalanceamento, relatorio, renda_fixa, taxas)
 
 router = APIRouter(tags=["VIP & Carteira"])
 
@@ -172,8 +175,10 @@ def diagnosticar_carteira(forcar: bool = False,
                           ctx: planos.Contexto = Depends(_vip)):
     """Cada posição medida contra a filosofia que cabe à classe dela.
 
-    Quatro estados, não três: `nao_apurado` existe para o que não deu para
-    medir, em vez de virar desconformidade — ver `modules/diagnostico.py`.
+    Cinco estados: `nao_apurado` existe para o que não deu para medir, em vez
+    de virar desconformidade, e `sem_filosofia` existe para quem escolheu
+    deliberadamente não ser julgado por nenhuma das três teses — os dois não
+    são a mesma pendência. Ver `modules/diagnostico.py`.
     """
     usuario_id = ctx.usuario["id"]
     dados = carteira.listar(usuario_id)
@@ -463,6 +468,77 @@ def _series_completas(motor, tickers):
     return series
 
 
+# --------------------------------------------------- Backtest de 12 meses
+
+_cache_backtest = {}
+
+
+@router.get("/api/v1/carteira/backtest")
+def backtest_carteira(forcar: bool = False, ctx: planos.Contexto = Depends(_vip)):
+    """Série de valor da carteira INTEIRA (ação/FII/ETF + renda fixa + fundo)
+    nos últimos 12 meses, e o retorno acumulado do período.
+
+    Ação/FII/ETF entram pelo preço histórico; renda fixa pelo replay da
+    fórmula do indexador contratado; fundo pela cota diária da CVM (Etapa B
+    de `modules/fundos.py`) — nunca por leitura de mercado. Só entra quem tem
+    histórico para a janela inteira (mesmo critério do Pilar 4); quem fica de
+    fora aparece em `sem_historico`, sem sumir calado.
+    """
+    usuario_id = ctx.usuario["id"]
+    posicoes_acao = carteira.listar(usuario_id)["posicoes"]
+    posicoes_rf = renda_fixa.listar(usuario_id)["posicoes"]
+    posicoes_fundos = fundos.listar(usuario_id)["posicoes"]
+
+    if not posicoes_acao and not posicoes_rf and not posicoes_fundos:
+        raise HTTPException(status_code=422, detail={
+            "erro": "carteira_vazia",
+            "motivo": "Cadastre ao menos uma posição — ação, FII, ETF, renda fixa ou fundo."})
+
+    assinatura = (tuple(sorted((p["ticker"], p["quantidade"]) for p in posicoes_acao)),
+                 tuple(sorted((p["id"], p["valor_aplicado"]) for p in posicoes_rf)),
+                 tuple(sorted((p["id"], p["valor_atual"]) for p in posicoes_fundos)))
+    chave = (usuario_id, assinatura)
+    agora = time.time()
+    guardado = _cache_backtest.get(chave)
+    if guardado and not forcar and agora - guardado[0] < _CACHE_TTL:
+        return {**guardado[1], "cache": True, "idade_segundos": int(agora - guardado[0])}
+
+    hoje = date.today()
+    datas = backtest.pontos_mensais(hoje, meses=12)
+
+    from routers import filosofias as rota_filosofias
+    motor = rota_filosofias.motor()
+    series_precos = _series_completas(motor, [p["ticker"] for p in posicoes_acao])
+    precos_por_ticker = {ticker: _recortar_com_datas(serie, datas[0], hoje)
+                         for ticker, serie in series_precos.items()}
+
+    # Peso por CUSTO para ação/FII/ETF (mesmo critério do Pilar 4 — buscar a
+    # cotação de hoje de cada papel só para isso dobraria o custo da rota);
+    # peso por VALOR ATUAL (marcação na curva) para renda fixa, que já foi
+    # calculado sem custo extra por `renda_fixa.listar`.
+    acoes_entrada = [{"ticker": p["ticker"], "peso": p.get("custo_total") or 0.0}
+                     for p in posicoes_acao]
+    rf_entrada = [{"identificador": p["emissor"], "peso": p["valor_atual"],
+                  "data_aplicacao": date.fromisoformat(p["data_aplicacao"]),
+                  "indexador": p["indexador"], "taxa": p["taxa"]}
+                 for p in posicoes_rf]
+    # Peso por VALOR ATUAL — mesmo critério de renda fixa acima; sem cota
+    # coletada ainda vira o aplicado (fundos.listar já resolve isso).
+    fundos_entrada = [{"identificador": p["nome_fundo"], "peso": p["valor_atual"],
+                      "cnpj": p["cnpj"]}
+                     for p in posicoes_fundos]
+
+    resultado = backtest.carteira_12_meses(datas, acoes_entrada, precos_por_ticker,
+                                           rf_entrada, posicoes_fundos=fundos_entrada)
+    resultado["aviso"] = (
+        "Simulação, não cotação: ação/FII/ETF pelo preço histórico, renda "
+        "fixa pelo replay da fórmula do indexador contratado, fundo pela "
+        "cota diária da CVM. Rentabilidade passada não garante rentabilidade "
+        "futura.")
+    _cache_backtest[chave] = (time.time(), resultado)
+    return {**resultado, "cache": False, "idade_segundos": 0}
+
+
 # ------------------------------------------------- Pilar 5: radar de 5 eixos
 
 _cache_radar = {}
@@ -541,6 +617,23 @@ def _recortar(serie, inicio, fim):
             indice = indice.tz_localize(None)
         dentro = (indice >= pd.Timestamp(inicio)) & (indice <= pd.Timestamp(fim))
         return [float(v) for v in serie.values[dentro]]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _recortar_com_datas(serie, inicio, fim):
+    """[(data, fechamento), ...] da janela, em ordem — como `_recortar`, mas
+    com a data de cada ponto (o backtest precisa localizar o fechamento mais
+    próximo de cada mês, não só a lista de valores)."""
+    try:
+        import pandas as pd
+        indice = pd.to_datetime(serie.index)
+        if getattr(indice, "tz", None) is not None:
+            indice = indice.tz_localize(None)
+        dentro = (indice >= pd.Timestamp(inicio)) & (indice <= pd.Timestamp(fim))
+        datas = indice[dentro]
+        valores = serie.values[dentro]
+        return [(d.date(), float(v)) for d, v in zip(datas, valores)]
     except Exception:  # noqa: BLE001
         return []
 
@@ -656,3 +749,398 @@ def remover_item(ticker: str, ctx: planos.Contexto = Depends(_vip)):
             "erro": "nao_encontrado",
             "motivo": f"{carteira.normalizar_ticker(ticker)} não está na carteira."})
     return {"removido": carteira.normalizar_ticker(ticker)}
+
+
+# --------------------------------------------------------------------------
+# Renda fixa privada (CDB, LCI, LCA, CRI, CRA, debênture, LF, LCD)
+#
+# Não tem ticker nem cotação: tabela própria (`renda_fixa`, em contas.py),
+# não uma linha em `carteiras`. "Valor atual" é marcação na curva — calculado
+# por `modules/renda_fixa.py` a partir do indexador contratado — e não uma
+# leitura de mercado. Ver a docstring daquele módulo para o porquê.
+# --------------------------------------------------------------------------
+
+class ItemRendaFixa(BaseModel):
+    emissor: str = Field(..., max_length=120)
+    tipo: str
+    indexador: str
+    taxa: float
+    data_aplicacao: str
+    data_vencimento: Optional[str] = None
+    valor_aplicado: float
+
+
+@router.get("/api/v1/carteira/renda-fixa/parametros")
+def parametros_renda_fixa():
+    """Tipos e indexadores aceitos, para a tela montar os seletores sem
+    cravar a lista duas vezes (front e back divergindo é bug de digitação)."""
+    return {
+        "tipos": [{"chave": t, "rotulo": renda_fixa.ROTULOS_TIPO[t]}
+                 for t in renda_fixa.TIPOS],
+        "indexadores": [{"chave": i, "rotulo": renda_fixa.ROTULOS_INDEXADOR[i]}
+                        for i in renda_fixa.INDEXADORES],
+    }
+
+
+@router.get("/api/v1/carteira/renda-fixa")
+def listar_renda_fixa(ctx: planos.Contexto = Depends(_vip)):
+    """Posições marcadas na curva: valor aplicado, valor atual e a conta que
+    levou de um ao outro, escrita por extenso em `marcacao`."""
+    return renda_fixa.listar(ctx.usuario["id"])
+
+
+@router.post("/api/v1/carteira/renda-fixa", status_code=201)
+def criar_renda_fixa(item: ItemRendaFixa, ctx: planos.Contexto = Depends(_vip)):
+    _limitar_escrita(ctx)
+    try:
+        linha = renda_fixa.adicionar(
+            ctx.usuario["id"], item.emissor, item.tipo, item.indexador,
+            item.taxa, item.data_aplicacao, item.data_vencimento,
+            item.valor_aplicado)
+    except renda_fixa.ErroRendaFixa as erro:
+        raise HTTPException(status_code=422, detail={
+            "erro": "entrada_invalida", "motivo": str(erro)})
+    return {"posicao": linha}
+
+
+@router.patch("/api/v1/carteira/renda-fixa/{posicao_id}")
+def editar_renda_fixa(posicao_id: int, item: ItemRendaFixa,
+                      ctx: planos.Contexto = Depends(_vip)):
+    """Corrige a posição — SUBSTITUI os valores, mesma lógica de `editar_item`."""
+    _limitar_escrita(ctx)
+    try:
+        linha = renda_fixa.atualizar(
+            ctx.usuario["id"], posicao_id, item.emissor, item.tipo,
+            item.indexador, item.taxa, item.data_aplicacao,
+            item.data_vencimento, item.valor_aplicado)
+    except renda_fixa.ErroRendaFixa as erro:
+        raise HTTPException(status_code=422, detail={
+            "erro": "entrada_invalida", "motivo": str(erro)})
+    if linha is None:
+        raise HTTPException(status_code=404, detail={
+            "erro": "nao_encontrado", "motivo": "Posição não encontrada."})
+    return {"posicao": linha}
+
+
+@router.delete("/api/v1/carteira/renda-fixa/{posicao_id}")
+def remover_renda_fixa(posicao_id: int, ctx: planos.Contexto = Depends(_vip)):
+    _limitar_escrita(ctx)
+    if not renda_fixa.remover(ctx.usuario["id"], posicao_id):
+        raise HTTPException(status_code=404, detail={
+            "erro": "nao_encontrado", "motivo": "Posição não encontrada."})
+    return {"removido": posicao_id}
+
+
+# --------------------------------------------------------------------------
+# Fundos de investimento — Etapa A (ver modules/fundos.py). Posição simples
+# por cotas x valor da cota; sem cota diária ainda, então "valor atual" é
+# sempre o aplicado — nunca uma rentabilidade inventada.
+# --------------------------------------------------------------------------
+
+class ItemFundo(BaseModel):
+    nome_fundo: str = Field(..., max_length=150)
+    cnpj: str
+    classe: str
+    numero_cotas: float
+    valor_cota_aplicacao: float
+    data_aplicacao: str
+
+
+@router.get("/api/v1/carteira/fundos/parametros")
+def parametros_fundos():
+    """Classes aceitas, para a tela montar o seletor sem cravar a lista
+    duas vezes."""
+    return {"classes": [{"chave": c, "rotulo": fundos.ROTULOS_CLASSE[c]}
+                        for c in fundos.CLASSES]}
+
+
+@router.get("/api/v1/carteira/fundos")
+def listar_fundos(ctx: planos.Contexto = Depends(_vip)):
+    return fundos.listar(ctx.usuario["id"])
+
+
+@router.post("/api/v1/carteira/fundos", status_code=201)
+def criar_fundo(item: ItemFundo, ctx: planos.Contexto = Depends(_vip)):
+    _limitar_escrita(ctx)
+    try:
+        linha = fundos.adicionar(
+            ctx.usuario["id"], item.nome_fundo, item.cnpj, item.classe,
+            item.numero_cotas, item.valor_cota_aplicacao, item.data_aplicacao)
+    except fundos.ErroFundo as erro:
+        raise HTTPException(status_code=422, detail={
+            "erro": "entrada_invalida", "motivo": str(erro)})
+    return {"posicao": linha}
+
+
+@router.patch("/api/v1/carteira/fundos/{posicao_id}")
+def editar_fundo(posicao_id: int, item: ItemFundo,
+                ctx: planos.Contexto = Depends(_vip)):
+    """Corrige a posição — SUBSTITUI os valores, mesma lógica de `editar_item`."""
+    _limitar_escrita(ctx)
+    try:
+        linha = fundos.atualizar(
+            ctx.usuario["id"], posicao_id, item.nome_fundo, item.cnpj,
+            item.classe, item.numero_cotas, item.valor_cota_aplicacao,
+            item.data_aplicacao)
+    except fundos.ErroFundo as erro:
+        raise HTTPException(status_code=422, detail={
+            "erro": "entrada_invalida", "motivo": str(erro)})
+    if linha is None:
+        raise HTTPException(status_code=404, detail={
+            "erro": "nao_encontrado", "motivo": "Posição não encontrada."})
+    return {"posicao": linha}
+
+
+@router.delete("/api/v1/carteira/fundos/{posicao_id}")
+def remover_fundo(posicao_id: int, ctx: planos.Contexto = Depends(_vip)):
+    _limitar_escrita(ctx)
+    if not fundos.remover(ctx.usuario["id"], posicao_id):
+        raise HTTPException(status_code=404, detail={
+            "erro": "nao_encontrado", "motivo": "Posição não encontrada."})
+    return {"removido": posicao_id}
+
+
+# --------------------------------------------------------------------------
+# Perfil do investidor e objetivo
+#
+# Campo simples, atribuído pelo assessor — sem questionário de suitability
+# próprio (ver `modules/perfil.py`). Uma linha por usuário, igual à
+# filosofia; sem padrão para perfil nem para objetivo.
+# --------------------------------------------------------------------------
+
+class DefinicaoPerfil(BaseModel):
+    perfil: Optional[str] = None
+    objetivo: Optional[str] = None
+    meta_retirada_mensal: Optional[float] = None
+    horizonte_anos: Optional[int] = None
+    meta_patrimonio: Optional[float] = None
+    meta_renda_mensal: Optional[float] = None
+
+
+@router.get("/api/v1/carteira/perfil")
+def obter_perfil(ctx: planos.Contexto = Depends(_vip)):
+    """Perfil e objetivo atuais — tudo `None` quando o assessor ainda não
+    classificou nada."""
+    return perfil.obter(ctx.usuario["id"])
+
+
+@router.put("/api/v1/carteira/perfil")
+def definir_perfil(corpo: DefinicaoPerfil, ctx: planos.Contexto = Depends(_vip)):
+    """Grava perfil e objetivo inteiros — troca de objetivo não deixa resto
+    do objetivo anterior (ver docstring de `modules/perfil.definir`)."""
+    _limitar_escrita(ctx)
+    try:
+        return perfil.definir(
+            ctx.usuario["id"], corpo.perfil, corpo.objetivo,
+            corpo.meta_retirada_mensal, corpo.horizonte_anos,
+            corpo.meta_patrimonio, corpo.meta_renda_mensal)
+    except perfil.ErroPerfil as erro:
+        raise HTTPException(status_code=422, detail={
+            "erro": "entrada_invalida", "motivo": str(erro)})
+
+
+# --------------------------------------------------- Projeção de capital
+
+class PremissasProjecao(BaseModel):
+    """Nenhum campo tem padrão — a tela sempre manda os três, nunca herda um
+    valor invisível do servidor (ver docstring de `modules/projecao`)."""
+    taxa_anual_pct: float
+    aporte_mensal: float
+    horizonte_anos: int
+
+
+@router.post("/api/v1/carteira/projecao")
+def projetar_carteira(corpo: PremissasProjecao, ctx: planos.Contexto = Depends(_vip)):
+    """Projeção hipotética de capital a partir do patrimônio ATUAL da
+    carteira (ação/FII/ETF pelo custo, renda fixa pela marcação na curva) —
+    nunca escreve nada, só calcula em cima das premissas que a tela mandou.
+    """
+    usuario_id = ctx.usuario["id"]
+    try:
+        taxa_anual_pct, aporte_mensal, horizonte_anos = projecao.validar(
+            corpo.taxa_anual_pct, corpo.aporte_mensal, corpo.horizonte_anos)
+    except projecao.ErroProjecao as erro:
+        raise HTTPException(status_code=422, detail={
+            "erro": "entrada_invalida", "motivo": str(erro)})
+
+    # Fundos entram pelo valor aplicado (Etapa A, sem cota diária ainda — ver
+    # modules/fundos.py): "entra no patrimônio total" é literal, no sentido
+    # do documento de escopo, mesmo sem render próprio no backtest ainda.
+    valor_inicial = (carteira.listar(usuario_id)["custo_total"]
+                     + renda_fixa.listar(usuario_id)["valor_atual_total"]
+                     + fundos.listar(usuario_id)["valor_atual_total"])
+
+    if valor_inicial <= 0 and aporte_mensal <= 0:
+        raise HTTPException(status_code=422, detail={
+            "erro": "nada_para_projetar",
+            "motivo": ("Cadastre uma posição ou informe um aporte mensal — "
+                      "sem nenhum dos dois não há o que projetar.")})
+
+    resultado = projecao.projetar(valor_inicial, taxa_anual_pct, aporte_mensal,
+                                  horizonte_anos)
+
+    perfil_atual = perfil.obter(usuario_id)
+    gaps = projecao.calcular_gaps(
+        perfil_atual["objetivo"], perfil_atual["meta_retirada_mensal"],
+        perfil_atual["meta_patrimonio"], perfil_atual["meta_renda_mensal"],
+        resultado["valor_final"], resultado["renda_mensal_sustentavel_final"])
+
+    return {**resultado, "gaps": gaps, "aviso": projecao.AVISO_HIPOTETICO,
+           "objetivo": perfil_atual["objetivo"],
+           "rotulo_objetivo": perfil_atual["rotulo_objetivo"]}
+
+
+# --------------------------------------------------------------------------
+# Relatório em PDF — junta composição, diagnóstico, backtest, estresse e
+# projeção num único documento (ver modules/relatorio.py). Nada aqui é
+# calculado de novo: cada seção reaproveita a MESMA função que já serve a
+# tela, para nunca haver dois lugares com regra diferente para o mesmo
+# número.
+# --------------------------------------------------------------------------
+
+class PremissasRelatorio(BaseModel):
+    taxa_anual_pct: float
+    aporte_mensal: float
+    horizonte_anos: int
+
+
+class PedidoRelatorio(BaseModel):
+    # Lista vazia é uma escolha válida (nenhum cenário) — não um padrão: a
+    # tela sempre manda a seleção explícita da tela de checkboxes.
+    eventos_estresse: list[str] = Field(default_factory=list)
+    # None: a tela de projeção não tinha premissa preenchida — a seção fica
+    # de fora do PDF, nunca com taxa inventada (ver modules/projecao.py).
+    projecao: Optional[PremissasRelatorio] = None
+
+
+@router.get("/api/v1/carteira/relatorio/parametros")
+def parametros_relatorio():
+    """Cenários de estresse disponíveis, para a tela de checkboxes antes de
+    gerar — mesma lista de `/estresse/historico`, sem recalcular nada."""
+    return {"eventos_estresse": [{"chave": e["chave"], "nome": e["nome"]}
+                                 for e in estresse.EVENTOS]}
+
+
+@router.post("/api/v1/carteira/relatorio")
+def gerar_relatorio(corpo: PedidoRelatorio, ctx: planos.Contexto = Depends(_vip)):
+    usuario_id = ctx.usuario["id"]
+
+    dados_acao = carteira.listar(usuario_id)
+    dados_rf = renda_fixa.listar(usuario_id)
+    dados_fundos = fundos.listar(usuario_id)
+    posicoes_acao = dados_acao["posicoes"]
+
+    patrimonio_total = (dados_acao["custo_total"] + dados_rf["valor_atual_total"]
+                        + dados_fundos["valor_atual_total"])
+
+    if (patrimonio_total <= 0 and not posicoes_acao and not dados_rf["posicoes"]
+            and not dados_fundos["posicoes"]
+            and (corpo.projecao is None or corpo.projecao.aporte_mensal <= 0)):
+        raise HTTPException(status_code=422, detail={
+            "erro": "nada_para_relatar",
+            "motivo": ("Cadastre ao menos uma posição, ou informe um aporte "
+                      "mensal na projeção, antes de gerar o relatório.")})
+
+    filosofia_atual = mandato.obter(usuario_id)
+    filosofia_dados = (
+        {"chave": filosofia_atual, "rotulo": mandato.ROTULOS.get(filosofia_atual)}
+        if filosofia_atual and filosofia_atual != mandato.NENHUMA else None)
+
+    from routers import filosofias as rota_filosofias
+    motor = rota_filosofias.motor()
+
+    diagnostico_dados = (
+        diagnostico.diagnosticar(motor, posicoes_acao,
+                                 filosofia_carteira=filosofia_atual)
+        if posicoes_acao else None)
+
+    # Backtest: mesma conta de `backtest_carteira`, sem cache — o relatório é
+    # gerado sob pedido, não vale a pena guardar o resultado por 15 minutos.
+    backtest_dados = None
+    if posicoes_acao or dados_rf["posicoes"] or dados_fundos["posicoes"]:
+        hoje = date.today()
+        datas = backtest.pontos_mensais(hoje, meses=12)
+        series_precos = _series_completas(motor, [p["ticker"] for p in posicoes_acao])
+        precos_por_ticker = {ticker: _recortar_com_datas(serie, datas[0], hoje)
+                             for ticker, serie in series_precos.items()}
+        acoes_entrada = [{"ticker": p["ticker"], "peso": p.get("custo_total") or 0.0}
+                         for p in posicoes_acao]
+        rf_entrada = [{"identificador": p["emissor"], "peso": p["valor_atual"],
+                      "data_aplicacao": date.fromisoformat(p["data_aplicacao"]),
+                      "indexador": p["indexador"], "taxa": p["taxa"]}
+                     for p in dados_rf["posicoes"]]
+        fundos_entrada = [{"identificador": p["nome_fundo"], "peso": p["valor_atual"],
+                          "cnpj": p["cnpj"]}
+                         for p in dados_fundos["posicoes"]]
+        backtest_dados = backtest.carteira_12_meses(
+            datas, acoes_entrada, precos_por_ticker, rf_entrada,
+            posicoes_fundos=fundos_entrada)
+
+    # Estresse: só os eventos que a tela de checkboxes mandou, e só se houver
+    # ação para medir (FII e ETF não têm dívida de companhia no balanço).
+    chaves_validas = {e["chave"] for e in estresse.EVENTOS}
+    chaves_selecionadas = [c for c in corpo.eventos_estresse if c in chaves_validas]
+    if not posicoes_acao:
+        estresse_dados = {"eventos": [],
+                          "motivo": "Nenhuma posição em ação para medir estresse."}
+    elif not chaves_selecionadas:
+        estresse_dados = {"eventos": [],
+                          "motivo": "Nenhum cenário de estresse selecionado."}
+    else:
+        series = _series_completas(motor, [p["ticker"] for p in posicoes_acao])
+        pesos = {p["ticker"]: (p.get("custo_total") or 0.0) for p in posicoes_acao}
+        janelas = []
+        for evento in estresse.EVENTOS:
+            if evento["chave"] not in chaves_selecionadas:
+                continue
+            recorte = {t: _recortar(s, evento["inicio"], evento["fim"])
+                      for t, s in series.items()}
+            janelas.append({**evento, **estresse.estresse_historico(recorte, pesos)})
+        estresse_dados = {"eventos": janelas}
+
+    # Projeção: só entra com premissa explícita da própria tela de projeção —
+    # nunca uma taxa calculada por este endpoint (ver modules/projecao.py).
+    projecao_dados = None
+    if corpo.projecao is not None:
+        try:
+            taxa, aporte, horizonte = projecao.validar(
+                corpo.projecao.taxa_anual_pct, corpo.projecao.aporte_mensal,
+                corpo.projecao.horizonte_anos)
+        except projecao.ErroProjecao as erro:
+            raise HTTPException(status_code=422, detail={
+                "erro": "entrada_invalida", "motivo": str(erro)})
+        resultado_projecao = projecao.projetar(patrimonio_total, taxa, aporte, horizonte)
+        perfil_atual = perfil.obter(usuario_id)
+        gaps = projecao.calcular_gaps(
+            perfil_atual["objetivo"], perfil_atual["meta_retirada_mensal"],
+            perfil_atual["meta_patrimonio"], perfil_atual["meta_renda_mensal"],
+            resultado_projecao["valor_final"],
+            resultado_projecao["renda_mensal_sustentavel_final"])
+        projecao_dados = {
+            **resultado_projecao, "gaps": gaps,
+            "taxa_anual_pct": taxa, "aporte_mensal": aporte,
+        }
+
+    dados_pdf = {
+        "cliente_email": ctx.usuario["email"],
+        "gerado_em": datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC"),
+        "filosofia": filosofia_dados,
+        "composicao": {
+            "acoes": posicoes_acao,
+            "renda_fixa": dados_rf["posicoes"],
+            "fundos": dados_fundos["posicoes"],
+            "custo_total_acoes": dados_acao["custo_total"],
+            "valor_atual_renda_fixa": dados_rf["valor_atual_total"],
+            "valor_atual_fundos": dados_fundos["valor_atual_total"],
+            "patrimonio_total": patrimonio_total,
+        },
+        "diagnostico": diagnostico_dados,
+        "backtest": backtest_dados,
+        "estresse": estresse_dados,
+        "projecao": projecao_dados,
+    }
+
+    pdf_bytes = relatorio.montar(dados_pdf)
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="relatorio-alphaforge.pdf"'})

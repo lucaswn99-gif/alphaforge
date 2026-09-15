@@ -25,6 +25,7 @@
       --suave:      #78877f;
       --vermelho:   #ff4d5e;
       --ambar:      #ffb020;
+      --azul:       #4ea8ff;
     }
     * { box-sizing: border-box; }
     /* Definida aqui, e não herdada do Tailwind, de propósito: `hidden` é a
@@ -285,11 +286,11 @@
           Escolhe a régua pela qual as <b>ações</b> são medidas. FII continua
           indo por desconto patrimonial, que é o gatilho de entrada do ativo.
         </p>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5" id="opcoesFilosofia"></div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5" id="opcoesFilosofia"></div>
         <p id="avisoFilosofia" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mt-3"></p>
       </div>
 
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3" id="cartoesDiagnostico"></div>
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-3" id="cartoesDiagnostico"></div>
       <p class="text-[10px] mt-3.5 leading-relaxed" style="color: #3d4a43">
         FII é medido pelo desconto sobre o valor patrimonial; ação, pela filosofia
         acima. <b>Preço alto não é desconformidade</b> — papel caro pede esperar,
@@ -503,6 +504,354 @@
           Raio tracejado e "—": eixo sem cobertura suficiente na carteira — ausência
           de dado, nunca nota zero. <span id="radarOrigem"></span>
         </p>
+      </div>
+    </section>
+
+    <!-- Renda fixa -->
+    <section class="painel p-5 entra" style="animation-delay:.041s" id="painelRendaFixa">
+      <div class="mb-3.5">
+        <h2 class="rotulo">Renda fixa</h2>
+        <p class="text-[10px] mt-1.5 leading-relaxed" style="color: #3d4a43">
+          CDB, LCI, LCA, CRI, CRA, debênture, LF, LCD — sem cotação de mercado.
+          "Atual (curva)" é uma conta: valor aplicado composto pelo indexador
+          contratado desde a aplicação, não um preço de pregão.
+        </p>
+      </div>
+
+      <form id="formRendaFixa" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end mb-3.5">
+        <div>
+          <label class="rotulo block mb-1.5" for="rfEmissor">Emissor</label>
+          <input class="campo" id="rfEmissor" name="emissor" required maxlength="120"
+                 placeholder="Banco XP" autocomplete="off">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="rfTipo">Tipo</label>
+          <select class="campo" id="rfTipo" name="tipo" required></select>
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="rfIndexador">Indexador</label>
+          <select class="campo" id="rfIndexador" name="indexador" required></select>
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="rfTaxa">Taxa</label>
+          <input class="campo mono" id="rfTaxa" name="taxa" type="number" step="any" min="0"
+                 required placeholder="12,50">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="rfDataAplicacao">Data de aplicação</label>
+          <input class="campo mono" id="rfDataAplicacao" name="data_aplicacao" type="date" required>
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="rfDataVencimento">Vencimento (opcional)</label>
+          <input class="campo mono" id="rfDataVencimento" name="data_vencimento" type="date">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="rfValorAplicado">Valor aplicado</label>
+          <input class="campo mono" id="rfValorAplicado" name="valor_aplicado" type="number"
+                 step="any" min="0" required placeholder="10000,00">
+        </div>
+        <button class="btn h-[38px]" id="btnRendaFixaAdicionar" type="submit">Adicionar</button>
+      </form>
+      <p id="avisoRendaFixa" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mb-3.5"></p>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-[12px]">
+          <thead>
+            <tr class="rotulo text-left border-y" style="border-color: var(--borda)">
+              <th class="px-5 py-2.5 font-semibold">Emissor</th>
+              <th class="px-3 py-2.5 font-semibold">Tipo</th>
+              <th class="px-3 py-2.5 font-semibold">Indexador</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Aplicado</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Atual (curva)</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Rentab.</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Vencimento</th>
+              <th class="px-5 py-2.5 font-semibold text-right">Ações</th>
+            </tr>
+          </thead>
+          <tbody id="tabelaRendaFixa" class="divide-y" style="border-color: var(--borda)"></tbody>
+        </table>
+      </div>
+      <div id="estadoVazioRendaFixa" class="hidden px-5 py-9 text-center">
+        <p class="text-[12px] font-semibold">Nenhuma posição de renda fixa cadastrada</p>
+        <p class="text-[10px] mt-1.5" style="color: var(--suave)">
+          Cadastre um CDB, LCI, LCA, CRI, CRA, debênture, LF ou LCD acima.
+        </p>
+      </div>
+      <p id="resumoRendaFixa" class="text-[10px] mt-3.5" style="color: #3d4a43"></p>
+    </section>
+
+    <!-- Perfil do investidor e objetivo -->
+    <section class="painel p-5 entra" style="animation-delay:.042s" id="painelPerfil">
+      <div class="mb-3.5">
+        <h2 class="rotulo">Perfil do investidor e objetivo</h2>
+        <p class="text-[10px] mt-1.5 leading-relaxed" style="color: #3d4a43">
+          Campo simples, atribuído por você — sem questionário de suitability
+          próprio. Alimenta o backtest, a projeção e o relatório desta carteira.
+        </p>
+      </div>
+
+      <form id="formPerfil" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="rotulo block mb-1.5" for="perfilInvestidor">Perfil</label>
+          <select class="campo" id="perfilInvestidor" name="perfil">
+            <option value="">Não classificado</option>
+            <option value="conservador">Conservador</option>
+            <option value="moderado">Moderado</option>
+            <option value="arrojado">Arrojado</option>
+          </select>
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="objetivoCarteira">Objetivo</label>
+          <select class="campo" id="objetivoCarteira" name="objetivo">
+            <option value="">Sem objetivo definido</option>
+            <option value="renda_passiva">Renda passiva</option>
+            <option value="aposentadoria">Aposentadoria</option>
+          </select>
+        </div>
+
+        <div id="camposRendaPassiva" class="hidden sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="rotulo block mb-1.5" for="metaRetiradaMensal">Meta de retirada mensal</label>
+            <input class="campo mono" id="metaRetiradaMensal" name="meta_retirada_mensal"
+                   type="number" step="any" min="0" placeholder="5000,00">
+          </div>
+        </div>
+
+        <div id="camposAposentadoria" class="hidden sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label class="rotulo block mb-1.5" for="horizonteAnos">Horizonte (anos)</label>
+            <input class="campo mono" id="horizonteAnos" name="horizonte_anos"
+                   type="number" step="1" min="1" placeholder="20">
+          </div>
+          <div>
+            <label class="rotulo block mb-1.5" for="metaPatrimonio">Meta de patrimônio (opcional)</label>
+            <input class="campo mono" id="metaPatrimonio" name="meta_patrimonio"
+                   type="number" step="any" min="0" placeholder="1000000,00">
+          </div>
+          <div>
+            <label class="rotulo block mb-1.5" for="metaRendaMensal">Meta de renda mensal (opcional)</label>
+            <input class="campo mono" id="metaRendaMensal" name="meta_renda_mensal"
+                   type="number" step="any" min="0" placeholder="8000,00">
+          </div>
+        </div>
+
+        <div class="sm:col-span-2">
+          <button class="btn h-[38px]" id="btnSalvarPerfil" type="submit">Salvar</button>
+        </div>
+      </form>
+      <p id="avisoPerfil" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mt-3"></p>
+    </section>
+
+    <!-- Backtest de 12 meses: ação/FII/ETF pelo preço histórico, renda fixa
+         pelo replay da fórmula do indexador — nunca a média das partes, a
+         série da carteira inteira (ver docstring de modules/backtest.py). -->
+    <section class="painel p-5 entra" style="animation-delay:.043s" id="painelBacktest">
+      <div class="flex items-start justify-between gap-3 flex-wrap mb-3.5">
+        <div>
+          <h2 class="rotulo">Backtest de 12 meses</h2>
+          <p class="text-[10px] mt-1.5 leading-relaxed" style="color: #3d4a43">
+            Simulação, não cotação: ação/FII/ETF pelo preço histórico, renda fixa
+            pelo replay da fórmula do indexador contratado. Rentabilidade passada
+            não garante rentabilidade futura.
+          </p>
+        </div>
+        <button class="btn-fantasma" id="btnBacktest" type="button">Simular</button>
+      </div>
+
+      <p id="avisoBacktest" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mb-3"></p>
+
+      <div id="corpoBacktest" class="hidden">
+        <div class="flex items-end justify-between gap-5 flex-wrap mb-4">
+          <div>
+            <p class="rotulo mb-2">Retorno no período</p>
+            <p class="mono font-bold leading-none" style="font-size: clamp(26px, 5vw, 36px)" id="backtestRetorno">—</p>
+          </div>
+          <p class="text-[11px] text-right leading-relaxed" style="color: var(--suave)" id="backtestResumo"></p>
+        </div>
+
+        <svg id="svgBacktest" width="100%" height="140" viewBox="0 0 600 140"
+             preserveAspectRatio="none" aria-label="Índice da carteira nos últimos 12 meses"></svg>
+
+        <div id="listaSemHistoricoBacktest" class="mt-3"></div>
+
+        <p class="text-[10px] mt-4 leading-relaxed" style="color: #3d4a43" id="backtestOrigem"></p>
+      </div>
+    </section>
+
+    <!-- Projeção de capital: o ponto de maior cuidado regulatório desta leva
+         (ver docstring de modules/projecao.py) — premissa sempre explícita e
+         editável, rótulo hipotético em destaque, meta como gap, nunca como
+         resposta binária. -->
+    <section class="painel p-5 entra" style="animation-delay:.044s" id="painelProjecao">
+      <div class="mb-3.5">
+        <h2 class="rotulo">Projeção de capital</h2>
+        <p class="text-[10px] mt-1.5 leading-relaxed" style="color: #3d4a43">
+          Você define a taxa, o aporte e o horizonte — a projeção só faz a
+          conta em cima do que você digitou aqui, nunca embute uma premissa
+          escondida.
+        </p>
+      </div>
+
+      <form id="formProjecao" class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div>
+          <label class="rotulo block mb-1.5" for="projTaxaAnual">Taxa assumida (% a.a.)</label>
+          <input class="campo mono" id="projTaxaAnual" name="taxa_anual_pct"
+                 type="number" step="any" placeholder="12,00">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="projAporteMensal">Aporte mensal</label>
+          <input class="campo mono" id="projAporteMensal" name="aporte_mensal"
+                 type="number" step="any" min="0" placeholder="1000,00">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="projHorizonteAnos">Horizonte (anos)</label>
+          <input class="campo mono" id="projHorizonteAnos" name="horizonte_anos"
+                 type="number" step="1" min="1" placeholder="10">
+        </div>
+        <div class="sm:col-span-3">
+          <button class="btn h-[38px]" id="btnProjetar" type="submit">Projetar</button>
+        </div>
+      </form>
+
+      <p id="avisoProjecao" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mt-3"></p>
+
+      <div id="corpoProjecao" class="hidden mt-4">
+        <!-- Rótulo hipotético em destaque, não em rodapé — a própria regra
+             de design do documento de escopo. -->
+        <p class="text-[11px] leading-relaxed rounded px-3 py-2.5 mb-4"
+           style="background: rgba(255,176,32,.08); border: 1px solid rgba(255,176,32,.25); color: var(--ambar)"
+           id="projAvisoHipotetico"></p>
+
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+            <p class="rotulo mb-1">Valor final</p>
+            <p class="mono font-bold text-[16px]" id="projValorFinal">—</p>
+          </div>
+          <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+            <p class="rotulo mb-1">Total aportado</p>
+            <p class="mono font-bold text-[16px]" id="projTotalAportado">—</p>
+          </div>
+          <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+            <p class="rotulo mb-1">Rendimento</p>
+            <p class="mono font-bold text-[16px]" id="projRendimento">—</p>
+          </div>
+          <div class="p-3 rounded" style="background: var(--painel-alt); border: 1px solid var(--borda)">
+            <p class="rotulo mb-1">Renda mensal sustentável</p>
+            <p class="mono font-bold text-[16px]" id="projRendaSustentavel">—</p>
+          </div>
+        </div>
+
+        <svg id="svgProjecao" width="100%" height="140" viewBox="0 0 600 140"
+             preserveAspectRatio="none" aria-label="Patrimônio projetado ao longo do horizonte"></svg>
+
+        <div id="listaGapsProjecao" class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4"></div>
+      </div>
+    </section>
+
+    <!-- Fundos de investimento — Etapa A (posição simples, ver
+         modules/fundos.py). Sem cota diária ainda: "atual" é sempre igual ao
+         aplicado, marcado como não apurado até a Etapa B existir. -->
+    <section class="painel p-5 entra" style="animation-delay:.045s" id="painelFundos">
+      <div class="mb-3.5">
+        <h2 class="rotulo">Fundos de investimento</h2>
+        <p class="text-[10px] mt-1.5 leading-relaxed" style="color: #3d4a43">
+          Posição simples por cotas — sem cota diária da CVM ainda. "Atual"
+          fica igual ao aplicado até a próxima etapa ligar a cota do fundo,
+          nunca uma rentabilidade inventada.
+        </p>
+      </div>
+
+      <form id="formFundos" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-end mb-3.5">
+        <div>
+          <label class="rotulo block mb-1.5" for="fundoNome">Nome do fundo</label>
+          <input class="campo" id="fundoNome" name="nome_fundo" required maxlength="150"
+                 placeholder="XP Multimercado FIC FIM" autocomplete="off">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="fundoCnpj">CNPJ</label>
+          <input class="campo mono" id="fundoCnpj" name="cnpj" required
+                 placeholder="12.345.678/0001-99" autocomplete="off">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="fundoClasse">Classe</label>
+          <select class="campo" id="fundoClasse" name="classe" required></select>
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="fundoCotas">Número de cotas</label>
+          <input class="campo mono" id="fundoCotas" name="numero_cotas" type="number"
+                 step="any" min="0" required placeholder="1.234,5678">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="fundoValorCota">Valor da cota na aplicação</label>
+          <input class="campo mono" id="fundoValorCota" name="valor_cota_aplicacao" type="number"
+                 step="any" min="0" required placeholder="150,25">
+        </div>
+        <div>
+          <label class="rotulo block mb-1.5" for="fundoDataAplicacao">Data de aplicação</label>
+          <input class="campo mono" id="fundoDataAplicacao" name="data_aplicacao" type="date" required>
+        </div>
+        <button class="btn h-[38px]" id="btnFundoAdicionar" type="submit">Adicionar</button>
+      </form>
+      <p id="avisoFundos" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mb-3.5"></p>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-[12px]">
+          <thead>
+            <tr class="rotulo text-left border-y" style="border-color: var(--borda)">
+              <th class="px-5 py-2.5 font-semibold">Fundo</th>
+              <th class="px-3 py-2.5 font-semibold">Classe</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Cotas</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Aplicado</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Atual</th>
+              <th class="px-3 py-2.5 font-semibold text-right">Rentabilidade</th>
+              <th class="px-5 py-2.5 font-semibold text-right">Ações</th>
+            </tr>
+          </thead>
+          <tbody id="tabelaFundos" class="divide-y" style="border-color: var(--borda)"></tbody>
+        </table>
+      </div>
+      <div id="estadoVazioFundos" class="hidden px-5 py-9 text-center">
+        <p class="text-[12px] font-semibold">Nenhum fundo cadastrado</p>
+        <p class="text-[10px] mt-1.5" style="color: var(--suave)">
+          Cadastre um fundo multimercado, de ações, renda fixa ou cambial acima.
+        </p>
+      </div>
+      <p id="resumoFundos" class="text-[10px] mt-3.5" style="color: #3d4a43"></p>
+    </section>
+
+    <!-- Relatório em PDF: tela prévia com checkbox por cenário de estresse
+         (a carteira inteira do escopo — ação, renda fixa, fundos, backtest,
+         estresse, projeção — mas quem decide o que entra no PDF é o
+         assessor, nunca um "incluir tudo" automático e silencioso). -->
+    <section class="painel p-5 entra" style="animation-delay:.046s" id="painelRelatorio">
+      <div class="flex items-start justify-between gap-3 flex-wrap mb-3.5">
+        <div>
+          <h2 class="rotulo">Relatório em PDF</h2>
+          <p class="text-[10px] mt-1.5 leading-relaxed" style="color: #3d4a43">
+            Composição, diagnóstico, backtest, estresse e projeção — cada seção
+            só entra se houver o que mostrar, e diz por escrito quando falta.
+          </p>
+        </div>
+        <button class="btn-fantasma" id="btnAbrirRelatorio" type="button">Gerar relatório</button>
+      </div>
+
+      <p id="avisoRelatorio" class="hidden text-[11px] leading-relaxed rounded px-3 py-2.5 mb-3.5"></p>
+
+      <div id="blocoRelatorioPrevia" class="hidden">
+        <p class="rotulo mb-2">Cenários de estresse a incluir</p>
+        <div id="listaEventosRelatorio" class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4"></div>
+
+        <label class="flex items-start gap-2 text-[11px] cursor-pointer mb-1" style="color: var(--suave)">
+          <input type="checkbox" id="relatorioIncluirProjecao" class="mt-0.5">
+          <span>Incluir a projeção de capital, com a taxa, o aporte e o horizonte
+            já preenchidos no painel de projeção acima.</span>
+        </label>
+        <p class="text-[10px] mb-4" id="notaProjecaoRelatorio" style="color: #3d4a43"></p>
+
+        <div class="flex gap-2.5 flex-wrap">
+          <button class="btn h-[38px]" id="btnGerarRelatorio" type="button">Baixar PDF</button>
+          <button class="btn-fantasma h-[38px]" id="btnCancelarRelatorio" type="button">Cancelar</button>
+        </div>
       </div>
     </section>
 
@@ -757,6 +1106,14 @@ async function carregar() {
   } catch (e) {
     aviso('avisoItem', `Falha ao carregar: ${esc(e.message || e)}`);
   }
+  // Renda fixa é independente da carteira de ação: sem posição em ação
+  // nenhuma, o assessor ainda pode ter só CDB/LCI cadastrado, e o painel
+  // precisa aparecer do mesmo jeito.
+  carregarParametrosRendaFixa();
+  carregarRendaFixa();
+  carregarPerfil();
+  carregarParametrosFundos();
+  carregarFundos();
 }
 
 function renderizar() {
@@ -807,10 +1164,13 @@ function renderizar() {
 let DIAGNOSTICO = {};
 
 const CORES_ESTADO = {
-  conforme:    ['var(--verde)',    'rgba(0,229,122,.09)',  'rgba(0,229,122,.26)'],
-  atencao:     ['var(--ambar)',    'rgba(255,176,32,.09)', 'rgba(255,176,32,.26)'],
-  desconforme: ['var(--vermelho)', 'rgba(255,77,94,.09)',  'rgba(255,77,94,.26)'],
-  nao_apurado: ['#4a554e',         'rgba(120,135,127,.07)','rgba(120,135,127,.20)'],
+  conforme:      ['var(--verde)',    'rgba(0,229,122,.09)',  'rgba(0,229,122,.26)'],
+  atencao:       ['var(--ambar)',    'rgba(255,176,32,.09)', 'rgba(255,176,32,.26)'],
+  desconforme:   ['var(--vermelho)', 'rgba(255,77,94,.09)',  'rgba(255,77,94,.26)'],
+  nao_apurado:   ['#4a554e',         'rgba(120,135,127,.07)','rgba(120,135,127,.20)'],
+  // Azul, e não cinza: "sem filosofia" foi uma escolha do investidor, não uma
+  // pendência — a cor não pode se confundir com "não apurado".
+  sem_filosofia: ['var(--azul)',     'rgba(78,168,255,.09)', 'rgba(78,168,255,.26)'],
 };
 
 function selo(d) {
@@ -835,7 +1195,7 @@ async function carregarDiagnostico(forcar = false) {
     DIAGNOSTICO = {};
     (dados.posicoes || []).forEach((p) => { DIAGNOSTICO[p.ticker] = p.diagnostico; });
 
-    const ordem = ['desconforme', 'atencao', 'conforme', 'nao_apurado'];
+    const ordem = ['desconforme', 'atencao', 'conforme', 'nao_apurado', 'sem_filosofia'];
     const rotulos = dados.rotulos || {};
     $('cartoesDiagnostico').innerHTML = ordem.map((estado) => {
       const [cor, fundo, borda] = CORES_ESTADO[estado];
@@ -1625,6 +1985,553 @@ function renderizarTabelaRadarPapeis(papeis, ordem) {
 }
 
 $('btnRadar').addEventListener('click', () => carregarRadar(true));
+
+// ===================== renda fixa =====================
+let RENDA_FIXA = [];
+let PARAMETROS_RENDA_FIXA_CARREGADOS = false;
+
+async function carregarParametrosRendaFixa() {
+  if (PARAMETROS_RENDA_FIXA_CARREGADOS) return;
+  try {
+    const res = await fetch('/api/v1/carteira/renda-fixa/parametros');
+    if (!res.ok) return;
+    const dados = await res.json();
+    $('rfTipo').innerHTML = (dados.tipos || []).map((t) =>
+      `<option value="${esc(t.chave)}">${esc(t.rotulo)}</option>`).join('');
+    $('rfIndexador').innerHTML = (dados.indexadores || []).map((i) =>
+      `<option value="${esc(i.chave)}">${esc(i.rotulo)}</option>`).join('');
+    PARAMETROS_RENDA_FIXA_CARREGADOS = true;
+  } catch (e) { /* seletor fica vazio; tentamos de novo na próxima carga */ }
+}
+
+function rotuloIndexadorCompleto(p) {
+  const taxa = Number(p.taxa).toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+  if (p.indexador === 'pre') return `Pré ${taxa}% a.a.`;
+  if (p.indexador === 'pct_cdi') return `${taxa}% do CDI`;
+  if (p.indexador === 'cdi_mais') return `CDI + ${taxa}% a.a.`;
+  if (p.indexador === 'ipca_mais') return `IPCA + ${taxa}% a.a.`;
+  return p.rotulo_indexador;
+}
+
+async function carregarRendaFixa() {
+  try {
+    const res = await fetch('/api/v1/carteira/renda-fixa');
+    if (res.status === 402 || res.status === 401) return;
+    if (!res.ok) return;
+    const dados = await res.json();
+    RENDA_FIXA = dados.posicoes || [];
+    renderizarRendaFixa(dados);
+  } catch (e) { /* painel de renda fixa fica vazio; o resto da tela segue */ }
+}
+
+function renderizarRendaFixa(dados) {
+  const lista = RENDA_FIXA;
+  $('estadoVazioRendaFixa').classList.toggle('hidden', lista.length > 0);
+
+  $('tabelaRendaFixa').innerHTML = lista.map((p) => {
+    const positivo = p.rentabilidade_pct != null && p.rentabilidade_pct >= 0;
+    const rentEstilo = p.rentabilidade_pct == null ? ''
+      : `style="color: ${positivo ? 'var(--verde)' : 'var(--vermelho)'}"`;
+    const rent = p.rentabilidade_pct == null ? '—'
+      : `${positivo ? '+' : ''}${p.rentabilidade_pct.toFixed(2)}%`;
+    const venc = p.data_vencimento
+      ? new Date(`${p.data_vencimento}T00:00:00`).toLocaleDateString('pt-BR') : '—';
+    const naoApurado = p.apurado ? '' :
+      '<span class="text-[9px] block mt-0.5" style="color: var(--ambar)">não apurado</span>';
+    return `
+    <tr class="linha" data-renda-fixa-id="${p.id}">
+      <td class="px-5 py-3 text-[11px]" title="${esc(p.marcacao)}">${esc(p.emissor)}</td>
+      <td class="px-3 py-3 text-[11px]">${esc(p.rotulo_tipo)}</td>
+      <td class="px-3 py-3 text-[11px] mono" title="${esc(p.marcacao)}">${esc(rotuloIndexadorCompleto(p))}</td>
+      <td class="px-3 py-3 text-right mono text-[11px]">${brl(p.valor_aplicado)}</td>
+      <td class="px-3 py-3 text-right mono text-[11px]">${brl(p.valor_atual)}${naoApurado}</td>
+      <td class="px-3 py-3 text-right mono text-[11px]" ${rentEstilo}>${rent}</td>
+      <td class="px-3 py-3 text-right text-[11px]">${venc}</td>
+      <td class="px-5 py-3 text-right">
+        <button class="btn-fantasma text-[10px]" onclick="removerRendaFixa(${p.id})" type="button">Remover</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const total = dados.posicoes_total || 0;
+  let resumo = `${total === 1 ? '1 posição' : `${total} posições`} · aplicado ${brl(dados.valor_aplicado_total)} · atual (curva) ${brl(dados.valor_atual_total)}`;
+  if (dados.nao_apurados > 0) {
+    resumo += ` · ${dados.nao_apurados} sem correção apurada ainda`;
+  }
+  $('resumoRendaFixa').innerText = resumo;
+}
+
+$('formRendaFixa').addEventListener('submit', async (evento) => {
+  evento.preventDefault();
+  const btn = $('btnRendaFixaAdicionar');
+  btn.disabled = true;
+  aviso('avisoRendaFixa', '');
+  try {
+    const corpo = {
+      emissor: $('rfEmissor').value.trim(),
+      tipo: $('rfTipo').value,
+      indexador: $('rfIndexador').value,
+      taxa: Number($('rfTaxa').value),
+      data_aplicacao: $('rfDataAplicacao').value,
+      data_vencimento: $('rfDataVencimento').value || null,
+      valor_aplicado: Number($('rfValorAplicado').value),
+    };
+    const res = await fetch('/api/v1/carteira/renda-fixa', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+    const resposta = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const motivo = (resposta.detail && resposta.detail.motivo) || `O servidor respondeu ${res.status}.`;
+      aviso('avisoRendaFixa', esc(motivo));
+      return;
+    }
+    $('formRendaFixa').reset();
+    aviso('avisoRendaFixa', 'Posição cadastrada.', 'sucesso');
+    carregarRendaFixa();
+  } catch (e) {
+    aviso('avisoRendaFixa', `Falha de conexão: ${esc(e.message || e)}`);
+  } finally { btn.disabled = false; }
+});
+
+async function removerRendaFixa(id) {
+  try {
+    const res = await fetch(`/api/v1/carteira/renda-fixa/${id}`, { method: 'DELETE' });
+    if (!res.ok) { aviso('avisoRendaFixa', 'Não foi possível remover a posição.'); return; }
+    carregarRendaFixa();
+  } catch (e) { aviso('avisoRendaFixa', `Falha de conexão: ${esc(e.message || e)}`); }
+}
+
+// ===================== perfil do investidor e objetivo =====================
+function alternarCamposObjetivo() {
+  const objetivo = $('objetivoCarteira').value;
+  $('camposRendaPassiva').classList.toggle('hidden', objetivo !== 'renda_passiva');
+  $('camposAposentadoria').classList.toggle('hidden', objetivo !== 'aposentadoria');
+}
+$('objetivoCarteira').addEventListener('change', alternarCamposObjetivo);
+
+async function carregarPerfil() {
+  try {
+    const res = await fetch('/api/v1/carteira/perfil');
+    if (res.status === 402 || res.status === 401) return;
+    if (!res.ok) return;
+    const dados = await res.json();
+    $('perfilInvestidor').value = dados.perfil || '';
+    $('objetivoCarteira').value = dados.objetivo || '';
+    $('metaRetiradaMensal').value = dados.meta_retirada_mensal ?? '';
+    $('horizonteAnos').value = dados.horizonte_anos ?? '';
+    $('metaPatrimonio').value = dados.meta_patrimonio ?? '';
+    $('metaRendaMensal').value = dados.meta_renda_mensal ?? '';
+    alternarCamposObjetivo();
+    // Sugestão visível e editável para a projeção — só quando o campo ainda
+    // está vazio, nunca sobrepondo o que a pessoa já digitou.
+    if (dados.objetivo === 'aposentadoria' && dados.horizonte_anos
+        && $('projHorizonteAnos').value === '') {
+      $('projHorizonteAnos').value = dados.horizonte_anos;
+    }
+  } catch (e) { /* formulário fica com os valores padrão; salvar ainda funciona */ }
+}
+
+$('formPerfil').addEventListener('submit', async (evento) => {
+  evento.preventDefault();
+  const btn = $('btnSalvarPerfil');
+  btn.disabled = true;
+  aviso('avisoPerfil', '');
+  try {
+    const objetivo = $('objetivoCarteira').value || null;
+    const corpo = {
+      perfil: $('perfilInvestidor').value || null,
+      objetivo,
+      meta_retirada_mensal: objetivo === 'renda_passiva' && $('metaRetiradaMensal').value
+        ? Number($('metaRetiradaMensal').value) : null,
+      horizonte_anos: objetivo === 'aposentadoria' && $('horizonteAnos').value
+        ? Number($('horizonteAnos').value) : null,
+      meta_patrimonio: objetivo === 'aposentadoria' && $('metaPatrimonio').value
+        ? Number($('metaPatrimonio').value) : null,
+      meta_renda_mensal: objetivo === 'aposentadoria' && $('metaRendaMensal').value
+        ? Number($('metaRendaMensal').value) : null,
+    };
+    const res = await fetch('/api/v1/carteira/perfil', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+    const resposta = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const motivo = (resposta.detail && resposta.detail.motivo) || `O servidor respondeu ${res.status}.`;
+      aviso('avisoPerfil', esc(motivo));
+      return;
+    }
+    aviso('avisoPerfil', 'Perfil salvo.', 'sucesso');
+  } catch (e) {
+    aviso('avisoPerfil', `Falha de conexão: ${esc(e.message || e)}`);
+  } finally { btn.disabled = false; }
+});
+
+// ===================== backtest de 12 meses =====================
+async function carregarBacktest(forcar = false) {
+  const btn = $('btnBacktest');
+  btn.disabled = true; btn.innerText = 'Simulando…';
+  aviso('avisoBacktest', '');
+  try {
+    const res = await fetch(`/api/v1/carteira/backtest?forcar=${forcar ? 'true' : 'false'}`);
+    const dados = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $('corpoBacktest').classList.add('hidden');
+      aviso('avisoBacktest', esc((dados.detail && dados.detail.motivo)
+        || `O servidor respondeu ${res.status}.`), 'alerta');
+      return;
+    }
+    if (!dados.serie || !dados.serie.length) {
+      $('corpoBacktest').classList.add('hidden');
+      aviso('avisoBacktest', esc(dados.motivo || 'Sem histórico suficiente para simular.'), 'alerta');
+      return;
+    }
+    renderizarBacktest(dados);
+    $('corpoBacktest').classList.remove('hidden');
+  } catch (e) {
+    $('corpoBacktest').classList.add('hidden');
+    aviso('avisoBacktest', `Falha ao simular: ${esc(e.message || e)}`, 'erro');
+  } finally { btn.disabled = false; btn.innerText = 'Simular'; }
+}
+
+function renderizarBacktest(dados) {
+  const retorno = dados.retorno_periodo_pct;
+  const elRetorno = $('backtestRetorno');
+  elRetorno.innerText = retorno != null ? `${retorno >= 0 ? '+' : ''}${retorno.toFixed(2)}%` : '—';
+  elRetorno.style.color = retorno == null ? 'var(--texto)' : (retorno >= 0 ? 'var(--verde)' : 'var(--vermelho)');
+  $('backtestResumo').innerHTML = [
+    `${dados.incluidas || 0} posição(ões) na simulação`,
+    dados.cobertura_pct != null ? `cobertura de ${dados.cobertura_pct.toFixed(0)}% da carteira` : null,
+  ].filter(Boolean).join(' · ');
+
+  desenharLinhaBacktest(dados.serie);
+
+  const semHistorico = dados.sem_historico || [];
+  $('listaSemHistoricoBacktest').innerHTML = semHistorico.length
+    ? `<p class="text-[10px] leading-relaxed" style="color: var(--ambar)">Fora da simulação
+        (sem histórico para os ${dados.meses ?? 12} meses inteiros): ${
+        semHistorico.map((s) => esc(s.identificador)).join(', ')}</p>`
+    : '';
+
+  $('backtestOrigem').innerHTML = [
+    dados.aviso ? esc(dados.aviso) : null,
+    dados.cache ? `Calculado há ${Math.floor((dados.idade_segundos || 0) / 60)} min.` : 'Calculado agora.',
+  ].filter(Boolean).join(' ');
+
+  // Sugestão visível e editável para a projeção — nunca substitui o que a
+  // pessoa já digitou lá (ver docstring de modules/projecao.py).
+  if (dados.retorno_periodo_pct != null && $('projTaxaAnual').value === '') {
+    $('projTaxaAnual').value = dados.retorno_periodo_pct.toFixed(2);
+  }
+}
+
+// Linha desenhada à mão, sem biblioteca de gráfico — mesmo espírito do radar
+// (svgRadar): índice base 100 em cada um dos pontos mensais.
+function desenharLinhaBacktest(serie) {
+  const LARG = 600, ALT = 140, MARGEM = 10;
+  const valores = serie.map((p) => p.indice);
+  const minimo = Math.min(...valores, 100), maximo = Math.max(...valores, 100);
+  const amplitude = (maximo - minimo) || 1;
+  const passoX = (LARG - 2 * MARGEM) / (serie.length - 1 || 1);
+  const y = (v) => ALT - MARGEM - ((v - minimo) / amplitude) * (ALT - 2 * MARGEM);
+  const pontos = serie.map((p, i) => [MARGEM + i * passoX, y(p.indice)]);
+
+  let svg = `<line x1="${MARGEM}" y1="${y(100).toFixed(1)}" x2="${LARG - MARGEM}" y2="${y(100).toFixed(1)}"
+                   stroke="var(--borda)" stroke-width="1" stroke-dasharray="3,3"/>`;
+  svg += `<polyline points="${pontos.map((p) => p.map((n) => n.toFixed(1)).join(',')).join(' ')}"
+                    fill="none" stroke="var(--verde)" stroke-width="1.8"/>`;
+  pontos.forEach(([x, py], i) => {
+    if (i !== 0 && i !== pontos.length - 1) return;
+    const ancora = i === 0 ? 'start' : 'end';
+    svg += `<circle cx="${x.toFixed(1)}" cy="${py.toFixed(1)}" r="2.6" fill="var(--verde)"/>`;
+    svg += `<text x="${x.toFixed(1)}" y="${(py - 8).toFixed(1)}" font-size="9" fill="var(--suave)"
+                  text-anchor="${ancora}" font-family="'IBM Plex Mono', monospace">${serie[i].indice.toFixed(1)}</text>`;
+  });
+  $('svgBacktest').innerHTML = svg;
+}
+
+$('btnBacktest').addEventListener('click', () => carregarBacktest(true));
+
+// ===================== projeção de capital =====================
+$('formProjecao').addEventListener('submit', async (evento) => {
+  evento.preventDefault();
+  aviso('avisoProjecao', '');
+  const taxaBruta = $('projTaxaAnual').value;
+  const horizonteBruto = $('projHorizonteAnos').value;
+  if (taxaBruta === '' || horizonteBruto === '') {
+    $('corpoProjecao').classList.add('hidden');
+    aviso('avisoProjecao', 'Informe a taxa assumida e o horizonte.', 'alerta');
+    return;
+  }
+  const btn = $('btnProjetar');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/v1/carteira/projecao', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taxa_anual_pct: Number(taxaBruta),
+        aporte_mensal: Number($('projAporteMensal').value || 0),
+        horizonte_anos: Number(horizonteBruto),
+      }),
+    });
+    const dados = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $('corpoProjecao').classList.add('hidden');
+      aviso('avisoProjecao', esc((dados.detail && dados.detail.motivo)
+        || `O servidor respondeu ${res.status}.`), 'alerta');
+      return;
+    }
+    renderizarProjecao(dados);
+    $('corpoProjecao').classList.remove('hidden');
+  } catch (e) {
+    $('corpoProjecao').classList.add('hidden');
+    aviso('avisoProjecao', `Falha ao projetar: ${esc(e.message || e)}`, 'erro');
+  } finally { btn.disabled = false; }
+});
+
+function renderizarProjecao(dados) {
+  // Rótulo hipotético em destaque — não em nota de rodapé (regra de design
+  // não-negociável do documento de escopo).
+  $('projAvisoHipotetico').innerText = dados.aviso || '';
+  $('projValorFinal').innerText = `R$ ${brl(dados.valor_final)}`;
+  $('projTotalAportado').innerText = `R$ ${brl(dados.total_aportado)}`;
+  $('projRendimento').innerText = `R$ ${brl(dados.rendimento_total)}`;
+  $('projRendaSustentavel').innerText = `R$ ${brl(dados.renda_mensal_sustentavel_final)}/mês`;
+
+  desenharLinhaProjecao(dados.serie);
+
+  // Gap: falta ou sobra, nunca "vai dar"/"não vai dar" — a mesma regra que
+  // rege modules/projecao.calcular_gaps.
+  const gaps = dados.gaps || [];
+  $('listaGapsProjecao').innerHTML = gaps.map((g) => {
+    const porMes = g.tipo === 'renda_mensal' ? '/mês' : '';
+    const falta = g.gap > 0;
+    const cor = falta ? 'var(--ambar)' : 'var(--verde)';
+    const texto = `${falta ? 'Faltam' : 'Sobram'} R$ ${brl(Math.abs(g.gap))}${porMes}`;
+    return `
+      <div class="p-3.5 rounded" style="background: var(--fundo); border: 1px solid var(--borda)">
+        <p class="text-[11px] font-bold">${esc(g.rotulo)}</p>
+        <p class="mono font-bold text-[18px] mt-1.5" style="color:${cor}">${esc(texto)}</p>
+        <p class="text-[10px] mt-1" style="color: var(--suave)">
+          meta R$ ${brl(g.meta)}${porMes} · projetado R$ ${brl(g.projetado)}${porMes}
+        </p>
+      </div>`;
+  }).join('');
+}
+
+// Linha desenhada à mão, mesmo espírito do backtest e do radar — aqui em
+// valor monetário real, não índice base 100.
+function desenharLinhaProjecao(serie) {
+  const LARG = 600, ALT = 140, MARGEM = 10;
+  const valores = serie.map((p) => p.valor);
+  const minimo = Math.min(...valores), maximo = Math.max(...valores);
+  const amplitude = (maximo - minimo) || 1;
+  const passoX = (LARG - 2 * MARGEM) / (serie.length - 1 || 1);
+  const y = (v) => ALT - MARGEM - ((v - minimo) / amplitude) * (ALT - 2 * MARGEM);
+  const pontos = serie.map((p, i) => [MARGEM + i * passoX, y(p.valor)]);
+
+  let svg = `<polyline points="${pontos.map((p) => p.map((n) => n.toFixed(1)).join(',')).join(' ')}"
+                    fill="none" stroke="var(--verde)" stroke-width="1.8"/>`;
+  pontos.forEach(([x, py], i) => {
+    if (i !== 0 && i !== pontos.length - 1) return;
+    const ancora = i === 0 ? 'start' : 'end';
+    svg += `<circle cx="${x.toFixed(1)}" cy="${py.toFixed(1)}" r="2.6" fill="var(--verde)"/>`;
+    svg += `<text x="${x.toFixed(1)}" y="${(py - 8).toFixed(1)}" font-size="9" fill="var(--suave)"
+                  text-anchor="${ancora}" font-family="'IBM Plex Mono', monospace">R$ ${brl(serie[i].valor)}</text>`;
+  });
+  $('svgProjecao').innerHTML = svg;
+}
+
+// ===================== fundos de investimento (Etapa A) =====================
+let FUNDOS = [];
+let PARAMETROS_FUNDOS_CARREGADOS = false;
+
+async function carregarParametrosFundos() {
+  if (PARAMETROS_FUNDOS_CARREGADOS) return;
+  try {
+    const res = await fetch('/api/v1/carteira/fundos/parametros');
+    if (!res.ok) return;
+    const dados = await res.json();
+    $('fundoClasse').innerHTML = (dados.classes || []).map((c) =>
+      `<option value="${esc(c.chave)}">${esc(c.rotulo)}</option>`).join('');
+    PARAMETROS_FUNDOS_CARREGADOS = true;
+  } catch (e) { /* seletor fica vazio; tentamos de novo na próxima carga */ }
+}
+
+async function carregarFundos() {
+  try {
+    const res = await fetch('/api/v1/carteira/fundos');
+    if (res.status === 402 || res.status === 401) return;
+    if (!res.ok) return;
+    const dados = await res.json();
+    FUNDOS = dados.posicoes || [];
+    renderizarFundos(dados);
+  } catch (e) { /* painel de fundos fica vazio; o resto da tela segue */ }
+}
+
+function renderizarFundos(dados) {
+  const lista = FUNDOS;
+  $('estadoVazioFundos').classList.toggle('hidden', lista.length > 0);
+
+  $('tabelaFundos').innerHTML = lista.map((p) => {
+    const naoApurado = p.apurado ? '' :
+      '<span class="text-[9px] block mt-0.5" style="color: var(--ambar)">não apurado</span>';
+    const positivo = p.apurado && p.rentabilidade_pct != null && p.rentabilidade_pct >= 0;
+    const rentEstilo = !p.apurado ? ''
+      : `style="color: ${positivo ? 'var(--verde)' : 'var(--vermelho)'}"`;
+    const rent = !p.apurado ? '—'
+      : `${positivo ? '+' : ''}${p.rentabilidade_pct.toFixed(2)}%`;
+    return `
+    <tr class="linha" data-fundo-id="${p.id}">
+      <td class="px-5 py-3 text-[11px]" title="${esc(p.marcacao)}">
+        ${esc(p.nome_fundo)}
+        <span class="text-[9px] block mt-0.5" style="color: var(--suave)">${esc(p.cnpj_formatado)}</span>
+      </td>
+      <td class="px-3 py-3 text-[11px]">${esc(p.rotulo_classe)}</td>
+      <td class="px-3 py-3 text-right mono text-[11px]">${qtd(p.numero_cotas)}</td>
+      <td class="px-3 py-3 text-right mono text-[11px]">${brl(p.valor_aplicado)}</td>
+      <td class="px-3 py-3 text-right mono text-[11px]">${brl(p.valor_atual)}${naoApurado}</td>
+      <td class="px-3 py-3 text-right mono text-[11px]" ${rentEstilo}>${rent}</td>
+      <td class="px-5 py-3 text-right">
+        <button class="btn-fantasma text-[10px]" onclick="removerFundo(${p.id})" type="button">Remover</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const total = dados.posicoes_total || 0;
+  let resumo = `${total === 1 ? '1 fundo' : `${total} fundos`} · aplicado ${brl(dados.valor_aplicado_total)} · atual (cota CVM) ${brl(dados.valor_atual_total)}`;
+  if (dados.nao_apurados > 0) {
+    resumo += ` · ${dados.nao_apurados} sem cota diária coletada ainda`;
+  }
+  $('resumoFundos').innerText = resumo;
+}
+
+$('formFundos').addEventListener('submit', async (evento) => {
+  evento.preventDefault();
+  const btn = $('btnFundoAdicionar');
+  btn.disabled = true;
+  aviso('avisoFundos', '');
+  try {
+    const corpo = {
+      nome_fundo: $('fundoNome').value.trim(),
+      cnpj: $('fundoCnpj').value.trim(),
+      classe: $('fundoClasse').value,
+      numero_cotas: Number($('fundoCotas').value),
+      valor_cota_aplicacao: Number($('fundoValorCota').value),
+      data_aplicacao: $('fundoDataAplicacao').value,
+    };
+    const res = await fetch('/api/v1/carteira/fundos', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+    const resposta = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const motivo = (resposta.detail && resposta.detail.motivo) || `O servidor respondeu ${res.status}.`;
+      aviso('avisoFundos', esc(motivo));
+      return;
+    }
+    $('formFundos').reset();
+    aviso('avisoFundos', 'Fundo cadastrado.', 'sucesso');
+    carregarFundos();
+  } catch (e) {
+    aviso('avisoFundos', `Falha de conexão: ${esc(e.message || e)}`);
+  } finally { btn.disabled = false; }
+});
+
+async function removerFundo(id) {
+  try {
+    const res = await fetch(`/api/v1/carteira/fundos/${id}`, { method: 'DELETE' });
+    if (!res.ok) { aviso('avisoFundos', 'Não foi possível remover o fundo.'); return; }
+    carregarFundos();
+  } catch (e) { aviso('avisoFundos', `Falha de conexão: ${esc(e.message || e)}`); }
+}
+
+// ===================== relatório em pdf =====================
+let PARAMETROS_RELATORIO_CARREGADOS = false;
+
+async function carregarParametrosRelatorio() {
+  if (PARAMETROS_RELATORIO_CARREGADOS) return;
+  try {
+    const res = await fetch('/api/v1/carteira/relatorio/parametros');
+    if (!res.ok) return;
+    const dados = await res.json();
+    $('listaEventosRelatorio').innerHTML = (dados.eventos_estresse || []).map((ev) => `
+      <label class="flex items-start gap-2 text-[11px] cursor-pointer" style="color: var(--suave)">
+        <input type="checkbox" class="mt-0.5 relatorio-evento" value="${esc(ev.chave)}" checked>
+        <span>${esc(ev.nome)}</span>
+      </label>`).join('');
+    PARAMETROS_RELATORIO_CARREGADOS = true;
+  } catch (e) { /* lista fica vazia; tentamos de novo na próxima abertura */ }
+}
+
+$('btnAbrirRelatorio').addEventListener('click', async () => {
+  aviso('avisoRelatorio', '');
+  await carregarParametrosRelatorio();
+
+  // A projeção só entra se já houver premissa preenchida no painel de
+  // projeção acima — o relatório nunca inventa taxa/aporte/horizonte por
+  // conta própria (mesma regra de modules/projecao.py).
+  const taxa = $('projTaxaAnual').value;
+  const horizonte = $('projHorizonteAnos').value;
+  const temPremissa = taxa !== '' && horizonte !== '';
+  const chkProjecao = $('relatorioIncluirProjecao');
+  chkProjecao.checked = temPremissa;
+  chkProjecao.disabled = !temPremissa;
+  $('notaProjecaoRelatorio').innerText = temPremissa
+    ? ''
+    : 'Preencha a taxa e o horizonte no painel de projeção acima para incluir essa seção.';
+
+  $('blocoRelatorioPrevia').classList.remove('hidden');
+});
+
+$('btnCancelarRelatorio').addEventListener('click', () => {
+  $('blocoRelatorioPrevia').classList.add('hidden');
+});
+
+$('btnGerarRelatorio').addEventListener('click', async () => {
+  aviso('avisoRelatorio', '');
+  const btn = $('btnGerarRelatorio');
+  btn.disabled = true;
+  const rotuloOriginal = btn.innerText;
+  btn.innerText = 'Gerando…';
+  try {
+    const eventosSelecionados = Array.from(
+      document.querySelectorAll('.relatorio-evento:checked')).map((el) => el.value);
+
+    const corpo = { eventos_estresse: eventosSelecionados };
+    if ($('relatorioIncluirProjecao').checked && !$('relatorioIncluirProjecao').disabled) {
+      corpo.projecao = {
+        taxa_anual_pct: Number($('projTaxaAnual').value),
+        aporte_mensal: Number($('projAporteMensal').value || 0),
+        horizonte_anos: Number($('projHorizonteAnos').value),
+      };
+    }
+
+    const res = await fetch('/api/v1/carteira/relatorio', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+
+    if (!res.ok) {
+      const resposta = await res.json().catch(() => ({}));
+      aviso('avisoRelatorio', esc((resposta.detail && resposta.detail.motivo)
+        || `O servidor respondeu ${res.status}.`));
+      return;
+    }
+
+    // Download direto do blob: sem link externo, sem passar pelo servidor
+    // de novo — o PDF já veio inteiro na resposta.
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'relatorio-alphaforge.pdf';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    $('blocoRelatorioPrevia').classList.add('hidden');
+  } catch (e) {
+    aviso('avisoRelatorio', `Falha ao gerar o relatório: ${esc(e.message || e)}`);
+  } finally { btn.disabled = false; btn.innerText = rotuloOriginal; }
+});
 
 iniciar();
 </script>

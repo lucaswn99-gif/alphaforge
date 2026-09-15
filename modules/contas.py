@@ -179,6 +179,72 @@ def iniciar():
                     atualizado_em TEXT    NOT NULL,
                     FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
                 );
+
+                -- Renda fixa privada: CDB, LCI, LCA, CRI, CRA, debênture, LF,
+                -- LCD. Tabela própria, não uma linha em `carteiras`, porque o
+                -- dado é outro: não tem ticker, não tem cotação de mercado —
+                -- tem emissor, indexador e taxa contratada, e o "preço atual"
+                -- é calculado (marcação na curva), nunca lido de um pregão.
+                -- Sem UNIQUE(usuario_id, emissor): a mesma pessoa pode ter
+                -- dois CDBs do mesmo banco com taxas e vencimentos diferentes,
+                -- e mesclar os dois pelo emissor apagaria a diferença que
+                -- importa.
+                CREATE TABLE IF NOT EXISTS renda_fixa (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    usuario_id       INTEGER NOT NULL,
+                    emissor          TEXT    NOT NULL,
+                    tipo             TEXT    NOT NULL,
+                    indexador        TEXT    NOT NULL,
+                    taxa             REAL    NOT NULL,
+                    data_aplicacao   TEXT    NOT NULL,
+                    data_vencimento  TEXT,
+                    valor_aplicado   REAL    NOT NULL,
+                    criado_em        TEXT    NOT NULL,
+                    atualizado_em    TEXT    NOT NULL,
+                    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_renda_fixa_usuario
+                    ON renda_fixa(usuario_id);
+
+                -- Perfil do investidor (conservador/moderado/arrojado) e
+                -- objetivo (renda passiva, aposentadoria), atribuídos pelo
+                -- assessor — campo simples, sem questionário de suitability
+                -- próprio. Uma linha por usuário, igual a `mandato_carteira`;
+                -- sem padrão para perfil nem para objetivo, pelo mesmo motivo
+                -- de sempre: os dois são decisão sobre a vida de outra
+                -- pessoa, não configuração de software.
+                CREATE TABLE IF NOT EXISTS perfil_carteira (
+                    usuario_id           INTEGER PRIMARY KEY,
+                    perfil               TEXT,
+                    objetivo             TEXT,
+                    meta_retirada_mensal REAL,
+                    horizonte_anos       INTEGER,
+                    meta_patrimonio      REAL,
+                    meta_renda_mensal    REAL,
+                    atualizado_em        TEXT    NOT NULL,
+                    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+                );
+
+                -- Fundos de investimento, Etapa A (ver modules/fundos.py):
+                -- posição simples por cotas × valor da cota na aplicação,
+                -- sem cota diária ainda. CNPJ guardado desde já porque é a
+                -- chave que a Etapa B vai usar para casar com a cota diária
+                -- da CVM — não é um campo decorativo.
+                CREATE TABLE IF NOT EXISTS fundos (
+                    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+                    usuario_id             INTEGER NOT NULL,
+                    nome_fundo             TEXT    NOT NULL,
+                    cnpj                   TEXT    NOT NULL,
+                    classe                 TEXT    NOT NULL,
+                    numero_cotas           REAL    NOT NULL,
+                    valor_cota_aplicacao   REAL    NOT NULL,
+                    data_aplicacao         TEXT    NOT NULL,
+                    criado_em              TEXT    NOT NULL,
+                    atualizado_em          TEXT    NOT NULL,
+                    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_fundos_usuario
+                    ON fundos(usuario_id);
             """)
 
             # Migração de coluna. `CREATE TABLE IF NOT EXISTS` NÃO altera uma

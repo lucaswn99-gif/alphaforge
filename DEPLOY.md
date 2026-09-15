@@ -76,6 +76,29 @@ O `verificar_bases.py` sai diferente de zero se algo não fechar, e o
 testes: a base de FII já foi ao ar com cota de R$ 0,02, e a de fundamentos já
 subiu sem as colunas de crédito.
 
+### Cota diária de fundos (Etapa B)
+
+`cota_fundos_cvm.db` é a mesma ideia, mas **opcional** — só existe depois que
+algum cliente tem fundo cadastrado (menu "Fundos de investimento") e você
+roda o coletor pelo menos uma vez. Sem ela, o app não quebra: a posição fica
+no piso do valor aplicado, marcada como "não apurado" (mesmo princípio da
+renda fixa sem CDI/IPCA disponível).
+
+    python atualizar_cota_fundos_cvm.py     # mês atual + anterior (roda sozinho)
+    python verificar_bases.py               # a mesma trava de sanidade, agora com 3 bases
+
+Ao contrário das outras duas bases, esta **cresce com o tempo** em vez de ser
+reconstruída — cada execução acrescenta os meses baixados, nunca apaga o que
+já foi coletado. Rode com alguma regularidade (semanal, por exemplo) para a
+cota "atual" não ficar muitos dias atrás. O coletor só baixa dado dos CNPJs
+que estão de fato cadastrados em algum fundo — não o mercado inteiro (~20 mil
+fundos seria uma base enorme para o que ninguém aqui usa). Para trazer o
+histórico de um fundo recém-cadastrado (a rentabilidade compara com a cota da
+aplicação, que pode ser de anos atrás), rode com o mês/intervalo específico:
+
+    python atualizar_cota_fundos_cvm.py 202301 202312
+    python atualizar_cota_fundos_cvm.py --cnpj 12345678000199 202301
+
 ## Deploy manual, se precisar
 
     ssh <usuario>@alphaforge.api.br

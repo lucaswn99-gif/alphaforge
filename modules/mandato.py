@@ -14,11 +14,22 @@ critérios e tirada a instituição financeira do escopo, a régua esvaziou.
 
 Então a filosofia passa a ser escolha de quem investe:
 
-    barsi   renda por setor perene: preço-teto por DPA projetado, payout na
-            faixa, alavancagem sob teto e constância de lucro
-    bazin   renda por preço: teto que entrega 6% de yield, com payout e
-            dívida/EBIT como trava contra o yield que vai cair
-    graham  valor: os critérios do investidor defensivo, para quem quer isso
+    barsi    renda por setor perene: preço-teto por DPA projetado, payout na
+             faixa, alavancagem sob teto e constância de lucro
+    bazin    renda por preço: teto que entrega 6% de yield, com payout e
+             dívida/EBIT como trava contra o yield que vai cair
+    graham   valor: os critérios do investidor defensivo, para quem quer isso
+    nenhuma  sem régua: mostra o dado bruto do papel (múltiplo, ROE, dívida)
+             sem veredito de aprovado/reprovado — para quem não quer que
+             NENHUMA das três teses julgue a carteira
+
+**"nenhuma" não é ausência de escolha, é uma escolha.** Sem filosofia
+declarada, o investidor não decidiu nada ainda e a tela cobra a decisão —
+mostrar "não apurado" com um aviso é correto. Escolher "nenhuma" é o oposto:
+é uma decisão explícita de não ser julgado por Barsi, Bazin ou Graham, e a
+tela não pode continuar cobrando uma escolha que já foi feita. É também o que
+torna uma carteira multiativo possível: renda fixa e fundo de investimento
+não têm filosofia de ação nenhuma que caiba neles.
 
 **Duas camadas, e a de baixo vence.** A carteira tem uma filosofia; uma posição
 pode declarar outra. Cobre o caso real de um mandato de renda com duas ou três
@@ -36,13 +47,15 @@ from modules import contas
 BARSI = "barsi"
 BAZIN = "bazin"
 GRAHAM = "graham"
+NENHUMA = "nenhuma"
 
-FILOSOFIAS = (BARSI, BAZIN, GRAHAM)
+FILOSOFIAS = (BARSI, BAZIN, GRAHAM, NENHUMA)
 
 ROTULOS = {
     BARSI: "Barsi — renda por setor perene",
     BAZIN: "Bazin — renda por preço-teto",
     GRAHAM: "Graham — investidor defensivo",
+    NENHUMA: "Nenhuma — só o dado bruto",
 }
 
 RESUMOS = {
@@ -56,6 +69,9 @@ RESUMOS = {
              "dívida sob o capital de giro, constância e crescimento de lucro, "
              "e o teto combinado P/L × P/VP ≤ 22,5. Exigente por desenho — e "
              "não se aplica a instituição financeira."),
+    NENHUMA: ("Nenhuma das três teses julga esta carteira. As ações mostram "
+              "múltiplo, ROE e dívida líquida/EBIT sem veredito de aprovado "
+              "ou reprovado — a leitura é toda sua."),
 }
 
 # Sem padrão, pelo mesmo motivo do alvo por classe: escolher a lente pela qual

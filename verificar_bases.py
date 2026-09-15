@@ -22,6 +22,14 @@ import sys
 
 BANCO_FII = "fundos_cvm.db"
 BANCO_FUNDAMENTOS = "fundamentos_cvm.db"
+BANCO_COTA_FUNDOS = "cota_fundos_cvm.db"
+
+# Cota de fundo comum não tem a faixa estreita da cota de FII (multimercado,
+# ação, cambial vivem em ordens de grandeza bem diferentes) — só descarta o
+# absurdo: negativo/zero de um lado, "fundo de um milhão a cota" do outro
+# (mesmo teto de `modules/fundos.VALOR_COTA_MAXIMO`).
+COTA_MINIMA_PLAUSIVEL = 0.01
+COTA_MAXIMA_PLAUSIVEL = 1_000_000.0
 
 # --- base de FII ---------------------------------------------------------
 # Cota de FII no Brasil vive entre poucos reais e alguns milhares. Uma mediana
@@ -159,9 +167,49 @@ def verificar_fundamentos():
     conexao.close()
 
 
+def verificar_cota_fundos():
+    """Ao contrário das outras duas, esta base é OPCIONAL: só existe se
+    algum cliente tem fundo cadastrado e o assessor já rodou
+    `atualizar_cota_fundos_cvm.py` ao menos uma vez. Ausência não é falha —
+    corrupção é."""
+    print("\n--- base de cota diária de fundos (Etapa B) ---")
+    import os
+    if not os.path.exists(BANCO_COTA_FUNDOS):
+        print(f"{BANCO_COTA_FUNDOS} não existe — Etapa B nunca rodou (ou "
+              "nenhum cliente tem fundo cadastrado ainda). Sanidade pulada, "
+              "não é falha: sem a base, o app cai no piso do valor aplicado.")
+        return
+
+    conexao = _conectar(BANCO_COTA_FUNDOS)
+    if conexao is None:
+        return
+    try:
+        linhas = conexao.execute(
+            "SELECT valor_cota, cnpj, data FROM cotas").fetchall()
+    except sqlite3.Error as exc:
+        falhar(f"{BANCO_COTA_FUNDOS} sem tabela `cotas` utilizável: {exc}")
+        return
+
+    if not linhas:
+        falhar(f"{BANCO_COTA_FUNDOS} existe mas está vazio")
+        return
+
+    fora_da_faixa = [l for l in linhas
+                     if not (COTA_MINIMA_PLAUSIVEL <= l["valor_cota"] <= COTA_MAXIMA_PLAUSIVEL)]
+    fundos_distintos = {l["cnpj"] for l in linhas}
+    print(f"{len(linhas)} linhas, {len(fundos_distintos)} fundos distintos, "
+          f"competência mais recente: {max(l['data'] for l in linhas)}")
+    if fora_da_faixa:
+        falhar(f"{len(fora_da_faixa)} linha(s) com cota fora da faixa plausível "
+               f"[{COTA_MINIMA_PLAUSIVEL}, {COTA_MAXIMA_PLAUSIVEL}] — "
+               "layout do informe pode ter mudado")
+    conexao.close()
+
+
 def main():
     verificar_fii()
     verificar_fundamentos()
+    verificar_cota_fundos()
     if _falhas:
         print(f"\n{len(_falhas)} problema(s) — nada deve subir assim.")
         return 1
