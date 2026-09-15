@@ -133,6 +133,16 @@
         <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background: var(--verde)"></span>
         <span id="statusSessao">SESSÃO ATIVA</span>
       </span>
+      <!-- Entrada direta para a carteira: antes só existia dentro do painel
+           de conta (clicar no nome), o que escondia o console de quem nem
+           sabia que precisava clicar ali. Fica ao lado do login/conta, e não
+           dentro do dropdown, porque é navegação — não é dado de conta. -->
+      <a href="/vip" class="mono text-[10px] font-semibold px-2.5 py-1 rounded transition-colors"
+         style="border: 1px solid var(--borda-viva); color: var(--suave); background: transparent; text-decoration:none"
+         onmouseover="this.style.borderColor='var(--verde)'; this.style.color='var(--verde)'"
+         onmouseout="this.style.borderColor='var(--borda-viva)'; this.style.color='var(--suave)'">
+        CARTEIRA
+      </a>
       <button id="btnConta" onclick="AF.abrirLogin()"
               class="mono text-[10px] font-semibold px-2.5 py-1 rounded transition-colors"
               style="border: 1px solid var(--borda-viva); color: var(--suave); background: transparent">
@@ -2754,6 +2764,11 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
       <div class="px-5 py-4 space-y-3">
         <div id="afPerfilCotas" class="space-y-1.5"></div>
+        <!-- A conta não é só dado (plano, cota) — é também o caminho para a
+             carteira. Sem este botão, quem clicava no nome só via números e
+             fechava o painel sem achar o console. -->
+        <a href="/vip" class="btn w-full block text-center" style="text-decoration:none">
+          Ir para minha carteira</a>
         <button onclick="AF.sair()" class="w-full py-2 rounded text-[12px]"
                 style="border: 1px solid var(--borda-viva); color: var(--suave)">Sair</button>
       </div>

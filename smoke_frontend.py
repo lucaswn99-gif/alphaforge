@@ -185,6 +185,20 @@ if __name__ == "__main__":
         _contas.definir_plano(_contas.autenticar("smoke@teste.com", "senha-boa-123")["id"], "premium")
         page.reload(wait_until="networkidle")
 
+        # -------- navegação para a carteira --------
+        # Antes só existia dentro do painel de conta; agora tem que aparecer
+        # direto no cabeçalho e, ao clicar no nome, dentro do próprio painel.
+        checar("link de carteira aparece no cabecalho",
+               page.get_attribute("header a[href='/vip']", "href") == "/vip")
+        page.click("#btnConta")
+        page.wait_for_selector("#afPerfil:not(.hidden)", timeout=5000)
+        checar("painel de conta oferece ir para a carteira, nao so dado de plano",
+               page.get_attribute("#afPerfil a[href='/vip']", "href") == "/vip")
+        page.keyboard.press("Escape")  # fecha o modal para nao atrapalhar o resto
+        page.wait_for_function(
+            "() => document.getElementById('afModal').classList.contains('hidden')",
+            timeout=3000)
+
         page.click("#btn-tab-filosofias")
         checar("aba Filosofias fica visível",
                page.eval_on_selector("#tab-filosofias", "el => !el.classList.contains('hidden')"))
