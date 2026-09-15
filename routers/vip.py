@@ -22,8 +22,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from modules import (alvos, carteira, diagnostico, importacao, mandato, planos,
-                     rebalanceamento)
+from modules import (alvos, carteira, diagnostico, estresse, importacao,
+                     mandato, planos, radar, rebalanceamento, taxas)
 
 router = APIRouter(tags=["VIP & Carteira"])
 
@@ -352,6 +352,197 @@ def rebalancear(aporte: float = 0.0, forcar: bool = False,
 
     return {**plano, "alvos": definidos, "rotulos": alvos.ROTULOS,
             "custo_total": dados["custo_total"]}
+
+
+# ------------------------------------------------- Pilar 4: estresse macro
+
+@router.get("/api/v1/carteira/estresse/selic")
+def estressar_selic(taxa: float = None, ctx: planos.Contexto = Depends(_vip)):
+    """Se a Selic for para `taxa`, o EBIT de cada companhia ainda paga juros?
+
+    Rota barata de propósito: usa só o balanço já gravado em SQLite, sem tocar
+    em rede. É ela que move o controle deslizante da tela, e uma consulta ao
+    Yahoo por arrasto tornaria o controle inutilizável.
+    """
+    usuario_id = ctx.usuario["id"]
+    dados = carteira.listar(usuario_id)
+    if not dados["posicoes"]:
+        raise HTTPException(status_code=422, detail={
+            "erro": "carteira_vazia",
+            "motivo": "Cadastre suas posições antes de simular."})
+
+    meta = taxas.obter_selic_meta()
+    atual = meta["valor"]
+    nova = atual if taxa is None else taxa
+
+    from routers import filosofias as rota_filosofias
+    motor = rota_filosofias.motor()
+    balancos = {}
+    for posicao in dados["posicoes"]:
+        if (posicao.get("classe") or "") == "acao":
+            balancos[posicao["ticker"]] = motor._balanco_cvm(posicao["ticker"]) or {}
+
+    resultado = estresse.sensibilidade_selic(
+        dados["posicoes"], balancos, atual, nova)
+    return {**resultado, "selic_meta": meta}
+
+
+# O histórico baixa a série INTEIRA de cada papel — a janela de 2008 exige
+# dezoito anos de pregão. Caro o bastante para guardar por usuário, com o mesmo
+# TTL do resto do projeto.
+_cache_historico = {}
+
+
+@router.get("/api/v1/carteira/estresse/historico")
+def estressar_historico(forcar: bool = False,
+                        ctx: planos.Contexto = Depends(_vip)):
+    """Quanto a carteira de hoje teria caído em cada evento de cauda.
+
+    É contrafactual declarado, não previsão: aplica os PESOS DE HOJE a preços
+    do passado. Serve para medir a fragilidade da composição atual, não para
+    dizer o que vai acontecer.
+    """
+    usuario_id = ctx.usuario["id"]
+    dados = carteira.listar(usuario_id)
+    if not dados["posicoes"]:
+        raise HTTPException(status_code=422, detail={
+            "erro": "carteira_vazia",
+            "motivo": "Cadastre suas posições antes de simular."})
+
+    assinatura = tuple(sorted((p["ticker"], p["quantidade"])
+                              for p in dados["posicoes"]))
+    chave = (usuario_id, assinatura)
+    agora = time.time()
+    guardado = _cache_historico.get(chave)
+    if guardado and not forcar and agora - guardado[0] < _CACHE_TTL:
+        return {**guardado[1], "cache": True,
+                "idade_segundos": int(agora - guardado[0])}
+
+    from routers import filosofias as rota_filosofias
+    motor = rota_filosofias.motor()
+    series = _series_completas(motor, [p["ticker"] for p in dados["posicoes"]])
+
+    # Peso por CUSTO, e não por valor de mercado: buscar a cotação de hoje de
+    # cada papel dobraria o custo da rota, e a diferença de peso não muda a
+    # leitura de "quanto esta composição caiu".
+    pesos = {p["ticker"]: (p.get("custo_total") or 0.0) for p in dados["posicoes"]}
+
+    janelas = []
+    for evento in estresse.EVENTOS:
+        recorte = {t: _recortar(s, evento["inicio"], evento["fim"])
+                   for t, s in series.items()}
+        janelas.append({**evento,
+                        **estresse.estresse_historico(recorte, pesos)})
+
+    resultado = {"eventos": janelas, "avaliadas": len(dados["posicoes"]),
+                 "aviso": ("Contrafactual: aplica os pesos de HOJE a preços do "
+                           "passado. Mede a fragilidade da composição atual, "
+                           "não o que vai acontecer.")}
+    _cache_historico[chave] = (time.time(), resultado)
+    return {**resultado, "cache": False, "idade_segundos": 0}
+
+
+def _series_completas(motor, tickers):
+    """{ticker: série de fechamentos} com o histórico inteiro disponível."""
+    import concurrent.futures
+
+    def buscar(ticker):
+        try:
+            return ticker, motor.fonte.precos(f"{ticker}.SA", periodo="max")
+        except Exception:  # noqa: BLE001
+            return ticker, None
+
+    series = {}
+    if not tickers:
+        return series
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=diagnostico.MAX_WORKERS) as pool:
+        for ticker, serie in pool.map(buscar, tickers):
+            if serie is not None and len(serie):
+                series[ticker] = serie
+    return series
+
+
+# ------------------------------------------------- Pilar 5: radar de 5 eixos
+
+_cache_radar = {}
+
+
+@router.get("/api/v1/carteira/radar")
+def radar_da_carteira(forcar: bool = False, ctx: planos.Contexto = Depends(_vip)):
+    """Cinco eixos por papel e o agregado da carteira.
+
+    Só ação entra. FII não tem ROE nem produto P/L × P/VP, e ETF é cesta de
+    índice — dar nota a eles em eixos de companhia produziria número com cara
+    de medida e conteúdo de ruído.
+    """
+    usuario_id = ctx.usuario["id"]
+    dados = carteira.listar(usuario_id)
+    acoes = [p for p in dados["posicoes"] if (p.get("classe") or "") == "acao"]
+    if not acoes:
+        raise HTTPException(status_code=422, detail={
+            "erro": "sem_acoes",
+            "motivo": ("O radar mede companhias. Cadastre ao menos uma ação — "
+                       "FII e ETF não têm ROE nem múltiplo de empresa.")})
+
+    assinatura = tuple(sorted(p["ticker"] for p in acoes))
+    chave = (usuario_id, assinatura)
+    agora = time.time()
+    guardado = _cache_radar.get(chave)
+    if guardado and not forcar and agora - guardado[0] < _CACHE_TTL:
+        return {**guardado[1], "cache": True,
+                "idade_segundos": int(agora - guardado[0])}
+
+    from routers import filosofias as rota_filosofias
+    motor = rota_filosofias.motor()
+
+    def medir(ticker):
+        try:
+            graham = motor._avaliar_graham(ticker, aplicar_momentum=False)
+        except Exception:  # noqa: BLE001
+            graham = None
+        try:
+            bazin = motor._avaliar_bazin(ticker)
+        except Exception:  # noqa: BLE001
+            bazin = None
+        try:
+            tendencia = motor.momentum.avaliar(f"{ticker}.SA")
+        except Exception:  # noqa: BLE001
+            tendencia = None
+        balanco = motor._balanco_cvm(ticker) or {}
+        lucros, anos = motor._historico_de_lucro(ticker)
+        com_lucro = sum(1 for v in (lucros or []) if v is not None and v > 0)
+        return radar.radar_do_papel(
+            ticker, graham=graham, balanco=balanco, bazin=bazin,
+            momentum=tendencia, exercicios_com_lucro=com_lucro,
+            exercicios_apurados=anos)
+
+    import concurrent.futures
+    radares = []
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=diagnostico.MAX_WORKERS) as pool:
+        for papel in pool.map(medir, [p["ticker"] for p in acoes]):
+            radares.append(papel)
+
+    pesos = {p["ticker"]: (p.get("custo_total") or 0.0) for p in acoes}
+    agregado = radar.radar_da_carteira(radares, pesos)
+
+    resultado = {**agregado, "papeis_detalhe": radares, "eixos_ordem": list(radar.EIXOS)}
+    _cache_radar[chave] = (time.time(), resultado)
+    return {**resultado, "cache": False, "idade_segundos": 0}
+
+
+def _recortar(serie, inicio, fim):
+    """Fechamentos da janela, em ordem. Lista vazia quando não há histórico."""
+    try:
+        import pandas as pd
+        indice = pd.to_datetime(serie.index)
+        if getattr(indice, "tz", None) is not None:
+            indice = indice.tz_localize(None)
+        dentro = (indice >= pd.Timestamp(inicio)) & (indice <= pd.Timestamp(fim))
+        return [float(v) for v in serie.values[dentro]]
+    except Exception:  # noqa: BLE001
+        return []
 
 
 class LinhaImportada(BaseModel):
